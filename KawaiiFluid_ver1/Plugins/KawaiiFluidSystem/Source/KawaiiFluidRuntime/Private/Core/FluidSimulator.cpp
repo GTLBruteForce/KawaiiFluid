@@ -23,6 +23,7 @@ DECLARE_CYCLE_STAT(TEXT("World Collision"), STAT_WorldCollision, STATGROUP_Kawai
 DECLARE_CYCLE_STAT(TEXT("Finalize Positions"), STAT_FinalizePositions, STATGROUP_KawaiiFluid);
 DECLARE_CYCLE_STAT(TEXT("Apply Viscosity"), STAT_ApplyViscosity, STATGROUP_KawaiiFluid);
 DECLARE_CYCLE_STAT(TEXT("Apply Adhesion"), STAT_ApplyAdhesion, STATGROUP_KawaiiFluid);
+DECLARE_CYCLE_STAT(TEXT("Update Render Data"), STAT_UpdateRenderData, STATGROUP_KawaiiFluid);
 DECLARE_CYCLE_STAT(TEXT("Debug Rendering"), STAT_DebugRendering, STATGROUP_KawaiiFluid);
 
 AFluidSimulator::AFluidSimulator()
@@ -227,6 +228,13 @@ void AFluidSimulator::Tick(float DeltaTime)
 
 	// 외력 리셋
 	AccumulatedExternalForce = FVector::ZeroVector;
+
+	// GPU 렌더 데이터 업데이트
+	{
+		SCOPE_CYCLE_COUNTER(STAT_UpdateRenderData);
+		TRACE_CPUPROFILER_EVENT_SCOPE(Fluid_UpdateRenderData);
+		UpdateRenderData();
+	}
 
 	// 디버그 렌더링 업데이트
 	if (bEnableDebugRendering)
