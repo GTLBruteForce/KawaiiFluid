@@ -1,8 +1,0 @@
-{
-	"BuildId": "47537391",
-	"Modules": 
-	{
-		"KawaiiFluidEditor": "UnrealEditor-KawaiiFluidEditor.dll",
-		"KawaiiFluidRuntime": "UnrealEditor-KawaiiFluidRuntime.dll"
-	}
-}
