@@ -1,4 +1,4 @@
-// Copyright KawaiiFluid Team. All Rights Reserved.
+﻿// Copyright KawaiiFluid Team. All Rights Reserved.
 
 #include "Core/FluidSimulator.h"
 #include "Core/SpatialHash.h"
@@ -24,6 +24,7 @@ DECLARE_CYCLE_STAT(TEXT("Finalize Positions"), STAT_FinalizePositions, STATGROUP
 DECLARE_CYCLE_STAT(TEXT("Apply Viscosity"), STAT_ApplyViscosity, STATGROUP_KawaiiFluid);
 DECLARE_CYCLE_STAT(TEXT("Apply Adhesion"), STAT_ApplyAdhesion, STATGROUP_KawaiiFluid);
 DECLARE_CYCLE_STAT(TEXT("Debug Rendering"), STAT_DebugRendering, STATGROUP_KawaiiFluid);
+DECLARE_CYCLE_STAT(TEXT("Update Render Data"), STAT_UpdateRenderData, STATGROUP_KawaiiFluid);
 
 AFluidSimulator::AFluidSimulator()
 {
