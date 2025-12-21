@@ -1,18 +1,20 @@
-// Copyright KawaiiFluid Team. All Rights Reserved.
+﻿// Copyright KawaiiFluid Team. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Components/InstancedStaticMeshComponent.h"
-#include "FluidParticle.h"
-#include "SpatialHash.h"
-#include "Physics/DensityConstraint.h"
-#include "Physics/ViscositySolver.h"
-#include "Physics/AdhesionSolver.h"
+#include "Core/FluidParticle.h"
+#include "Core/KawaiiRenderParticle.h"
 #include "FluidSimulator.generated.h"
 
+class FSpatialHash;
+class FDensityConstraint;
+class FViscositySolver;
+class FAdhesionSolver;
 class UFluidCollider;
+class FKawaiiFluidRenderResource;
 
 /**
  * 유체 타입 열거형
@@ -39,23 +41,97 @@ public:
 	AFluidSimulator();
 	virtual ~AFluidSimulator();
 
+	virtual void BeginPlay() override;
+	virtual void BeginDestroy() override;
 	virtual void Tick(float DeltaTime) override;
+
+	//========================================
+	// 유체 타입 프리셋
+	//========================================
+
+	/** 유체 타입 (프리셋) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Preset")
+	EFluidType FluidType;
+
+	/** 유체 타입에 따른 프리셋 적용 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	void ApplyFluidTypePreset(EFluidType NewType);
 
 	//========================================
 	// 일반 설정
 	//========================================
 
-	/** 유체 타입 (프리셋) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|General")
-	EFluidType FluidType;
-
 	/** 최대 입자 수 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|General", meta = (ClampMin = "100", ClampMax = "100000"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Basic", meta = (ClampMin = "1"))
 	int32 MaxParticles;
 
 	/** 시뮬레이션 활성화 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|General")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Basic")
 	bool bSimulationEnabled;
+
+	//========================================
+	// 물리 파라미터
+	//========================================
+
+	/** 기준 밀도 (kg/m³) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "0.1"))
+	float RestDensity;
+
+	/** 입자 질량 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "0.01"))
+	float ParticleMass;
+
+	/** 스무딩 반경 (커널 반경 h, cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "1.0"))
+	float SmoothingRadius;
+
+	/** 밀도 제약 솔버 반복 횟수 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "1", ClampMax = "10"))
+	int32 SolverIterations;
+
+	/** 중력 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics")
+	FVector Gravity;
+
+	/** 안정성 상수 (Epsilon) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "0.0"))
+	float Epsilon;
+
+	//========================================
+	// 점성 파라미터
+	//========================================
+
+	/** XSPH 점성 계수 (0=물, 0.5=슬라임, 0.8=꿀) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Viscosity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float ViscosityCoefficient;
+
+	//========================================
+	// 접착력 파라미터
+	//========================================
+
+	/** 접착 강도 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AdhesionStrength;
+
+	/** 접착 반경 (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "1.0"))
+	float AdhesionRadius;
+
+	/** 분리 임계값 (이 힘 이상이면 떨어짐) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "0.0"))
+	float DetachThreshold;
+
+	//========================================
+	// 월드 콜리전
+	//========================================
+
+	/** 월드 콜리전 사용 (스태틱 메시 등과 충돌) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Collision")
+	bool bUseWorldCollision;
+
+	/** 콜리전 채널 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Collision")
+	TEnumAsByte<ECollisionChannel> CollisionChannel;
 
 	//========================================
 	// 디버그 시각화
@@ -81,81 +157,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (ClampMin = "1", ClampMax = "5000", EditCondition = "bSpawnOnBeginPlay"))
 	int32 AutoSpawnCount;
 
-	/** 자동 스폰 반경 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (ClampMin = "1.0", ClampMax = "500.0", EditCondition = "bSpawnOnBeginPlay"))
 	float AutoSpawnRadius;
-
-	//========================================
-	// 월드 콜리전
-	//========================================
-
-	/** 월드 콜리전 사용 (스태틱 메시 등과 충돌) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Collision")
-	bool bUseWorldCollision;
-
-	/** 콜리전 채널 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Collision", meta = (EditCondition = "bUseWorldCollision"))
-	TEnumAsByte<ECollisionChannel> CollisionChannel;
-
-	/** 충돌 반발 계수 (0=안튐, 1=완전탄성) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Collision", meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bUseWorldCollision"))
-	float CollisionRestitution;
-
-	/** 충돌 마찰 계수 (0=미끄러움, 1=완전정지) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Collision", meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bUseWorldCollision"))
-	float CollisionFriction;
-
-	//========================================
-	// 물리 파라미터
-	//========================================
-
-	/** 기준 밀도 (kg/m³) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "1.0", ClampMax = "3000.0"))
-	float RestDensity;
-
-	/** 입자 질량 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "0.1", ClampMax = "10.0"))
-	float ParticleMass;
-
-	/** 스무딩 반경 (커널 반경 h, cm) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "1.0", ClampMax = "100.0"))
-	float SmoothingRadius;
-
-	/** 밀도 제약 솔버 반복 횟수 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "1", ClampMax = "10"))
-	int32 SolverIterations;
-
-	/** 중력 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics")
-	FVector Gravity;
-
-	/** 안정성 상수 (Epsilon) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "1.0", ClampMax = "10000.0"))
-	float Epsilon;
-
-	//========================================
-	// 점성 파라미터
-	//========================================
-
-	/** XSPH 점성 계수 (0=물, 0.5=슬라임, 0.8=꿀) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Viscosity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float ViscosityCoefficient;
-
-	//========================================
-	// 접착력 파라미터
-	//========================================
-
-	/** 접착 강도 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AdhesionStrength;
-
-	/** 접착 반경 (cm) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "1.0", ClampMax = "100.0"))
-	float AdhesionRadius;
-
-	/** 분리 임계값 (이 힘 이상이면 떨어짐) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "0.0"))
-	float DetachThreshold;
 
 	//========================================
 	// 블루프린트 함수
@@ -197,24 +200,33 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Fluid")
 	void ClearAllParticles();
 
-	/** 유체 타입에 따른 프리셋 적용 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid")
-	void ApplyFluidTypePreset(EFluidType NewType);
+	//========================================
+	// Particles 직접 접근 (고급 사용자용)
+	//========================================
 
-	/** 입자 데이터 직접 접근 (고급) */
+	/** 파티클 배열 읽기 전용 접근 */
 	const TArray<FFluidParticle>& GetParticles() const { return Particles; }
-	TArray<FFluidParticle>& GetParticlesMutable() { return Particles; }
 
-protected:
-	virtual void BeginPlay() override;
+	/** 파티클 배열 쓰기 가능 접근 (주의: 직접 수정 시 물리 시뮬레이션 영향) */
+	TArray<FFluidParticle>& GetParticlesMutable() { return Particles; }
 
 private:
 	//========================================
-	// 내부 데이터
+	// 시뮬레이션 데이터
 	//========================================
 
 	/** 입자 배열 */
 	TArray<FFluidParticle> Particles;
+
+	/** 외력 누적 (다음 프레임에 적용) */
+	FVector AccumulatedExternalForce;
+
+	/** 다음 입자 ID */
+	int32 NextParticleID;
+
+	//========================================
+	// 솔버 및 유틸리티
+	//========================================
 
 	/** 공간 해싱 */
 	TUniquePtr<FSpatialHash> SpatialHash;
@@ -232,15 +244,34 @@ private:
 	UPROPERTY()
 	TArray<UFluidCollider*> Colliders;
 
-	/** 외력 누적 (다음 프레임에 적용) */
-	FVector AccumulatedExternalForce;
+	//========================================
+	// GPU 렌더 리소스
+	//========================================
 
-	/** 다음 입자 ID */
-	int32 NextParticleID;
+	/** GPU 렌더 리소스 (SharedPtr로 수명 관리) */
+	TSharedPtr<FKawaiiFluidRenderResource> RenderResource;
 
 	//========================================
-	// 시뮬레이션 스텝
+	// 내부 메서드
 	//========================================
+
+	/** 솔버들 초기화 */
+	void InitializeSolvers();
+
+	/** 디버그 메시 초기화 */
+	void InitializeDebugMesh();
+
+	/** 디버그 인스턴스 업데이트 */
+	void UpdateDebugInstances();
+
+	/** GPU 렌더 리소스 초기화 */
+	void InitializeRenderResource();
+
+	/** GPU 렌더 데이터 업데이트 */
+	void UpdateRenderData();
+
+	/** 렌더 입자 변환 */
+	TArray<FKawaiiRenderParticle> ConvertToRenderParticles() const;
 
 	/** 1. 외력 적용 & 위치 예측 */
 	void PredictPositions(float DeltaTime);
@@ -268,13 +299,4 @@ private:
 
 	/** 7. 접착력 적용 */
 	void ApplyAdhesion();
-
-	/** 솔버들 초기화 */
-	void InitializeSolvers();
-
-	/** 디버그 메시 초기화 */
-	void InitializeDebugMesh();
-
-	/** 디버그 인스턴스 업데이트 */
-	void UpdateDebugInstances();
 };

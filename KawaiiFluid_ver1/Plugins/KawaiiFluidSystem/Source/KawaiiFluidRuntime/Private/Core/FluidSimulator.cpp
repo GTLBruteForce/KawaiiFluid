@@ -1,4 +1,4 @@
-// Copyright KawaiiFluid Team. All Rights Reserved.
+﻿// Copyright KawaiiFluid Team. All Rights Reserved.
 
 #include "Core/FluidSimulator.h"
 #include "Core/SpatialHash.h"
@@ -6,6 +6,7 @@
 #include "Physics/ViscositySolver.h"
 #include "Physics/AdhesionSolver.h"
 #include "Collision/FluidCollider.h"
+#include "Rendering/KawaiiFluidRenderResource.h"
 #include "UObject/ConstructorHelpers.h"
 #include "DrawDebugHelpers.h"
 
@@ -92,6 +93,7 @@ void AFluidSimulator::BeginPlay()
 	Super::BeginPlay();
 
 	InitializeSolvers();
+	InitializeRenderResource();
 	ApplyFluidTypePreset(FluidType);
 
 	// 자동 스폰
@@ -101,12 +103,48 @@ void AFluidSimulator::BeginPlay()
 	}
 }
 
+void AFluidSimulator::BeginDestroy()
+{
+	// 렌더 리소스 정리
+	if (RenderResource.IsValid())
+	{
+		// 렌더 스레드에서 리소스 해제 후 SharedPtr 해제
+		ENQUEUE_RENDER_COMMAND(ReleaseFluidRenderResource)(
+			[RenderResource = MoveTemp(RenderResource)](FRHICommandListImmediate& RHICmdList) mutable
+			{
+				if (RenderResource.IsValid())
+				{
+					RenderResource->ReleaseResource();
+					// 렌더 스레드에서 SharedPtr 해제 (안전하도록 렌더 스레드에서 실행)
+					RenderResource.Reset();
+				}
+			}
+		);
+	}
+
+	Super::BeginDestroy();
+}
+
 void AFluidSimulator::InitializeSolvers()
 {
 	SpatialHash = MakeUnique<FSpatialHash>(SmoothingRadius);
 	DensityConstraint = MakeUnique<FDensityConstraint>(RestDensity, SmoothingRadius, Epsilon);
 	ViscositySolver = MakeUnique<FViscositySolver>();
 	AdhesionSolver = MakeUnique<FAdhesionSolver>();
+}
+
+void AFluidSimulator::InitializeRenderResource()
+{
+	// GPU 렌더 리소스 생성 및 초기화
+	RenderResource = MakeShared<FKawaiiFluidRenderResource>();
+	
+	// 렌더 스레드에서 리소스 등록
+	ENQUEUE_RENDER_COMMAND(InitFluidRenderResource)(
+		[RenderResourcePtr = RenderResource.Get()](FRHICommandListImmediate& RHICmdList)
+		{
+			RenderResourcePtr->InitResource(RHICmdList);
+		}
+	);
 }
 
 void AFluidSimulator::Tick(float DeltaTime)
@@ -524,4 +562,39 @@ void AFluidSimulator::UpdateDebugInstances()
 
 	// 일괄 업데이트
 	DebugMeshComponent->MarkRenderStateDirty();
+}
+
+void AFluidSimulator::UpdateRenderData()
+{
+	if (!RenderResource.IsValid() || Particles.Num() == 0)
+	{
+		return;
+	}
+
+	// 시뮬레이션 데이터 -> 렌더링용 데이터 변환
+	TArray<FKawaiiRenderParticle> RenderParticles = ConvertToRenderParticles();
+
+	// GPU 버퍼 업데이트 (렌더 스레드로 전송)
+	RenderResource->UpdateParticleData(RenderParticles);
+}
+
+TArray<FKawaiiRenderParticle> AFluidSimulator::ConvertToRenderParticles() const
+{
+	TArray<FKawaiiRenderParticle> RenderParticles;
+	RenderParticles.Reserve(Particles.Num());
+
+	for (const FFluidParticle& SimParticle : Particles)
+	{
+		FKawaiiRenderParticle RenderParticle;
+		
+		// FVector (double) -> FVector3f (float) 변환
+		RenderParticle.Position = FVector3f(SimParticle.Position);
+		RenderParticle.Velocity = FVector3f(SimParticle.Velocity);
+		RenderParticle.Radius = DebugParticleRadius; // 디버그 반경 사용
+		RenderParticle.Padding = 0.0f;
+
+		RenderParticles.Add(RenderParticle);
+	}
+
+	return RenderParticles;
 }
