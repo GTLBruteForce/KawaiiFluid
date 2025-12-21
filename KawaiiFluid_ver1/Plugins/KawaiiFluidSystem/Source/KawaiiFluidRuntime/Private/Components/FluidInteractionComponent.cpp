@@ -148,9 +148,9 @@ void UFluidInteractionComponent::ApplyDragAlong(float DeltaTime)
 
 	AActor* Owner = GetOwner();
 	FVector CurrentLocation = Owner->GetActorLocation();
-	FVector Velocity = (CurrentLocation - PreviousLocation) / DeltaTime;
+	FVector Delta = CurrentLocation - PreviousLocation;  // 위치 변화량
 
-	if (Velocity.SizeSquared() < KINDA_SMALL_NUMBER)
+	if (Delta.SizeSquared() < KINDA_SMALL_NUMBER)
 	{
 		return;
 	}
@@ -160,7 +160,10 @@ void UFluidInteractionComponent::ApplyDragAlong(float DeltaTime)
 	{
 		if (Particle.bIsAttached && Particle.AttachedActor.Get() == Owner)
 		{
-			Particle.Velocity += Velocity * DragAlongStrength;
+			// 위치 직접 이동 (속도가 아닌 위치를 업데이트)
+			FVector PositionDelta = Delta * DragAlongStrength;
+			Particle.Position += PositionDelta;
+			Particle.PredictedPosition += PositionDelta;
 		}
 	}
 }

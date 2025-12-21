@@ -36,14 +36,14 @@ void FDensityConstraint::Solve(TArray<FFluidParticle>& Particles, float InSmooth
 	static int32 DebugCounter = 0;
 	if (++DebugCounter % 60 == 0 && Particles.Num() > 0)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[PBF Debug] Particles=%d, Neighbors=%d, Density=%.6f, RestDensity=%.2f, Lambda=%.6f, h=%.2f, Epsilon=%.2f"),
-			Particles.Num(),
-			Particles[0].NeighborIndices.Num(),
-			Particles[0].Density,
-			RestDensity,
-			Particles[0].Lambda,
-			SmoothingRadius,
-			Epsilon);
+		//UE_LOG(LogTemp, Warning, TEXT("[PBF Debug] Particles=%d, Neighbors=%d, Density=%.6f, RestDensity=%.2f, Lambda=%.6f, h=%.2f, Epsilon=%.2f"),
+		//	Particles.Num(),
+		//	Particles[0].NeighborIndices.Num(),
+		//	Particles[0].Density,
+		//	RestDensity,
+		//	Particles[0].Lambda,
+		//	SmoothingRadius,
+		//	Epsilon);
 	}
 }
 

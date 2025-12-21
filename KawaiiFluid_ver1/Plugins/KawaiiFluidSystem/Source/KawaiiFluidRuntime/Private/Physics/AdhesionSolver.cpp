@@ -15,6 +15,14 @@ void FAdhesionSolver::Apply(
 	float AdhesionRadius,
 	float DetachThreshold)
 {
+	// 디버그: AdhesionSolver 호출 확인
+	static int32 ApplyDebugCounter = 0;
+	if (++ApplyDebugCounter % 1000 == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("AdhesionSolver::Apply - Colliders: %d, Strength: %.2f, Radius: %.2f"),
+			Colliders.Num(), AdhesionStrength, AdhesionRadius);
+	}
+
 	if (AdhesionStrength <= 0.0f || Colliders.Num() == 0)
 	{
 		return;
@@ -28,7 +36,7 @@ void FAdhesionSolver::Apply(
 
 		for (UFluidCollider* Collider : Colliders)
 		{
-			if (!Collider || !Collider->IsActive())
+			if (!Collider || !Collider->IsColliderEnabled())
 			{
 				continue;
 			}
@@ -40,9 +48,12 @@ void FAdhesionSolver::Apply(
 
 			if (Collider->GetClosestPoint(Particle.Position, ClosestPoint, Normal, Distance))
 			{
-				if (Distance < AdhesionRadius)
+				// 충돌 마진: 실제로 표면에 닿은 입자에만 접착력 적용
+				const float CollisionMargin = 5.0f;  // FluidCollider와 동일한 값
+
+				if (Distance <= CollisionMargin)
 				{
-					// 접착력 계산
+					// 접착력 계산 (충돌한 입자에만)
 					FVector AdhesionForce = ComputeAdhesionForce(
 						Particle.Position,
 						ClosestPoint,
@@ -53,6 +64,14 @@ void FAdhesionSolver::Apply(
 					);
 
 					TotalAdhesionForce += AdhesionForce;
+
+					// 디버그
+					static int32 AdhesionDebugCounter = 0;
+					if (++AdhesionDebugCounter % 1000 == 0)
+					{
+						UE_LOG(LogTemp, Warning, TEXT("AdhesionSolver: Distance=%.2f, Force=(%.2f, %.2f, %.2f)"),
+							Distance, AdhesionForce.X, AdhesionForce.Y, AdhesionForce.Z);
+					}
 
 					// 가장 가까운 콜라이더 추적
 					if (Distance < ClosestDistance)
@@ -170,14 +189,11 @@ void FAdhesionSolver::UpdateAttachmentState(
 	}
 	else
 	{
-		// 접착 해제 조건
+		// 콜라이더 근처에 없으면 무조건 접착 해제
 		if (Particle.bIsAttached)
 		{
-			if (Force > DetachThreshold || !Particle.AttachedActor.IsValid())
-			{
-				Particle.bIsAttached = false;
-				Particle.AttachedActor.Reset();
-			}
+			Particle.bIsAttached = false;
+			Particle.AttachedActor.Reset();
 		}
 	}
 }
