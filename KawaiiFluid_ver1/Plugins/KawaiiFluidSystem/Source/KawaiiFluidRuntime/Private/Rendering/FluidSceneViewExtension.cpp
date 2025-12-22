@@ -4,6 +4,7 @@
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/FluidDepthPass.h"
 #include "Rendering/FluidSmoothingPass.h"
+#include "Rendering/FluidNormalPass.h"
 #include "Core/FluidSimulator.h"
 #include "SceneView.h"
 #include "RenderGraphBuilder.h"
@@ -43,40 +44,29 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(FRDGBuilder& Grap
 		return;
 	}
 
-	// SSFR 렌더링 파이프라인 실행
-
-	// Depth Pass - Sphere ray-casting으로 깊이 버퍼 생성
+	// 1. Depth Pass
 	FRDGTextureRef DepthTexture = nullptr;
 	RenderFluidDepthPass(GraphBuilder, View, SubsystemPtr, DepthTexture);
 
-	// Depth texture가 생성되지 않았으면 스킵
 	if (!DepthTexture)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("FluidDepthPass: DepthTexture not created!"));
 		return;
 	}
 
-	// UE_LOG(LogTemp, Warning, TEXT("FluidDepthPass: DepthTexture created successfully - Size: %dx%d"),
-	// 	DepthTexture->Desc.Extent.X, DepthTexture->Desc.Extent.Y);
-
-	// Smoothing Pass - Bilateral blur로 깊이 부드럽게
+	// 2. Smoothing Pass
 	FRDGTextureRef SmoothedDepthTexture = nullptr;
-	float BlurRadius = static_cast<float>(SubsystemPtr->RenderingParameters.BilateralFilterRadius);
-	float DepthFalloff = SubsystemPtr->RenderingParameters.DepthThreshold;
+	RenderSmoothingPass(GraphBuilder, View, DepthTexture, SmoothedDepthTexture);
 
-	// UE_LOG(LogTemp, Warning, TEXT("FluidSmoothingPass: Starting with BlurRadius=%.1f, DepthFalloff=%.3f"),
-	// 	BlurRadius, DepthFalloff);
-
-	RenderFluidSmoothingPass(GraphBuilder, View, DepthTexture, SmoothedDepthTexture, BlurRadius, DepthFalloff);
-
-	if (SmoothedDepthTexture)
+	if (!SmoothedDepthTexture)
 	{
-		// UE_LOG(LogTemp, Warning, TEXT("FluidSmoothingPass: SmoothedDepthTexture created - Size: %dx%d"),
-		// 	SmoothedDepthTexture->Desc.Extent.X, SmoothedDepthTexture->Desc.Extent.Y);
+		return;
 	}
 
-	// 3. Normal Reconstruction Pass (TODO)
-	// RenderNormalPass(GraphBuilder, View, SmoothedDepthTexture);
+	// 3. Normal Reconstruction Pass
+	FRDGTextureRef NormalTexture = nullptr;
+	RenderNormalPass(GraphBuilder, View, SmoothedDepthTexture, NormalTexture);
+
+	// UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: NormalPass executed."));
 
 	// 4. Thickness Pass (TODO)
 	// RenderThicknessPass(GraphBuilder, View);
@@ -97,14 +87,28 @@ void FFluidSceneViewExtension::RenderDepthPass(FRDGBuilder& GraphBuilder, const 
 	RenderFluidDepthPass(GraphBuilder, View, SubsystemPtr, DepthTexture);
 }
 
-void FFluidSceneViewExtension::RenderSmoothingPass(FRDGBuilder& GraphBuilder, const FSceneView& View)
+void FFluidSceneViewExtension::RenderSmoothingPass(FRDGBuilder& GraphBuilder, const FSceneView& View, FRDGTextureRef InputDepthTexture, FRDGTextureRef& OutSmoothedDepthTexture)
 {
-	// TODO: 다음 단계에서 구현
+	UFluidRendererSubsystem* SubsystemPtr = Subsystem.Get();
+	if (!SubsystemPtr || !InputDepthTexture)
+	{
+		return;
+	}
+
+	float BlurRadius = static_cast<float>(SubsystemPtr->RenderingParameters.BilateralFilterRadius);
+	float DepthFalloff = SubsystemPtr->RenderingParameters.DepthThreshold;
+
+	RenderFluidSmoothingPass(GraphBuilder, View, InputDepthTexture, OutSmoothedDepthTexture, BlurRadius, DepthFalloff);
 }
 
-void FFluidSceneViewExtension::RenderNormalPass(FRDGBuilder& GraphBuilder, const FSceneView& View)
+void FFluidSceneViewExtension::RenderNormalPass(FRDGBuilder& GraphBuilder, const FSceneView& View, FRDGTextureRef SmoothedDepthTexture, FRDGTextureRef& OutNormalTexture)
 {
-	// TODO: 다음 단계에서 구현
+	if (!SmoothedDepthTexture)
+	{
+		return;
+	}
+
+	RenderFluidNormalPass(GraphBuilder, View, SmoothedDepthTexture, OutNormalTexture);
 }
 
 void FFluidSceneViewExtension::RenderThicknessPass(FRDGBuilder& GraphBuilder, const FSceneView& View)

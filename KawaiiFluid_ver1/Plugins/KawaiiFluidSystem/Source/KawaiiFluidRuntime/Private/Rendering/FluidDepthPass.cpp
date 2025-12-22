@@ -64,8 +64,8 @@ void RenderFluidDepthPass(
 			continue;
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("FluidDepthPass: Rendering %s with %d instances"),
-			*Simulator->GetName(), InstanceCount);
+		// UE_LOG(LogTemp, Log, TEXT("FluidDepthPass: Rendering %s with %d instances"),
+		// 	*Simulator->GetName(), InstanceCount);
 
 		// Instance transforms에서 파티클 위치 추출
 		TArray<FVector3f> ParticlePositions;

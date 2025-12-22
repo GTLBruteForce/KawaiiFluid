@@ -37,10 +37,10 @@ private:
 	void RenderDepthPass(FRDGBuilder& GraphBuilder, const FSceneView& View);
 
 	/** Depth Smoothing 패스 */
-	void RenderSmoothingPass(FRDGBuilder& GraphBuilder, const FSceneView& View);
+	void RenderSmoothingPass(FRDGBuilder& GraphBuilder, const FSceneView& View, FRDGTextureRef InputDepthTexture, FRDGTextureRef& OutSmoothedDepthTexture);
 
 	/** Normal 재구성 패스 */
-	void RenderNormalPass(FRDGBuilder& GraphBuilder, const FSceneView& View);
+	void RenderNormalPass(FRDGBuilder& GraphBuilder, const FSceneView& View, FRDGTextureRef SmoothedDepthTexture, FRDGTextureRef& OutNormalTexture);
 
 	/** Thickness 렌더링 패스 */
 	void RenderThicknessPass(FRDGBuilder& GraphBuilder, const FSceneView& View);
