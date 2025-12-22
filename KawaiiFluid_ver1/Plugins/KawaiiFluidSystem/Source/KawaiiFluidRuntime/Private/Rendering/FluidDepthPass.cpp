@@ -1,13 +1,22 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 
 #include "Rendering/FluidDepthPass.h"
+#include "Rendering/FluidDepthShaders.h"
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Core/FluidSimulator.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "SceneView.h"
-#include "MeshPassProcessor.h"
+#include "GlobalShader.h"
+#include "ShaderParameterStruct.h"
+#include "PipelineStateCache.h"
+#include "RHIStaticStates.h"
+#include "CommonRenderResources.h"
+
+//=============================================================================
+// Depth Pass Implementation
+//=============================================================================
 
 void RenderFluidDepthPass(
 	FRDGBuilder& GraphBuilder,
@@ -27,13 +36,13 @@ void RenderFluidDepthPass(
 	// Depth Texture 생성
 	FRDGTextureDesc DepthDesc = FRDGTextureDesc::Create2D(
 		View.UnscaledViewRect.Size(),
-		PF_DepthStencil,
-		FClearValueBinding::DepthFar,
-		TexCreate_DepthStencilTargetable | TexCreate_ShaderResource);
+		PF_R32_FLOAT,
+		FClearValueBinding::Black,
+		TexCreate_ShaderResource | TexCreate_RenderTargetable);
 
 	OutDepthTexture = GraphBuilder.CreateTexture(DepthDesc, TEXT("FluidDepthTexture"));
 
-	// 각 시뮬레이터의 DebugMeshComponent 렌더링
+	// 각 시뮬레이터의 InstancedMesh 렌더링
 	for (AFluidSimulator* Simulator : Simulators)
 	{
 		if (!Simulator || Simulator->GetParticleCount() == 0)
@@ -58,23 +67,79 @@ void RenderFluidDepthPass(
 		UE_LOG(LogTemp, Log, TEXT("FluidDepthPass: Rendering %s with %d instances"),
 			*Simulator->GetName(), InstanceCount);
 
-		// TODO: 실제 메시 렌더링 구현
-		// 현재는 InstancedStaticMeshComponent가 이미 씬에 렌더링되고 있으므로
-		// 별도의 depth-only pass로 특정 render target에 다시 렌더링 필요
-		//
-		// 방법 1: SceneCapture2D 컴포넌트 사용
-		// 방법 2: Custom depth pass with stencil
-		// 방법 3: MeshDrawCommands를 직접 제출
+		// Instance transforms에서 파티클 위치 추출
+		TArray<FVector3f> ParticlePositions;
+		ParticlePositions.Reserve(InstanceCount);
 
-		// 임시: 로그만 출력
-		GraphBuilder.AddPass(
-			RDG_EVENT_NAME("FluidMeshDepth_%s", *Simulator->GetName()),
-			ERDGPassFlags::Raster,
-			[MeshComp, InstanceCount](FRHICommandList& RHICmdList)
+		for (int32 i = 0; i < InstanceCount; ++i)
+		{
+			FTransform InstanceTransform;
+			if (MeshComp->GetInstanceTransform(i, InstanceTransform, true)) // World space
 			{
-				// MeshComp는 이미 씬에서 렌더링됨
-				// 여기서는 별도 depth target에 렌더링하는 로직 필요
-				UE_LOG(LogTemp, Verbose, TEXT("  -> InstancedMesh ready for depth rendering"));
+				FVector WorldPos = InstanceTransform.GetLocation();
+				ParticlePositions.Add(FVector3f(WorldPos));
+			}
+		}
+
+		if (ParticlePositions.Num() == 0)
+		{
+			continue;
+		}
+
+		// GPU 버퍼 생성 및 업로드
+		const uint32 BufferSize = ParticlePositions.Num() * sizeof(FVector3f);
+		FRDGBufferDesc BufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), ParticlePositions.Num());
+		FRDGBufferRef ParticleBuffer = GraphBuilder.CreateBuffer(BufferDesc, TEXT("FluidParticlePositions"));
+
+		// 데이터 업로드
+		GraphBuilder.QueueBufferUpload(ParticleBuffer, ParticlePositions.GetData(), BufferSize);
+
+		FRDGBufferSRVRef ParticleBufferSRV = GraphBuilder.CreateSRV(ParticleBuffer);
+
+		// View matrices
+		FMatrix ViewMatrix = View.ViewMatrices.GetViewMatrix();
+		FMatrix ProjectionMatrix = View.ViewMatrices.GetProjectionMatrix();
+		FMatrix ViewProjectionMatrix = View.ViewMatrices.GetViewProjectionMatrix();
+
+		float ParticleRadius = Subsystem->RenderingParameters.ParticleRenderRadius;
+
+		// Depth 렌더링 패스
+		auto* PassParameters = GraphBuilder.AllocParameters<FFluidDepthParameters>();
+		PassParameters->ParticlePositions = ParticleBufferSRV;
+		PassParameters->ParticleRadius = ParticleRadius;
+		PassParameters->ViewMatrix = FMatrix44f(ViewMatrix);
+		PassParameters->ProjectionMatrix = FMatrix44f(ProjectionMatrix);
+		PassParameters->ViewProjectionMatrix = FMatrix44f(ViewProjectionMatrix);
+		PassParameters->RenderTargets[0] = FRenderTargetBinding(OutDepthTexture, ERenderTargetLoadAction::EClear);
+
+		FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+		TShaderMapRef<FFluidDepthVS> VertexShader(GlobalShaderMap);
+		TShaderMapRef<FFluidDepthPS> PixelShader(GlobalShaderMap);
+
+		GraphBuilder.AddPass(
+			RDG_EVENT_NAME("FluidDepthDraw_%s", *Simulator->GetName()),
+			PassParameters,
+			ERDGPassFlags::Raster,
+			[VertexShader, PixelShader, PassParameters, InstanceCount](FRHICommandList& RHICmdList)
+			{
+				FGraphicsPipelineStateInitializer GraphicsPSOInit;
+				RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
+				GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
+				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
+				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
+
+				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GEmptyVertexDeclaration.VertexDeclarationRHI;
+				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
+				GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
+				GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
+
+				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
+
+				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), *PassParameters);
+				SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), *PassParameters);
+
+				// Draw instanced quads (4 vertices per instance)
+				RHICmdList.DrawPrimitive(0, 2, InstanceCount);
 			});
 	}
 }

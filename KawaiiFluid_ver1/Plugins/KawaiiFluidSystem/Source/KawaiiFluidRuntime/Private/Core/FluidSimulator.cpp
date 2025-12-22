@@ -7,6 +7,7 @@
 #include "Physics/AdhesionSolver.h"
 #include "Collision/FluidCollider.h"
 #include "Rendering/KawaiiFluidRenderResource.h"
+#include "Rendering/FluidRendererSubsystem.h"
 #include "UObject/ConstructorHelpers.h"
 #include "DrawDebugHelpers.h"
 
@@ -101,11 +102,40 @@ void AFluidSimulator::BeginPlay()
 	InitializeRenderResource();
 	ApplyFluidTypePreset(FluidType);
 
+	// FluidRendererSubsystem에 등록
+	if (UWorld* World = GetWorld())
+	{
+		if (UFluidRendererSubsystem* RendererSubsystem = World->GetSubsystem<UFluidRendererSubsystem>())
+		{
+			RendererSubsystem->RegisterSimulator(this);
+			UE_LOG(LogTemp, Log, TEXT("FluidSimulator registered to RendererSubsystem: %s"), *GetName());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("FluidRendererSubsystem not found!"));
+		}
+	}
+
 	// 자동 스폰
 	if (bSpawnOnBeginPlay && AutoSpawnCount > 0)
 	{
 		SpawnParticles(GetActorLocation(), AutoSpawnCount, AutoSpawnRadius);
 	}
+}
+
+void AFluidSimulator::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// FluidRendererSubsystem에서 등록 해제
+	if (UWorld* World = GetWorld())
+	{
+		if (UFluidRendererSubsystem* RendererSubsystem = World->GetSubsystem<UFluidRendererSubsystem>())
+		{
+			RendererSubsystem->UnregisterSimulator(this);
+			UE_LOG(LogTemp, Log, TEXT("FluidSimulator unregistered from RendererSubsystem: %s"), *GetName());
+		}
+	}
+
+	Super::EndPlay(EndPlayReason);
 }
 
 void AFluidSimulator::BeginDestroy()

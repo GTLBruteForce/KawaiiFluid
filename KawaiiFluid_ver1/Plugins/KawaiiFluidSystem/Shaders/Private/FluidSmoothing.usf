@@ -1,0 +1,108 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+
+#include "/Engine/Private/Common.ush"
+
+//=============================================================================
+// Bilateral Gaussian Blur Compute Shader for Depth Smoothing
+//=============================================================================
+
+// Input/Output
+Texture2D InputTexture;
+SamplerState InputSampler;
+RWTexture2D<float> OutputTexture;
+
+// Blur parameters
+float2 TextureSize;
+float2 InverseTextureSize;
+int2 BlurDirection; // (1, 0) for horizontal, (0, 1) for vertical
+float BlurRadius;
+float BlurDepthFalloff;
+
+// Gaussian weight calculation
+float GaussianWeight(float Distance, float Sigma)
+{
+	float Exponent = -(Distance * Distance) / (2.0 * Sigma * Sigma);
+	return exp(Exponent);
+}
+
+//=============================================================================
+// Compute Shader - Bilateral Blur
+//=============================================================================
+
+#define THREADGROUP_SIZE 8
+
+[numthreads(THREADGROUP_SIZE, THREADGROUP_SIZE, 1)]
+void BilateralBlurCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	// Bounds check
+	if (any(DispatchThreadId.xy >= uint2(TextureSize)))
+	{
+		return;
+	}
+
+	// Current pixel UV
+	float2 UV = (DispatchThreadId.xy + 0.5) * InverseTextureSize;
+
+	// Sample center depth
+	float CenterDepth = InputTexture.SampleLevel(InputSampler, UV, 0).r;
+
+	// If no depth (background), output as-is
+	if (CenterDepth >= 1.0 || CenterDepth <= 0.0)
+	{
+		OutputTexture[DispatchThreadId.xy] = CenterDepth;
+		return;
+	}
+
+	// Bilateral filter parameters
+	const int KernelRadius = int(BlurRadius);
+	const float SpatialSigma = BlurRadius / 2.0;
+	const float DepthSigma = BlurDepthFalloff;
+
+	float WeightSum = 0.0;
+	float BlurredDepth = 0.0;
+
+	// Iterate over kernel
+	for (int Offset = -KernelRadius; Offset <= KernelRadius; ++Offset)
+	{
+		// Calculate sample UV
+		float2 SampleOffset = float2(BlurDirection) * Offset * InverseTextureSize;
+		float2 SampleUV = UV + SampleOffset;
+
+		// Sample depth
+		float SampleDepth = InputTexture.SampleLevel(InputSampler, SampleUV, 0).r;
+
+		// Skip background pixels
+		if (SampleDepth >= 1.0 || SampleDepth <= 0.0)
+		{
+			continue;
+		}
+
+		// Calculate spatial weight (Gaussian based on distance)
+		float SpatialDistance = abs(float(Offset));
+		float SpatialWeight = GaussianWeight(SpatialDistance, SpatialSigma);
+
+		// Calculate range weight (Gaussian based on depth difference)
+		float DepthDifference = abs(SampleDepth - CenterDepth);
+		float RangeWeight = GaussianWeight(DepthDifference, DepthSigma);
+
+		// Combined bilateral weight
+		float BilateralWeight = SpatialWeight * RangeWeight;
+
+		// Accumulate weighted depth
+		BlurredDepth += SampleDepth * BilateralWeight;
+		WeightSum += BilateralWeight;
+	}
+
+	// Normalize
+	if (WeightSum > 0.0)
+	{
+		BlurredDepth /= WeightSum;
+	}
+	else
+	{
+		BlurredDepth = CenterDepth;
+	}
+
+	// Write result
+	OutputTexture[DispatchThreadId.xy] = BlurredDepth;
+}
