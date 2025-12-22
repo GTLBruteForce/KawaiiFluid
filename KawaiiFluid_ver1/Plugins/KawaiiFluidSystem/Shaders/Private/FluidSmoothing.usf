@@ -2,31 +2,27 @@
 
 #include "/Engine/Private/Common.ush"
 
-//=============================================================================
-// Bilateral Gaussian Blur Compute Shader for Depth Smoothing
-//=============================================================================
-
-// Input/Output
+// IO Resources
 Texture2D InputTexture;
 SamplerState InputSampler;
 RWTexture2D<float> OutputTexture;
 
-// Blur parameters
+// Blur Params
 float2 TextureSize;
 float2 InverseTextureSize;
-int2 BlurDirection; // (1, 0) for horizontal, (0, 1) for vertical
+int2 BlurDirection; // 가로: (1, 0), 세로: (0, 1)
 float BlurRadius;
 float BlurDepthFalloff;
 
-// Gaussian weight calculation
-float GaussianWeight(float Distance, float Sigma)
+// 가우시안 가중치 계산 함수
+float GetGaussianWeight(float Distance, float Sigma)
 {
 	float Exponent = -(Distance * Distance) / (2.0 * Sigma * Sigma);
 	return exp(Exponent);
 }
 
 //=============================================================================
-// Compute Shader - Bilateral Blur
+// Bilateral Blur
 //=============================================================================
 
 #define THREADGROUP_SIZE 8
@@ -34,75 +30,73 @@ float GaussianWeight(float Distance, float Sigma)
 [numthreads(THREADGROUP_SIZE, THREADGROUP_SIZE, 1)]
 void BilateralBlurCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-	// Bounds check
+	// 유효 범위 검사
 	if (any(DispatchThreadId.xy >= uint2(TextureSize)))
 	{
 		return;
 	}
 
-	// Current pixel UV
-	float2 UV = (DispatchThreadId.xy + 0.5) * InverseTextureSize;
+	// 현재 픽셀의 UV 좌표
+	float2 CurrentUV = (DispatchThreadId.xy + 0.5) * InverseTextureSize;
 
-	// Sample center depth
-	float CenterDepth = InputTexture.SampleLevel(InputSampler, UV, 0).r;
+	// 중심 픽셀의 깊이 샘플링
+	float CenterDepth = InputTexture.SampleLevel(InputSampler, CurrentUV, 0).r;
 
-	// If no depth (background), output as-is
+	// 깊이 값이 없으면(배경), 원래 값을 출력하고 종료
 	if (CenterDepth >= 1.0 || CenterDepth <= 0.0)
 	{
 		OutputTexture[DispatchThreadId.xy] = CenterDepth;
 		return;
 	}
 
-	// Bilateral filter parameters
+	// 양방향 필터 파라미터 설정
 	const int KernelRadius = int(BlurRadius);
 	const float SpatialSigma = BlurRadius / 2.0;
 	const float DepthSigma = BlurDepthFalloff;
 
-	float WeightSum = 0.0;
-	float BlurredDepth = 0.0;
+	float TotalWeight = 0.0;
+	float TotalWeightedDepth = 0.0;
 
-	// Iterate over kernel
+	// 커널 영역 반복 수행
 	for (int Offset = -KernelRadius; Offset <= KernelRadius; ++Offset)
 	{
-		// Calculate sample UV
-		float2 SampleOffset = float2(BlurDirection) * Offset * InverseTextureSize;
-		float2 SampleUV = UV + SampleOffset;
+		// 샘플링할 UV 좌표 계산
+		float2 SampleOffset = float2(BlurDirection) * (float)Offset * InverseTextureSize;
+		float2 SampleUV = CurrentUV + SampleOffset;
 
-		// Sample depth
+		// 주변 깊이 샘플링
 		float SampleDepth = InputTexture.SampleLevel(InputSampler, SampleUV, 0).r;
 
-		// Skip background pixels
+		// 배경 픽셀은 건너뜀
 		if (SampleDepth >= 1.0 || SampleDepth <= 0.0)
 		{
 			continue;
 		}
 
-		// Calculate spatial weight (Gaussian based on distance)
-		float SpatialDistance = abs(float(Offset));
-		float SpatialWeight = GaussianWeight(SpatialDistance, SpatialSigma);
+		// 공간적 가중치 계산 (거리에 따른 가우시안)
+		float SpatialDistance = abs((float)Offset);
+		float SpatialWeight = GetGaussianWeight(SpatialDistance, SpatialSigma);
 
-		// Calculate range weight (Gaussian based on depth difference)
+		// 범위 가중치 계산 (깊이 차이에 따른 가우시안)
 		float DepthDifference = abs(SampleDepth - CenterDepth);
-		float RangeWeight = GaussianWeight(DepthDifference, DepthSigma);
+		float RangeWeight = GetGaussianWeight(DepthDifference, DepthSigma);
 
-		// Combined bilateral weight
-		float BilateralWeight = SpatialWeight * RangeWeight;
+		// 최종 양방향 가중치 결합
+		float CombinedWeight = SpatialWeight * RangeWeight;
 
-		// Accumulate weighted depth
-		BlurredDepth += SampleDepth * BilateralWeight;
-		WeightSum += BilateralWeight;
+		// 가중치가 적용된 깊이 누적
+		TotalWeightedDepth += SampleDepth * CombinedWeight;
+		TotalWeight += CombinedWeight;
 	}
 
-	// Normalize
-	if (WeightSum > 0.0)
+	float FinalDepth = CenterDepth;
+
+	// 정규화
+	if (TotalWeight > 0.0)
 	{
-		BlurredDepth /= WeightSum;
-	}
-	else
-	{
-		BlurredDepth = CenterDepth;
+		FinalDepth = TotalWeightedDepth / TotalWeight;
 	}
 
-	// Write result
-	OutputTexture[DispatchThreadId.xy] = BlurredDepth;
+	// 결과 저장
+	OutputTexture[DispatchThreadId.xy] = FinalDepth;
 }
