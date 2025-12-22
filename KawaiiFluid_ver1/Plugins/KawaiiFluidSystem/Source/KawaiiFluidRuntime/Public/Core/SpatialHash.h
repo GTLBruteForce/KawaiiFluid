@@ -29,6 +29,15 @@ public:
 	/** 모든 입자를 한 번에 삽입 (벌크 연산) */
 	void BuildFromPositions(const TArray<FVector>& Positions);
 
+	/** 그리드 데이터 반환 (읽기 전용) */
+	const TMap<FIntVector, TArray<int32>>& GetGrid() const { return Grid; }
+
+	/** 셀 크기 반환 */
+	float GetCellSize() const { return CellSize; }
+
+	/** 월드 좌표를 셀 좌표로 변환 (외부 접근용) */
+	FIntVector GetCellCoordPublic(const FVector& Position) const { return GetCellCoord(Position); }
+
 private:
 	/** 셀 크기 */
 	float CellSize;

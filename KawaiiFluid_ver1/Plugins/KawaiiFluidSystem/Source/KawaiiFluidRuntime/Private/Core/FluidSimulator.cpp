@@ -329,52 +329,138 @@ void AFluidSimulator::HandleCollisions()
 void AFluidSimulator::HandleWorldCollision()
 {
 	UWorld* World = GetWorld();
-	if (!World)
+	if (!World || Particles.Num() == 0)
 	{
 		return;
 	}
 
+	const float CellSize = SpatialHash->GetCellSize();
+	const float ParticleRadius = DebugParticleRadius;
+
+	// 1. SpatialHash에서 셀들 가져와서 오버랩 체크
+	const auto& Grid = SpatialHash->GetGrid();
+
 	FCollisionQueryParams QueryParams;
 	QueryParams.bTraceComplex = false;
 	QueryParams.bReturnPhysicalMaterial = false;
-	QueryParams.AddIgnoredActor(this);  // 자기 자신 무시
+	QueryParams.AddIgnoredActor(this);
 
-	const float ParticleRadius = DebugParticleRadius;
+	// 2. 충돌 후보 수집 (하이브리드 방식 - 빠른 입자 먼저 + 셀 기반)
+	TSet<int32> CollisionCandidateSet;
+	CollisionCandidateSet.Reserve(Particles.Num());
+	TSet<FIntVector> ConfirmedCollisionCells;
 
-	for (FFluidParticle& Particle : Particles)
+	// 2-1. 빠른 입자 먼저 검사 (터널링 방지 + 셀 Overlap 배제용)
+	const float SpeedThresholdSq = CellSize * CellSize;
+	for (int32 i = 0; i < Particles.Num(); ++i)
 	{
-		// 스윕 테스트: 이전 위치 → 예측 위치
-		FHitResult HitResult;
-		bool bHit = World->SweepSingleByChannel(
-			HitResult,
-			Particle.Position,
-			Particle.PredictedPosition,
-			FQuat::Identity,
-			CollisionChannel,
-			FCollisionShape::MakeSphere(ParticleRadius),
-			QueryParams
-		);
+		const FFluidParticle& P = Particles[i];
+		const float MoveDistSq = FVector::DistSquared(P.Position, P.PredictedPosition);
 
-		if (bHit && HitResult.bBlockingHit)
+		if (MoveDistSq > SpeedThresholdSq)
 		{
-			// 충돌 지점으로 위치 조정
-			//FVector CollisionPos = HitResult.Location + HitResult.ImpactNormal * (ParticleRadius + 0.01f);
+			FBox TrajectoryBox(P.Position, P.Position);
+			TrajectoryBox += P.PredictedPosition;
+			TrajectoryBox = TrajectoryBox.ExpandBy(ParticleRadius);
 
-			FVector CollisionPos = HitResult.Location + HitResult.ImpactNormal * 0.01f;
-
-
-			// 점성 유체: Position도 함께 업데이트하여 FinalizePositions에서 튀어오르지 않도록 함
-			Particle.PredictedPosition = CollisionPos;
-			Particle.Position = CollisionPos;  // ← 이게 핵심!
-
-			// 속도의 수직 성분 제거 (표면에 달라붙음)
-			float VelDotNormal = FVector::DotProduct(Particle.Velocity, HitResult.ImpactNormal);
-			if (VelDotNormal < 0.0f)
+			if (World->OverlapBlockingTestByChannel(
+				TrajectoryBox.GetCenter(), FQuat::Identity, CollisionChannel,
+				FCollisionShape::MakeBox(TrajectoryBox.GetExtent()), QueryParams))
 			{
-				Particle.Velocity -= VelDotNormal * HitResult.ImpactNormal;
+				CollisionCandidateSet.Add(i);
+				// 해당 입자가 속한 셀 마킹 → 나중에 셀 Overlap 스킵
+				FIntVector Cell = FIntVector(
+					FMath::FloorToInt(P.PredictedPosition.X / CellSize),
+					FMath::FloorToInt(P.PredictedPosition.Y / CellSize),
+					FMath::FloorToInt(P.PredictedPosition.Z / CellSize)
+				);
+				ConfirmedCollisionCells.Add(Cell);
 			}
 		}
 	}
+
+	// 2-2. 셀 기반 broad-phase (확정된 셀은 Overlap 스킵)
+	for (const auto& Pair : Grid)
+	{
+		const FIntVector& Cell = Pair.Key;
+
+		// 이미 빠른 입자로 충돌 확정된 셀 → Overlap 없이 바로 추가
+		if (ConfirmedCollisionCells.Contains(Cell))
+		{
+			for (int32 Idx : Pair.Value)
+			{
+				CollisionCandidateSet.Add(Idx);
+			}
+			continue;
+		}
+
+		FVector CellCenter = FVector(Cell) * CellSize + FVector(CellSize * 0.5f);
+		FVector CellExtent = FVector(CellSize * 0.5f);
+
+		if (World->OverlapBlockingTestByChannel(
+			CellCenter, FQuat::Identity, CollisionChannel,
+			FCollisionShape::MakeBox(CellExtent), QueryParams))
+		{
+			for (int32 Idx : Pair.Value)
+			{
+				CollisionCandidateSet.Add(Idx);
+			}
+		}
+	}
+
+	if (CollisionCandidateSet.Num() == 0)
+	{
+		return;
+	}
+
+	TArray<int32> CollisionParticleIndices = CollisionCandidateSet.Array();
+
+	// 3. 필터링된 파티클만 병렬 처리 (해시 lookup 없음)
+	FPhysScene* PhysScene = World->GetPhysicsScene();
+	if (!PhysScene)
+	{
+		return;
+	}
+
+	FPhysicsCommand::ExecuteRead(PhysScene, [&]()
+	{
+		ParallelFor(CollisionParticleIndices.Num(), [&](int32 j)
+		{
+			const int32 i = CollisionParticleIndices[j];
+			FFluidParticle& Particle = Particles[i];
+
+			// Sweep
+			FCollisionQueryParams LocalParams;
+			LocalParams.bTraceComplex = false;
+			LocalParams.bReturnPhysicalMaterial = false;
+			LocalParams.AddIgnoredActor(this);
+
+			FHitResult HitResult;
+			bool bHit = World->SweepSingleByChannel(
+				HitResult,
+				Particle.Position,
+				Particle.PredictedPosition,
+				FQuat::Identity,
+				CollisionChannel,
+				FCollisionShape::MakeSphere(ParticleRadius),
+				LocalParams
+			);
+
+			if (bHit && HitResult.bBlockingHit)
+			{
+				FVector CollisionPos = HitResult.Location + HitResult.ImpactNormal * 0.01f;
+
+				Particle.PredictedPosition = CollisionPos;
+				Particle.Position = CollisionPos;
+
+				float VelDotNormal = FVector::DotProduct(Particle.Velocity, HitResult.ImpactNormal);
+				if (VelDotNormal < 0.0f)
+				{
+					Particle.Velocity -= VelDotNormal * HitResult.ImpactNormal;
+				}
+			}
+		});
+	});
 }
 
 void AFluidSimulator::FinalizePositions(float DeltaTime)
