@@ -15,6 +15,7 @@ FSpatialHash::FSpatialHash(float InCellSize)
 void FSpatialHash::Clear()
 {
 	Grid.Empty();
+	CachedPositions.Reset();
 }
 
 void FSpatialHash::SetCellSize(float NewCellSize)
@@ -39,6 +40,10 @@ void FSpatialHash::GetNeighbors(const FVector& Position, float Radius, TArray<in
 	int32 CellRadius = FMath::CeilToInt(Radius / CellSize);
 	FIntVector CenterCell = GetCellCoord(Position);
 
+	// 거리 필터링용 제곱 반경
+	const float RadiusSq = Radius * Radius;
+	const bool bHasCachedPositions = CachedPositions.Num() > 0;
+
 	// 주변 셀들 순회
 	for (int32 x = -CellRadius; x <= CellRadius; ++x)
 	{
@@ -50,7 +55,22 @@ void FSpatialHash::GetNeighbors(const FVector& Position, float Radius, TArray<in
 
 				if (const TArray<int32>* CellParticles = Grid.Find(CellCoord))
 				{
-					OutNeighbors.Append(*CellParticles);
+					// 거리 필터링: 실제 반경 내 입자만 추가
+					if (bHasCachedPositions)
+					{
+						for (int32 Idx : *CellParticles)
+						{
+							if (FVector::DistSquared(Position, CachedPositions[Idx]) <= RadiusSq)
+							{
+								OutNeighbors.Add(Idx);
+							}
+						}
+					}
+					else
+					{
+						// 폴백: 캐시 없으면 기존 방식
+						OutNeighbors.Append(*CellParticles);
+					}
 				}
 			}
 		}
@@ -60,6 +80,9 @@ void FSpatialHash::GetNeighbors(const FVector& Position, float Radius, TArray<in
 void FSpatialHash::BuildFromPositions(const TArray<FVector>& Positions)
 {
 	Clear();
+
+	// 위치 배열 캐싱 (거리 필터링용)
+	CachedPositions = Positions;
 
 	for (int32 i = 0; i < Positions.Num(); ++i)
 	{
@@ -74,14 +97,4 @@ FIntVector FSpatialHash::GetCellCoord(const FVector& Position) const
 		FMath::FloorToInt(Position.Y / CellSize),
 		FMath::FloorToInt(Position.Z / CellSize)
 	);
-}
-
-uint32 FSpatialHash::HashCoord(const FIntVector& Coord) const
-{
-	// 간단한 해시 함수
-	const uint32 p1 = 73856093;
-	const uint32 p2 = 19349663;
-	const uint32 p3 = 83492791;
-
-	return (Coord.X * p1) ^ (Coord.Y * p2) ^ (Coord.Z * p3);
 }

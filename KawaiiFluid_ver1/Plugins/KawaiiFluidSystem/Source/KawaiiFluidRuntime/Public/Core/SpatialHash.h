@@ -35,9 +35,6 @@ public:
 	/** 셀 크기 반환 */
 	float GetCellSize() const { return CellSize; }
 
-	/** 월드 좌표를 셀 좌표로 변환 (외부 접근용) */
-	FIntVector GetCellCoordPublic(const FVector& Position) const { return GetCellCoord(Position); }
-
 private:
 	/** 셀 크기 */
 	float CellSize;
@@ -45,9 +42,9 @@ private:
 	/** 해시 그리드: 셀 좌표 -> 입자 인덱스 배열 */
 	TMap<FIntVector, TArray<int32>> Grid;
 
+	/** 캐싱된 입자 위치 (거리 필터링용) */
+	TArray<FVector> CachedPositions;
+
 	/** 월드 좌표를 셀 좌표로 변환 */
 	FIntVector GetCellCoord(const FVector& Position) const;
-
-	/** 셀 좌표의 해시 값 계산 */
-	uint32 HashCoord(const FIntVector& Coord) const;
 };
