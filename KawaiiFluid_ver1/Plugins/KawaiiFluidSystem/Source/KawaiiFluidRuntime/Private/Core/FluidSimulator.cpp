@@ -421,7 +421,7 @@ void AFluidSimulator::HandleWorldCollision()
 	const float CellSize = SpatialHash->GetCellSize();
 	const float ParticleRadius = DebugParticleRadius;
 
-	// 1. SpatialHash에서 셀들 가져와서 오버랩 체크
+	// 1. SpatialHash에서 셀들 가져와서 배열로 변환 (Physics Lock 밖에서 준비)
 	const auto& Grid = SpatialHash->GetGrid();
 
 	FCollisionQueryParams QueryParams;
@@ -429,77 +429,59 @@ void AFluidSimulator::HandleWorldCollision()
 	QueryParams.bReturnPhysicalMaterial = false;
 	QueryParams.AddIgnoredActor(this);
 
-	// 2. 충돌 후보 수집 (하이브리드 방식 - 빠른 입자 먼저 + 셀 기반)
-	TSet<int32> CollisionCandidateSet;
-	CollisionCandidateSet.Reserve(Particles.Num());
-	TSet<FIntVector> ConfirmedCollisionCells;
-
-	// 2-1. 빠른 입자 먼저 검사 (터널링 방지 + 셀 Overlap 배제용)
-	const float SpeedThresholdSq = CellSize * CellSize;
-	for (int32 i = 0; i < Particles.Num(); ++i)
+	// 2. 셀 기반 broad-phase - 셀 배열 준비
+	struct FCellQueryData
 	{
-		const FFluidParticle& P = Particles[i];
-		const float MoveDistSq = FVector::DistSquared(P.Position, P.PredictedPosition);
+		FVector CellCenter;
+		FVector CellExtent;
+		TArray<int32> ParticleIndices;
+	};
 
-		if (MoveDistSq > SpeedThresholdSq)
-		{
-			FBox TrajectoryBox(P.Position, P.Position);
-			TrajectoryBox += P.PredictedPosition;
-			TrajectoryBox = TrajectoryBox.ExpandBy(ParticleRadius);
+	TArray<FCellQueryData> CellQueries;
+	CellQueries.Reserve(Grid.Num());
 
-			if (World->OverlapBlockingTestByChannel(
-				TrajectoryBox.GetCenter(), FQuat::Identity, CollisionChannel,
-				FCollisionShape::MakeBox(TrajectoryBox.GetExtent()), QueryParams))
-			{
-				CollisionCandidateSet.Add(i);
-				// 해당 입자가 속한 셀 마킹 → 나중에 셀 Overlap 스킵
-				FIntVector Cell = FIntVector(
-					FMath::FloorToInt(P.PredictedPosition.X / CellSize),
-					FMath::FloorToInt(P.PredictedPosition.Y / CellSize),
-					FMath::FloorToInt(P.PredictedPosition.Z / CellSize)
-				);
-				ConfirmedCollisionCells.Add(Cell);
-			}
-		}
-	}
-
-	// 2-2. 셀 기반 broad-phase (확정된 셀은 Overlap 스킵)
 	for (const auto& Pair : Grid)
 	{
-		const FIntVector& Cell = Pair.Key;
+		FCellQueryData CellData;
+		CellData.CellCenter = FVector(Pair.Key) * CellSize + FVector(CellSize * 0.5f);
+		CellData.CellExtent = FVector(CellSize * 0.5f);
+		CellData.ParticleIndices = Pair.Value;
+		CellQueries.Add(MoveTemp(CellData));
+	}
 
-		// 이미 빠른 입자로 충돌 확정된 셀 → Overlap 없이 바로 추가
-		if (ConfirmedCollisionCells.Contains(Cell))
-		{
-			for (int32 Idx : Pair.Value)
-			{
-				CollisionCandidateSet.Add(Idx);
-			}
-			continue;
-		}
+	// 3. 셀 Overlap 체크 - 병렬
+	TArray<uint8> CellCollisionResults;
+	CellCollisionResults.SetNumZeroed(CellQueries.Num());
 
-		FVector CellCenter = FVector(Cell) * CellSize + FVector(CellSize * 0.5f);
-		FVector CellExtent = FVector(CellSize * 0.5f);
-
+	ParallelFor(CellQueries.Num(), [&](int32 CellIdx)
+	{
+		const FCellQueryData& CellData = CellQueries[CellIdx];
 		if (World->OverlapBlockingTestByChannel(
-			CellCenter, FQuat::Identity, CollisionChannel,
-			FCollisionShape::MakeBox(CellExtent), QueryParams))
+			CellData.CellCenter, FQuat::Identity, CollisionChannel,
+			FCollisionShape::MakeBox(CellData.CellExtent), QueryParams))
 		{
-			for (int32 Idx : Pair.Value)
-			{
-				CollisionCandidateSet.Add(Idx);
-			}
+			CellCollisionResults[CellIdx] = 1;
+		}
+	});
+
+	// 4. 충돌 후보 수집
+	TArray<int32> CollisionParticleIndices;
+	CollisionParticleIndices.Reserve(Particles.Num());
+
+	for (int32 CellIdx = 0; CellIdx < CellQueries.Num(); ++CellIdx)
+	{
+		if (CellCollisionResults[CellIdx])
+		{
+			CollisionParticleIndices.Append(CellQueries[CellIdx].ParticleIndices);
 		}
 	}
 
-	if (CollisionCandidateSet.Num() == 0)
+	if (CollisionParticleIndices.Num() == 0)
 	{
 		return;
 	}
 
-	TArray<int32> CollisionParticleIndices = CollisionCandidateSet.Array();
-
-	// 3. 필터링된 파티클만 병렬 처리 (해시 lookup 없음)
+	// 3. Physics Scene Read Lock - Sweep 쿼리만 (최소 범위)
 	FPhysScene* PhysScene = World->GetPhysicsScene();
 	if (!PhysScene)
 	{
