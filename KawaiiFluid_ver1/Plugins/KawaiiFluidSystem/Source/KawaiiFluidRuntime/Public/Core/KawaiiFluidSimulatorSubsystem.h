@@ -140,7 +140,7 @@ private:
 	//========================================
 
 	/** Shared spatial hash for batching */
-	TUniquePtr<FSpatialHash> SharedSpatialHash;
+	TSharedPtr<FSpatialHash> SharedSpatialHash;
 
 	/** Merged particle buffer for batching */
 	TArray<FFluidParticle> MergedParticleBuffer;

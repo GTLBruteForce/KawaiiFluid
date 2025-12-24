@@ -8,13 +8,13 @@
 #include "Components/FluidInteractionComponent.h"
 #include "Collision/FluidCollider.h"
 
-// Note: STATGROUP_KawaiiFluid is declared in KawaiiFluidSimulationContext.cpp
-DECLARE_STATS_GROUP(TEXT("KawaiiFluid"), STATGROUP_KawaiiFluid, STATCAT_Advanced);
-DECLARE_CYCLE_STAT(TEXT("Subsystem Tick"), STAT_SubsystemTick, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Simulate Independent"), STAT_SimulateIndependent, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Simulate Batched"), STAT_SimulateBatched, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Merge Particles"), STAT_MergeParticles, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Split Particles"), STAT_SplitParticles, STATGROUP_KawaiiFluid);
+// Profiling
+DECLARE_STATS_GROUP(TEXT("KawaiiFluidSubsystem"), STATGROUP_KawaiiFluidSubsystem, STATCAT_Advanced);
+DECLARE_CYCLE_STAT(TEXT("Subsystem Tick"), STAT_SubsystemTick, STATGROUP_KawaiiFluidSubsystem);
+DECLARE_CYCLE_STAT(TEXT("Simulate Independent"), STAT_SimulateIndependent, STATGROUP_KawaiiFluidSubsystem);
+DECLARE_CYCLE_STAT(TEXT("Simulate Batched"), STAT_SimulateBatched, STATGROUP_KawaiiFluidSubsystem);
+DECLARE_CYCLE_STAT(TEXT("Merge Particles"), STAT_MergeParticles, STATGROUP_KawaiiFluidSubsystem);
+DECLARE_CYCLE_STAT(TEXT("Split Particles"), STAT_SplitParticles, STATGROUP_KawaiiFluidSubsystem);
 
 UKawaiiFluidSimulatorSubsystem::UKawaiiFluidSimulatorSubsystem()
 {
@@ -29,7 +29,7 @@ void UKawaiiFluidSimulatorSubsystem::Initialize(FSubsystemCollectionBase& Collec
 	Super::Initialize(Collection);
 
 	// Create shared spatial hash with default cell size
-	SharedSpatialHash = MakeUnique<FSpatialHash>(20.0f);
+	SharedSpatialHash = MakeShared<FSpatialHash>(20.0f);
 
 	// Create default context
 	DefaultContext = NewObject<UKawaiiFluidSimulationContext>(this);

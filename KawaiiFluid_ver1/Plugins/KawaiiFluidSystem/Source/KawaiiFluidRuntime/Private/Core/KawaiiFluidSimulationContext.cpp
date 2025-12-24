@@ -12,16 +12,16 @@
 #include "Async/Async.h"
 
 // Profiling
-DECLARE_STATS_GROUP(TEXT("KawaiiFluid"), STATGROUP_KawaiiFluid, STATCAT_Advanced);
-DECLARE_CYCLE_STAT(TEXT("Context Simulate"), STAT_ContextSimulate, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Context PredictPositions"), STAT_ContextPredictPositions, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Context UpdateNeighbors"), STAT_ContextUpdateNeighbors, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Context SolveDensity"), STAT_ContextSolveDensity, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Context HandleCollisions"), STAT_ContextHandleCollisions, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Context WorldCollision"), STAT_ContextWorldCollision, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Context FinalizePositions"), STAT_ContextFinalizePositions, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Context ApplyViscosity"), STAT_ContextApplyViscosity, STATGROUP_KawaiiFluid);
-DECLARE_CYCLE_STAT(TEXT("Context ApplyAdhesion"), STAT_ContextApplyAdhesion, STATGROUP_KawaiiFluid);
+DECLARE_STATS_GROUP(TEXT("KawaiiFluidContext"), STATGROUP_KawaiiFluidContext, STATCAT_Advanced);
+DECLARE_CYCLE_STAT(TEXT("Context Simulate"), STAT_ContextSimulate, STATGROUP_KawaiiFluidContext);
+DECLARE_CYCLE_STAT(TEXT("Context PredictPositions"), STAT_ContextPredictPositions, STATGROUP_KawaiiFluidContext);
+DECLARE_CYCLE_STAT(TEXT("Context UpdateNeighbors"), STAT_ContextUpdateNeighbors, STATGROUP_KawaiiFluidContext);
+DECLARE_CYCLE_STAT(TEXT("Context SolveDensity"), STAT_ContextSolveDensity, STATGROUP_KawaiiFluidContext);
+DECLARE_CYCLE_STAT(TEXT("Context HandleCollisions"), STAT_ContextHandleCollisions, STATGROUP_KawaiiFluidContext);
+DECLARE_CYCLE_STAT(TEXT("Context WorldCollision"), STAT_ContextWorldCollision, STATGROUP_KawaiiFluidContext);
+DECLARE_CYCLE_STAT(TEXT("Context FinalizePositions"), STAT_ContextFinalizePositions, STATGROUP_KawaiiFluidContext);
+DECLARE_CYCLE_STAT(TEXT("Context ApplyViscosity"), STAT_ContextApplyViscosity, STATGROUP_KawaiiFluidContext);
+DECLARE_CYCLE_STAT(TEXT("Context ApplyAdhesion"), STAT_ContextApplyAdhesion, STATGROUP_KawaiiFluidContext);
 
 UKawaiiFluidSimulationContext::UKawaiiFluidSimulationContext()
 {
