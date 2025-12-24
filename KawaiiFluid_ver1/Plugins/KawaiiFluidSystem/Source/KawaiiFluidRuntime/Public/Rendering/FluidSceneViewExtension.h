@@ -23,10 +23,14 @@ public:
 	virtual void BeginRenderViewFamily(FSceneViewFamily& InViewFamily) override {}
 
 	/**
-	 * Post Opaque 렌더링 후 호출 (투명 오브젝트 전)
-	 * 여기서 SSFR 파이프라인 실행
+	 * PostProcessing Pass 구독 
+	 * Tonemap 전에 Fluid 렌더링을 주입
 	 */
-	virtual void PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessingInputs& Inputs) override;
+	virtual void SubscribeToPostProcessingPass(
+		EPostProcessingPass Pass,
+		const FSceneView& InView,
+		FPostProcessingPassDelegateArray& InOutPassCallbacks,
+		bool bIsPassEnabled) override;
 	// End of ISceneViewExtension interface
 
 private:
@@ -44,7 +48,4 @@ private:
 
 	/** Thickness 렌더링 패스 */
 	void RenderThicknessPass(FRDGBuilder& GraphBuilder, const FSceneView& View, FRDGTextureRef& OutThicknessTexture);
-
-	/** Final Shading 패스 */
-	void RenderShadingPass(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessingInputs& Inputs);
 };

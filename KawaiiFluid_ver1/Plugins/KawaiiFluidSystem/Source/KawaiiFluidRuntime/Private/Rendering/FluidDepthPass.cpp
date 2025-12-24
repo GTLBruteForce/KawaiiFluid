@@ -23,41 +23,42 @@ void RenderFluidDepthPass(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
 	UFluidRendererSubsystem* Subsystem,
-	FRDGTextureRef& OutDepthTexture)
+	FRDGTextureRef& OutLinearDepthTexture)
 {
 	RDG_EVENT_SCOPE(GraphBuilder, "FluidDepthPass");
 
-	// Depth Texture 생성
-	FRDGTextureDesc DepthDesc = FRDGTextureDesc::Create2D(
+	// Smoothing 용도의 Depth Texture 생성
+	FRDGTextureDesc LinearDepthDesc = FRDGTextureDesc::Create2D(
 		View.UnscaledViewRect.Size(),
 		PF_R32_FLOAT,
-		FClearValueBinding::Black,
+		FClearValueBinding(FLinearColor(MAX_flt, 0.0f, 0.0f, 0.0f)),
 		TexCreate_ShaderResource | TexCreate_RenderTargetable);
 
-	OutDepthTexture = GraphBuilder.CreateTexture(DepthDesc, TEXT("FluidDepthTexture"));
+	OutLinearDepthTexture = GraphBuilder.CreateTexture(LinearDepthDesc, TEXT("FluidLinearDepth"));
 
+	// Z-Test 용도의 Depth Texture 생성
+	FRDGTextureDesc HardwareDepthDesc = FRDGTextureDesc::Create2D(
+		View.UnscaledViewRect.Size(),
+		PF_DepthStencil, // 하드웨어 깊이 포맷
+		FClearValueBinding::DepthFar, // 가장 먼 곳으로 초기화
+		TexCreate_DepthStencilTargetable | TexCreate_ShaderResource); // DepthStencilTargetable 필수
 
-	//=============================================================================
-	// SSFR 렌더링만 처리 (DebugMesh는 UE 기본 렌더링 사용)
-	//=============================================================================
-	
+	FRDGTextureRef FluidDepthStencil = GraphBuilder.CreateTexture(
+		HardwareDepthDesc, TEXT("FluidHardwareDepth"));
+
+	// Linear Depth를 MAX_flt로 초기화
+	AddClearRenderTargetPass(GraphBuilder, OutLinearDepthTexture, FLinearColor(MAX_flt, 0, 0, 0));
+
+	// Hardware Depth를 Far로 초기화 (Reversed-Z 기준)
+	AddClearDepthStencilPass(GraphBuilder, FluidDepthStencil, true, 0.0f, true, 0);
+
 	TArray<IKawaiiFluidRenderable*> Renderables = Subsystem->GetAllRenderables();
-	bool bFirstPass = true;
 
 	for (IKawaiiFluidRenderable* Renderable : Renderables)
 	{
-		if (!Renderable)
-		{
-			continue;
-		}
-
-		// SSFR 모드만 처리 (DebugMesh 모드는 스킵)
-		if (!Renderable->ShouldUseSSFR())
-		{
-			continue;
-		}
-
-		if (!Renderable->IsFluidRenderResourceValid())
+		// 유효성 검증
+		if (!Renderable || !Renderable->ShouldUseSSFR() || !Renderable->
+			IsFluidRenderResourceValid())
 		{
 			continue;
 		}
@@ -70,8 +71,8 @@ void RenderFluidDepthPass(
 			continue;
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("✅ DepthPass (SSFR): %s with %d particles"),
-			*Renderable->GetDebugName(), CachedParticles.Num());
+		UE_LOG(LogTemp, Log, TEXT("DepthPass (SSFR): %s with %d particles"),
+		       *Renderable->GetDebugName(), CachedParticles.Num());
 
 		// Position만 추출
 		TArray<FVector3f> ParticlePositions;
@@ -99,14 +100,26 @@ void RenderFluidDepthPass(
 
 		// Shader Parameters
 		auto* PassParameters = GraphBuilder.AllocParameters<FFluidDepthParameters>();
-		PassParameters->ParticlePositions = ParticleBufferSRV;
+		PassParameters->ParticlePositions = ParticleBufferSRV; // (위에서 만든 SRV)
 		PassParameters->ParticleRadius = ParticleRadius;
 		PassParameters->ViewMatrix = FMatrix44f(ViewMatrix);
 		PassParameters->ProjectionMatrix = FMatrix44f(ProjectionMatrix);
 		PassParameters->ViewProjectionMatrix = FMatrix44f(ViewProjectionMatrix);
+
+		// Color Target (Linear Depth용, R32F)
+		// 첫 번째 패스면 Clear, 아니면 Load
 		PassParameters->RenderTargets[0] = FRenderTargetBinding(
-			OutDepthTexture,
-			bFirstPass ? ERenderTargetLoadAction::EClear : ERenderTargetLoadAction::ELoad
+			OutLinearDepthTexture,
+			ERenderTargetLoadAction::ELoad
+		);
+
+		// Depth Stencil Target (Hardware Depth용, Z-Test 수행)
+		// 첫 번째 패스면 Clear, 아니면 Load
+		PassParameters->RenderTargets.DepthStencil = FDepthStencilBinding(
+			FluidDepthStencil,
+			ERenderTargetLoadAction::ELoad,
+			ERenderTargetLoadAction::ELoad,
+			FExclusiveDepthStencil::DepthWrite_StencilWrite // 깊이 버퍼에 쓰기 권한 요청
 		);
 
 		FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
@@ -117,26 +130,37 @@ void RenderFluidDepthPass(
 			RDG_EVENT_NAME("DepthDraw_SSFR_%s", *Renderable->GetDebugName()),
 			PassParameters,
 			ERDGPassFlags::Raster,
-			[VertexShader, PixelShader, PassParameters, ParticleCount = ParticlePositions.Num()](FRHICommandList& RHICmdList)
+			[VertexShader, PixelShader, PassParameters, ParticleCount = CachedParticles.Num()](
+			FRHICommandList& RHICmdList)
 			{
 				FGraphicsPipelineStateInitializer GraphicsPSOInit;
-				RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
-				GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
-				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
-				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
-
-				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GEmptyVertexDeclaration.VertexDeclarationRHI;
+				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GEmptyVertexDeclaration.
+					VertexDeclarationRHI;
 				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
 				GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
 				GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
 
+				// BlendState: Opaque (불투명)
+				// 깊이 테스트를 통과한 픽셀은 그냥 덮어씌움
+				GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
+
+				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
+
+				// PSO DepthStencilState 변경
+				// true: 깊이 쓰기 활성화
+				// CF_Greater: Reversed-Z에서 더 가까운 값이면 통과 (Far=0.0, Near=1.0)
+				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<
+					true, CF_Greater>::GetRHI();
+
+				RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
+
 				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
-				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), *PassParameters);
-				SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), *PassParameters);
+				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(),
+				                    *PassParameters);
+				SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(),
+				                    *PassParameters);
 
 				RHICmdList.DrawPrimitive(0, 2, ParticleCount);
 			});
-
-		bFirstPass = false;
 	}
 }

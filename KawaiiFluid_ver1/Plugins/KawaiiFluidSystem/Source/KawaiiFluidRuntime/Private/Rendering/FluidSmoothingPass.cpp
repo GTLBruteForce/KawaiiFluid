@@ -20,11 +20,9 @@ class FFluidBilateralBlurCS : public FGlobalShader
 	DECLARE_GLOBAL_SHADER(FFluidBilateralBlurCS);
 	SHADER_USE_PARAMETER_STRUCT(FFluidBilateralBlurCS, FGlobalShader);
 
-	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputTexture)
-		SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
 		SHADER_PARAMETER(FVector2f, TextureSize)
-		SHADER_PARAMETER(FVector2f, InverseTextureSize)
 		SHADER_PARAMETER(FIntPoint, BlurDirection)
 		SHADER_PARAMETER(float, BlurRadius)
 		SHADER_PARAMETER(float, BlurDepthFalloff)
@@ -36,14 +34,17 @@ class FFluidBilateralBlurCS : public FGlobalShader
 		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
-	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters,
+	                                         FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE"), 8);
 	}
 };
 
-IMPLEMENT_GLOBAL_SHADER(FFluidBilateralBlurCS, "/Plugin/KawaiiFluidSystem/Private/FluidSmoothing.usf", "BilateralBlurCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FFluidBilateralBlurCS,
+                        "/Plugin/KawaiiFluidSystem/Private/FluidSmoothing.usf", "BilateralBlurCS",
+                        SF_Compute);
 
 //=============================================================================
 // Smoothing Pass Implementation
@@ -58,28 +59,23 @@ void RenderFluidSmoothingPass(
 	float DepthFalloff)
 {
 	RDG_EVENT_SCOPE(GraphBuilder, "FluidSmoothingPass");
-
 	check(InputDepthTexture);
 
-	// RenderTarget → Compute Shader 호환을 위해 텍스처 복사
-	FRDGTextureDesc CopyDesc = InputDepthTexture->Desc;
-	CopyDesc.Flags = TexCreate_ShaderResource | TexCreate_UAV;
-	FRDGTextureRef CopiedDepthTexture = GraphBuilder.CreateTexture(CopyDesc, TEXT("FluidDepthCopy"));
-	AddCopyTexturePass(GraphBuilder, InputDepthTexture, CopiedDepthTexture);
-
-	FIntPoint TextureSize = CopiedDepthTexture->Desc.Extent;
+	FIntPoint TextureSize = InputDepthTexture->Desc.Extent;
 
 	// Create intermediate texture for horizontal pass output
 	FRDGTextureDesc IntermediateDesc = FRDGTextureDesc::Create2D(
 		TextureSize,
 		PF_R32_FLOAT,
-		FClearValueBinding::Black,
+		FClearValueBinding::None,
 		TexCreate_ShaderResource | TexCreate_UAV);
 
-	FRDGTextureRef IntermediateTexture = GraphBuilder.CreateTexture(IntermediateDesc, TEXT("FluidDepthIntermediate"));
+	FRDGTextureRef IntermediateTexture = GraphBuilder.CreateTexture(
+		IntermediateDesc, TEXT("FluidDepthIntermediate"));
 
-	// Create final smoothed texture
-	OutSmoothedDepthTexture = GraphBuilder.CreateTexture(IntermediateDesc, TEXT("FluidDepthSmoothed"));
+	// 최종 결과 버퍼 생성
+	OutSmoothedDepthTexture = GraphBuilder.CreateTexture(IntermediateDesc,
+	                                                     TEXT("FluidDepthSmoothed"));
 
 	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 	TShaderMapRef<FFluidBilateralBlurCS> ComputeShader(GlobalShaderMap);
@@ -88,13 +84,12 @@ void RenderFluidSmoothingPass(
 	// Pass 1: Horizontal Blur
 	//=============================================================================
 	{
-		FFluidBilateralBlurCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FFluidBilateralBlurCS::FParameters>();
+		auto* PassParameters = GraphBuilder.AllocParameters<FFluidBilateralBlurCS::FParameters>();
 
-		PassParameters->InputTexture = CopiedDepthTexture;  // 복사본 사용
-		PassParameters->InputSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+		PassParameters->InputTexture = InputDepthTexture;
 		PassParameters->TextureSize = FVector2f(TextureSize.X, TextureSize.Y);
-		PassParameters->InverseTextureSize = FVector2f(1.0f / TextureSize.X, 1.0f / TextureSize.Y);
-		PassParameters->BlurDirection = FIntPoint(1, 0); // Horizontal
+
+		PassParameters->BlurDirection = FIntPoint(1, 0);
 		PassParameters->BlurRadius = BlurRadius;
 		PassParameters->BlurDepthFalloff = DepthFalloff;
 		PassParameters->OutputTexture = GraphBuilder.CreateUAV(IntermediateTexture);
@@ -111,13 +106,12 @@ void RenderFluidSmoothingPass(
 	// Pass 2: Vertical Blur
 	//=============================================================================
 	{
-		FFluidBilateralBlurCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FFluidBilateralBlurCS::FParameters>();
+		auto* PassParameters = GraphBuilder.AllocParameters<FFluidBilateralBlurCS::FParameters>();
 
 		PassParameters->InputTexture = IntermediateTexture;
-		PassParameters->InputSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 		PassParameters->TextureSize = FVector2f(TextureSize.X, TextureSize.Y);
-		PassParameters->InverseTextureSize = FVector2f(1.0f / TextureSize.X, 1.0f / TextureSize.Y);
-		PassParameters->BlurDirection = FIntPoint(0, 1); // Vertical
+
+		PassParameters->BlurDirection = FIntPoint(0, 1);
 		PassParameters->BlurRadius = BlurRadius;
 		PassParameters->BlurDepthFalloff = DepthFalloff;
 		PassParameters->OutputTexture = GraphBuilder.CreateUAV(OutSmoothedDepthTexture);

@@ -1,12 +1,10 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 
-#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
 #include "FluidCommon.ush"
 
-// 깊이 버퍼로부터 법선(Normal) 재구성
-
+// IO
 Texture2D<float> InputDepthTexture;
-SamplerState InputSampler;
 RWTexture2D<float4> OutputNormalTexture;
 
 float2 TextureSize;
@@ -15,61 +13,88 @@ float2 InverseTextureSize;
 float4x4 ProjectionMatrix;
 float4x4 InverseProjectionMatrix;
 
-// 깊이값으로부터 뷰 공간 (View Space) 위치 재구성
-float3 ReconstructViewPosition(float2 ScreenUV, float Depth)
+// 배경 기준
+#define BACKGROUND_DEPTH_THRESH 3.0e30f
+
+// Lenear Depth를 활용하여 View Space Position 위치 재구성
+float3 ReconstructViewPositionFromLinearDepth(float2 ScreenUV, float LinearDepth)
 {
-    float4 ClipPos = float4(ScreenUV * 2.0 - 1.0, Depth, 1.0);
-    // 클립 공간 -> 뷰 공간 (UE는 기본적으로 Reverse-Z를 사용하지만, 여기서는 저장된 깊이값을 그대로 사용한다고 가정)
-    float4 ViewPos = mul(ClipPos, InverseProjectionMatrix);
-    return ViewPos.xyz / ViewPos.w;
+    // Clip Space 좌표 (Z는 방향만 구할 것이므로 0.5나 1.0 아무거나 상관없음)
+    float4 ClipPosition = float4(ScreenUV * 2.0 - 1.0, 0.5, 1.0);
+
+    // View Space로 역투영
+    float4 ViewPosition = mul(ClipPosition, InverseProjectionMatrix);
+    ViewPosition /= ViewPosition.w;
+
+    // 방향 벡터 추출 (View Space 원점 기준)
+    // Z가 1.0이 되도록 정규화 (View Space Z축 기준 평면)
+    float3 ViewRay = ViewPosition.xyz / ViewPosition.z;
+
+    // 실제 깊이를 곱해서 위치 확정
+    // LinearDepth는 양수 거리로 저장되어 있으므로, 음수로 변환하여 View Space Z 복원
+    return ViewRay * (-LinearDepth);
 }
 
 [numthreads(8, 8, 1)]
-void ReconstructNormalCS(uint3 ThreadId : SV_DispatchThreadID)
+void ReconstructNormalCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    float2 PixelPos = float2(ThreadId.xy);
-    if (PixelPos.x >= TextureSize.x || PixelPos.y >= TextureSize.y)
+    uint2 PixelPosition = DispatchThreadId.xy;
+    if (PixelPosition.x >= (uint)TextureSize.x || PixelPosition.y >= (uint)TextureSize.y)
     {
         return;
     }
 
-    float2 UV = (PixelPos + 0.5) * InverseTextureSize;
-    float Depth = InputDepthTexture.SampleLevel(InputSampler, UV, 0);
+    float CenterDepth = InputDepthTexture.Load(int3(PixelPosition, 0));
 
-    if (Depth <= 0.0 || Depth >= 1.0)
+    // 배경 체크
+    if (CenterDepth > BACKGROUND_DEPTH_THRESH)
     {
-        OutputNormalTexture[ThreadId.xy] = float4(0, 0, 0, 0);
+        OutputNormalTexture[PixelPosition] = float4(0, 0, 0, 0);
         return;
     }
 
-    // 법선 재구성을 위한 중앙 차분(Central Difference) 방식
-    float2 TexelSize = InverseTextureSize;
+    // UV 계산
+    float2 UV = (float2(PixelPosition) + 0.5) * InverseTextureSize;
+
+    // 인접 픽셀 좌표 (Clamp 처리)
+    int2 RightPosition = min(PixelPosition + int2(1, 0), int2(TextureSize) - 1);
+    int2 BottomPosition = min(PixelPosition + int2(0, 1), int2(TextureSize) - 1);
+
+    // 인접 Depth Load
+    float DepthRight = InputDepthTexture.Load(int3(RightPosition, 0));
+    float DepthBottom = InputDepthTexture.Load(int3(BottomPosition, 0));
     
-    float DepthL = InputDepthTexture.SampleLevel(InputSampler, UV + float2(-TexelSize.x, 0), 0);
-    float DepthR = InputDepthTexture.SampleLevel(InputSampler, UV + float2(TexelSize.x, 0), 0);
-    float DepthT = InputDepthTexture.SampleLevel(InputSampler, UV + float2(0, -TexelSize.y), 0);
-    float DepthB = InputDepthTexture.SampleLevel(InputSampler, UV + float2(0, TexelSize.y), 0);
+    // View Position 재구성
+    float3 PositionCenter = ReconstructViewPositionFromLinearDepth(UV, CenterDepth);
+    float3 PositionRight, PositionBottom;
 
-    // 인접 픽셀이 유효하지 않으면 현재 깊이값 사용
-    if (DepthL <= 0.0 || DepthL >= 1.0) DepthL = Depth;
-    if (DepthR <= 0.0 || DepthR >= 1.0) DepthR = Depth;
-    if (DepthT <= 0.0 || DepthT >= 1.0) DepthT = Depth;
-    if (DepthB <= 0.0 || DepthB >= 1.0) DepthB = Depth;
-
-    float3 Pos = ReconstructViewPosition(UV, Depth);
-    float3 PosL = ReconstructViewPosition(UV + float2(-TexelSize.x, 0), DepthL);
-    float3 PosR = ReconstructViewPosition(UV + float2(TexelSize.x, 0), DepthR);
-    float3 PosT = ReconstructViewPosition(UV + float2(0, -TexelSize.y), DepthT);
-    float3 PosB = ReconstructViewPosition(UV + float2(0, TexelSize.y), DepthB);
-
-    float3 Horizontal = PosR - PosL;
-    float3 Vertical = PosB - PosT;
-
-    float3 Normal = normalize(cross(Horizontal, Vertical));
+    // 배경에 접한 외곽선에서 Normal 문제를 방지하기 위한 방어 코드
+    if (DepthRight > BACKGROUND_DEPTH_THRESH) 
+    {
+        PositionRight = PositionCenter; 
+    }
+    else 
+    {
+        float2 UVRight = (float2(RightPosition) + 0.5) * InverseTextureSize;
+        PositionRight = ReconstructViewPositionFromLinearDepth(UVRight, DepthRight);
+    }
     
-    // 필요한 경우 월드 공간으로 변환할 수 있으나, 보통 뷰 공간에서 셰이딩하거나 뷰 공간 법선을 사용함
-    // 현재는 뷰 공간 법선을 저장함. 시각화를 위해 [-1, 1]을 [0, 1]로 변환할 수 있지만, 
-    // 일반적으로 float16/32 텍스처에 저장하므로 그대로 둠.
+    // 배경에 접한 외곽선에서 Normal 문제를 방지하기 위한 방어 코드
+    if (DepthBottom > BACKGROUND_DEPTH_THRESH)
+    {
+        PositionBottom = PositionCenter;
+    }
+    else
+    {
+        float2 UVBottom = (float2(BottomPosition) + 0.5) * InverseTextureSize;
+        PositionBottom = ReconstructViewPositionFromLinearDepth(UVBottom, DepthBottom);
+    }
     
-    OutputNormalTexture[ThreadId.xy] = float4(Normal, 1.0);
+    // 미분 연산
+    float3 ddx = PositionRight - PositionCenter;
+    float3 ddy = PositionBottom - PositionCenter;
+    float3 Normal = normalize(cross(ddy, ddx));
+    
+    // 저장
+    OutputNormalTexture[PixelPosition] = float4(Normal, 1.0);
 }

@@ -33,7 +33,9 @@ public class KawaiiFluidRuntime : ModuleRules
 				Path.Combine(ModulePath, "Private/Components"),
 				Path.Combine(ModulePath, "Private/Rendering"),
 				Path.Combine(ModulePath, "Private/Data"),
-				Path.Combine(ModulePath, "Private/Gameplay")
+				Path.Combine(ModulePath, "Private/Gameplay"),
+				Path.Combine(EngineDirectory, "Source/Runtime/Renderer/Private"),
+				Path.Combine(EngineDirectory, "Source/Runtime/Renderer/Internal")
 			}
 		);
 
@@ -57,6 +59,7 @@ public class KawaiiFluidRuntime : ModuleRules
 				"SlateCore",
 				"Projects", // IPluginManager 위해 추가
 				"RenderCore", // AddShaderSourceDirectoryMapping 위해 추가
+				"Renderer"
 			}
 		);
 	}

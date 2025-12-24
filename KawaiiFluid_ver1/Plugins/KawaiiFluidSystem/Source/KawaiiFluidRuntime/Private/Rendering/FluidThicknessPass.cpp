@@ -38,26 +38,11 @@ void RenderFluidThicknessPass(
 
 	AddClearRenderTargetPass(GraphBuilder, OutThicknessTexture, FLinearColor::Black);
 
-	//=============================================================================
-	// SSFR 렌더링만 처리 (DebugMesh는 UE 기본 렌더링 사용)
-	//=============================================================================
-	
 	TArray<IKawaiiFluidRenderable*> Renderables = Subsystem->GetAllRenderables();
-
 	for (IKawaiiFluidRenderable* Renderable : Renderables)
 	{
-		if (!Renderable)
-		{
-			continue;
-		}
-
-		// SSFR 모드만 처리 (DebugMesh 모드는 스킵)
-		if (!Renderable->ShouldUseSSFR())
-		{
-			continue;
-		}
-
-		if (!Renderable->IsFluidRenderResourceValid())
+		if (!Renderable || !Renderable->ShouldUseSSFR() ||
+			!Renderable->IsFluidRenderResourceValid())
 		{
 			continue;
 		}
@@ -70,8 +55,8 @@ void RenderFluidThicknessPass(
 			continue;
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("✅ ThicknessPass (SSFR): %s with %d particles"),
-			*Renderable->GetDebugName(), CachedParticles.Num());
+		UE_LOG(LogTemp, Log, TEXT("ThicknessPass (SSFR): %s with %d particles"),
+		       *Renderable->GetDebugName(), CachedParticles.Num());
 
 		// Position만 추출
 		TArray<FVector3f> ParticlePositions;
@@ -112,23 +97,32 @@ void RenderFluidThicknessPass(
 			RDG_EVENT_NAME("ThicknessDraw_SSFR_%s", *Renderable->GetDebugName()),
 			PassParameters,
 			ERDGPassFlags::Raster,
-			[VertexShader, PixelShader, PassParameters, ParticleCount = ParticlePositions.Num()](FRHICommandList& RHICmdList)
+			[VertexShader, PixelShader, PassParameters, ParticleCount = ParticlePositions.Num()](
+			FRHICommandList& RHICmdList)
 			{
 				FGraphicsPipelineStateInitializer GraphicsPSOInit;
-				RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
-				
-				GraphicsPSOInit.BlendState = TStaticBlendState<CW_RED, BO_Add, BF_One, BF_One>::GetRHI();
-				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
-				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
-
-				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GEmptyVertexDeclaration.VertexDeclarationRHI;
+				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GEmptyVertexDeclaration.
+					VertexDeclarationRHI;
 				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
 				GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
 				GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
 
+				GraphicsPSOInit.BlendState = TStaticBlendState<
+					CW_RED, // R채널만 사용 (R16F)
+					BO_Add, BF_One, BF_One, // Color: Add(Src, Dst)
+					BO_Add, BF_Zero, BF_One // Alpha: Add(0, 1) -> Alpha는 안 건드림
+				>::GetRHI();
+				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
+				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<
+					false, CF_Always>::GetRHI();
+
+				RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
+
 				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
-				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), *PassParameters);
-				SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), *PassParameters);
+				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(),
+				                    *PassParameters);
+				SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(),
+				                    *PassParameters);
 
 				RHICmdList.DrawPrimitive(0, 2, ParticleCount);
 			});

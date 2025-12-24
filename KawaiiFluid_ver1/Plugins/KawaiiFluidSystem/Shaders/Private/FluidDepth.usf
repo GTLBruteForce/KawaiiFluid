@@ -31,10 +31,11 @@ struct FVertexInput
 struct FVertexOutput
 {
 	float4 Position : SV_POSITION;
-	float3 ViewSpacePosition : TEXCOORD0;
-	float3 ParticleCenter : TEXCOORD1;
-	float ParticleRadius : TEXCOORD2;
-	uint InstanceId : TEXCOORD3;
+	float2 UV : TEXCOORD0; // UV 좌표 추가
+	float3 ViewSpacePosition : TEXCOORD1;
+	float3 ParticleCenter : TEXCOORD2;
+	float ParticleRadius : TEXCOORD3;
+	uint InstanceId : TEXCOORD4;
 };
 
 // 빌보드 쿼드 정점
@@ -79,7 +80,8 @@ FVertexOutput MainVS(FVertexInput Input)
 
 struct FPixelOutput
 {
-	float Depth : SV_Depth;
+    float LinearDepth : SV_Target0;
+	float DeviceDepth : SV_Depth;
 };
 
 FPixelOutput MainPS(FVertexOutput Input)
@@ -102,9 +104,13 @@ FPixelOutput MainPS(FVertexOutput Input)
 	// 교차점 계산
 	float3 IntersectionPoint = RayOrigin + RayDirection * IntersectionT;
 
-	// 깊이 계산 (뷰 공간 Z를 투영 공간 깊이로 변환)
+	// Linear Depth 계산 (뷰 공간 Z를 양수 거리로 변환)
+	// View Space는 -Z가 전방이므로, 음수를 양수로 변환하여 저장
+	Output.LinearDepth = -IntersectionPoint.z;
+
+	// Device Depth 계산 (클립 공간)
 	float4 ClipPosition = mul(float4(IntersectionPoint, 1.0), ProjectionMatrix);
-	Output.Depth = ClipPosition.z / ClipPosition.w;
+	Output.DeviceDepth = ClipPosition.z / ClipPosition.w;
 
 	return Output;
 }

@@ -87,7 +87,7 @@ FVertexOutput MainVS(FVertexInput Input)
 // 픽셀 셰이더 (Pixel Shader)
 //-----------------------------------------------------------------------------
 
-float4 MainPS(FVertexOutput Input) : SV_Target0
+float MainPS(FVertexOutput Input) : SV_Target0
 {
 	// 빌보드 내의 단위 위치 (UV에서 -1 ~ 1 범위로 변환)
 	float2 UnitPosition = Input.UV * 2.0 - 1.0;
@@ -99,17 +99,12 @@ float4 MainPS(FVertexOutput Input) : SV_Target0
 		discard;
 	}
 
-	// 구의 두께 계산 (구의 방정식 x^2 + y^2 + z^2 = r^2 이용)
-	// z = sqrt(r^2 - (x^2 + y^2))
-	// x, y는 UnitPosition * r
-	float RadiusSquared = 1.0; // UnitPosition이 이미 0 ~ 1 사이로 정규화됨
-	float UnitZ = sqrt(RadiusSquared - DistanceSquared);
+	// 구의 두께 계산 (2 * sqrt(r^2 - dist^2))
+	// 정규화 계산한 뒤 반경 연산 처리
+	float NormalizedThickness = 2.0 * sqrt(1.0 - DistanceSquared);
 	
-	// 실제 월드 단위 두께는 UnitZ * Input.ParticleRadius * 2 (앞뒤 두께)
-	float Thickness = UnitZ * Input.ParticleRadius * 2.0;
+	// 실제 월드 단위 두께 = 정규화 두께 * 파티클 반지름 * 스케일
+	float Thickness = NormalizedThickness * Input.ParticleRadius * ThicknessScale;
 
-	// 스케일 적용
-	Thickness *= ThicknessScale;
-
-	return float4(Thickness, 0, 0, 1.0);
+    return Thickness; 
 }

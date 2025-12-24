@@ -18,7 +18,7 @@ public:
 	DECLARE_GLOBAL_SHADER(FFluidNormalCS);
 	SHADER_USE_PARAMETER_STRUCT(FFluidNormalCS, FGlobalShader);
 
-	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, InputDepthTexture)
 		SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
 		SHADER_PARAMETER(FVector2f, TextureSize)
@@ -33,13 +33,15 @@ public:
 		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
-	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters,
+	                                         FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 	}
 };
 
-IMPLEMENT_GLOBAL_SHADER(FFluidNormalCS, "/Plugin/KawaiiFluidSystem/Private/FluidNormal.usf", "ReconstructNormalCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FFluidNormalCS, "/Plugin/KawaiiFluidSystem/Private/FluidNormal.usf",
+                        "ReconstructNormalCS", SF_Compute);
 
 void RenderFluidNormalPass(
 	FRDGBuilder& GraphBuilder,
@@ -66,20 +68,23 @@ void RenderFluidNormalPass(
 
 	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(View.GetFeatureLevel());
 	TShaderMapRef<FFluidNormalCS> ComputeShader(GlobalShaderMap);
-	FFluidNormalCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FFluidNormalCS::FParameters>();
+	FFluidNormalCS::FParameters* PassParameters =
+		GraphBuilder.AllocParameters<FFluidNormalCS::FParameters>();
 
 	PassParameters->InputDepthTexture = SmoothedDepthTexture;
-	PassParameters->InputSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+
 	PassParameters->TextureSize = FVector2f(Extent.X, Extent.Y);
 	PassParameters->InverseTextureSize = FVector2f(1.0f / Extent.X, 1.0f / Extent.Y);
-	
+
 	// 뷰 행렬 설정
 	PassParameters->ProjectionMatrix = FMatrix44f(View.ViewMatrices.GetProjectionMatrix());
-	PassParameters->InverseProjectionMatrix = FMatrix44f(View.ViewMatrices.GetInvProjectionMatrix());
-	
+	PassParameters->InverseProjectionMatrix =
+		FMatrix44f(View.ViewMatrices.GetInvProjectionMatrix());
+
 	PassParameters->OutputNormalTexture = GraphBuilder.CreateUAV(OutNormalTexture);
 
-	UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: Rendering FluidNormalPass. Extent: %d x %d"), Extent.X, Extent.Y);
+	UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: Rendering FluidNormalPass. Extent: %d x %d"),
+	       Extent.X, Extent.Y);
 
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
