@@ -3,6 +3,8 @@
 #include "Components/KawaiiFluidRenderController.h"
 #include "Core/FluidParticle.h"
 #include "Rendering/FluidRendererSubsystem.h"
+#include "Components/KawaiiFluidISMComponent.h"
+#include "Components/KawaiiFluidSSFRComponent.h"
 #include "GameFramework/Actor.h"
 #include "Engine/World.h"
 
@@ -165,10 +167,18 @@ void UKawaiiFluidRenderController::UpdateRenderers()
 	// 모든 활성 렌더러에게 렌더링 요청
 	for (const auto& Renderer : ActiveRenderers)
 	{
-		if (Renderer.GetInterface() && Renderer->IsEnabled())
+		if (!Renderer.GetInterface() || !Renderer->IsEnabled())
 		{
-			Renderer->UpdateRendering(DataProvider.GetInterface(), 0.0f);
+			continue;
 		}
+
+		// Primary 모드가 설정되어 있으면 해당 모드의 렌더러만 활성화
+		if (!IsMatchingPrimaryMode(Renderer))
+		{
+			continue;
+		}
+
+		Renderer->UpdateRendering(DataProvider.GetInterface(), 0.0f);
 	}
 }
 
@@ -236,3 +246,19 @@ void UKawaiiFluidRenderController::FindAndRegisterRenderers()
 	}
 }
 
+bool UKawaiiFluidRenderController::IsMatchingPrimaryMode(const TScriptInterface<IKawaiiFluidRenderer>& Renderer) const
+{
+	if (!Renderer.GetInterface())
+	{
+		return false;
+	}
+
+	// None 모드는 모든 렌더러 허용
+	if (PrimaryRenderMode == EKawaiiFluidRenderingMode::None)
+	{
+		return true;
+	}
+
+	// 렌더러의 모드가 Primary 모드와 일치하는지 확인
+	return Renderer->GetRenderingMode() == PrimaryRenderMode;
+}

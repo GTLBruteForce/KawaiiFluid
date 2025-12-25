@@ -11,6 +11,9 @@
 UENUM(BlueprintType)
 enum class EKawaiiFluidRenderingMode : uint8
 {
+	/** 렌더링 모드 선택 안함 (수동 제어) */
+	None        UMETA(DisplayName = "None (Manual)"),
+
 	/** Instanced Static Mesh 렌더링 */
 	ISM         UMETA(DisplayName = "ISM"),
 

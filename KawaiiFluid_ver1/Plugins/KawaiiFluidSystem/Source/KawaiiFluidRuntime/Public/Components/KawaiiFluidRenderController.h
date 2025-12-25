@@ -52,7 +52,7 @@ public:
 	 * 
 	 * 수동 설정 가능, 또는 bAutoFindDataProvider=true일 때 자동으로 찾음
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Visual|DataProvider")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Rendering|Data Source")
 	TScriptInterface<IKawaiiFluidDataProvider> DataProvider;
 
 	/** 
@@ -61,7 +61,7 @@ public:
 	 * BeginPlay 시 같은 Actor의 컴포넌트 중
 	 * IKawaiiFluidDataProvider를 구현한 컴포넌트를 자동으로 찾아 연결
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Visual|DataProvider")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Rendering|Data Source")
 	bool bAutoFindDataProvider = true;
 
 	/** 
@@ -69,7 +69,7 @@ public:
 	 * 
 	 * @param NewDataProvider 연결할 DataProvider
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid Visual")
+	UFUNCTION(BlueprintCallable, Category = "Fluid Rendering")
 	void SetDataProvider(TScriptInterface<IKawaiiFluidDataProvider> NewDataProvider);
 
 	//========================================
@@ -81,7 +81,7 @@ public:
 	 * 
 	 * UpdateRenderers() 호출 시 이 목록의 모든 렌더러가 업데이트됨
 	 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Fluid Visual|Renderers")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Fluid Rendering|Renderers")
 	TArray<TScriptInterface<IKawaiiFluidRenderer>> ActiveRenderers;
 
 	/** 
@@ -90,15 +90,26 @@ public:
 	 * BeginPlay 시 같은 Actor의 컴포넌트 중
 	 * IKawaiiFluidRenderer를 구현한 컴포넌트를 자동으로 찾아 등록
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Visual|Renderers")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Rendering|Renderers")
 	bool bAutoRegisterRenderers = true;
+
+	/** 
+	 * Primary 렌더링 모드 선택
+	 * 
+	 * 특정 렌더링 모드를 선택하면 해당 렌더러만 활성화됩니다.
+	 * None으로 설정 시 모든 등록된 렌더러가 활성화됩니다 (다중 렌더링).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Rendering|Renderers", 
+		meta = (EditCondition = "bAutoRegisterRenderers"))
+	EKawaiiFluidRenderingMode PrimaryRenderMode = EKawaiiFluidRenderingMode::ISM;
+
 
 	/** 
 	 * 렌더러 등록
 	 * 
 	 * @param Renderer 등록할 렌더러
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid Visual")
+	UFUNCTION(BlueprintCallable, Category = "Fluid Rendering")
 	void RegisterRenderer(TScriptInterface<IKawaiiFluidRenderer> Renderer);
 
 	/** 
@@ -106,13 +117,13 @@ public:
 	 * 
 	 * @param Renderer 제거할 렌더러
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid Visual")
+	UFUNCTION(BlueprintCallable, Category = "Fluid Rendering")
 	void UnregisterRenderer(TScriptInterface<IKawaiiFluidRenderer> Renderer);
 
 	/** 
 	 * 모든 렌더러 제거
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid Visual")
+	UFUNCTION(BlueprintCallable, Category = "Fluid Rendering")
 	void ClearRenderers();
 
 	//========================================
@@ -124,7 +135,7 @@ public:
 	 * 
 	 * true일 때 Tick마다 자동으로 UpdateRenderers() 호출
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Visual|Update")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Rendering|Update")
 	bool bAutoUpdateRenderers = true;
 
 	/** 
@@ -134,13 +145,13 @@ public:
 	 * 2. FFluidParticle → FKawaiiRenderParticle 변환
 	 * 3. 모든 활성 렌더러에게 렌더링 요청
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid Visual")
+	UFUNCTION(BlueprintCallable, Category = "Fluid Rendering")
 	void UpdateRenderers();
 
 	/** 
 	 * 현재 렌더링 중인 파티클 수
 	 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Visual")
+	UFUNCTION(BlueprintPure, Category = "Fluid Rendering")
 	int32 GetParticleCount() const { return RenderParticlesCache.Num(); }
 
 private:
@@ -153,6 +164,14 @@ private:
 
 	/** Renderer 자동 탐색 및 등록 */
 	void FindAndRegisterRenderers();
+
+	/** 
+	 * Primary 렌더링 모드와 일치하는지 확인
+	 * 
+	 * @param Renderer 확인할 렌더러
+	 * @return Primary 모드와 일치하거나 Primary 모드가 None이면 true
+	 */
+	bool IsMatchingPrimaryMode(const TScriptInterface<IKawaiiFluidRenderer>& Renderer) const;
 
 	/** 변환 캐시 (성능 최적화) */
 	TArray<FKawaiiRenderParticle> RenderParticlesCache;
