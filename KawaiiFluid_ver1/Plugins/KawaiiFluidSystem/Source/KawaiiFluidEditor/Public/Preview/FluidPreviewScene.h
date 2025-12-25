@@ -21,6 +21,9 @@ public:
 	FFluidPreviewScene(FPreviewScene::ConstructionValues CVS);
 	virtual ~FFluidPreviewScene() override;
 
+	/** GC 방지 */
+	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+
 	//========================================
 	// Preset Management
 	//========================================
@@ -128,11 +131,10 @@ private:
 	//========================================
 
 	/** Current preset being previewed */
-	UKawaiiFluidPresetDataAsset* CurrentPreset;
+	TObjectPtr<UKawaiiFluidPresetDataAsset> CurrentPreset;
 
 	/** Preview settings object (for Details Panel) */
-	UPROPERTY()
-	UFluidPreviewSettingsObject* PreviewSettingsObject;
+	TObjectPtr<UFluidPreviewSettingsObject> PreviewSettingsObject;
 
 	//========================================
 	// Simulation Data
@@ -145,8 +147,7 @@ private:
 	TSharedPtr<FSpatialHash> SpatialHash;
 
 	/** Simulation context */
-	UPROPERTY()
-	UKawaiiFluidSimulationContext* SimulationContext;
+	TObjectPtr<UKawaiiFluidSimulationContext> SimulationContext;
 
 	/** Accumulated simulation time */
 	float AccumulatedTime;
@@ -162,20 +163,16 @@ private:
 	//========================================
 
 	/** Preview actor to hold components */
-	UPROPERTY()
-	AActor* PreviewActor;
+	TObjectPtr<AActor> PreviewActor;
 
 	/** Instanced mesh for particles */
-	UPROPERTY()
-	UInstancedStaticMeshComponent* ParticleMeshComponent;
+	TObjectPtr<UInstancedStaticMeshComponent> ParticleMeshComponent;
 
 	/** Floor mesh */
-	UPROPERTY()
-	UStaticMeshComponent* FloorMeshComponent;
+	TObjectPtr<UStaticMeshComponent> FloorMeshComponent;
 
 	/** Wall meshes */
-	UPROPERTY()
-	TArray<UStaticMeshComponent*> WallMeshComponents;
+	TArray<TObjectPtr<UStaticMeshComponent>> WallMeshComponents;
 
 	/** Cached particle radius for visualization */
 	float CachedParticleRadius;

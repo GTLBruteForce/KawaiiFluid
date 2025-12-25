@@ -52,6 +52,19 @@ FFluidPreviewScene::~FFluidPreviewScene()
 	}
 }
 
+void FFluidPreviewScene::AddReferencedObjects(FReferenceCollector& Collector)
+{
+	FAdvancedPreviewScene::AddReferencedObjects(Collector);
+
+	Collector.AddReferencedObject(CurrentPreset);
+	Collector.AddReferencedObject(PreviewSettingsObject);
+	Collector.AddReferencedObject(SimulationContext);
+	Collector.AddReferencedObject(PreviewActor);
+	Collector.AddReferencedObject(ParticleMeshComponent);
+	Collector.AddReferencedObject(FloorMeshComponent);
+	Collector.AddReferencedObjects(WallMeshComponents);
+}
+
 void FFluidPreviewScene::CreateVisualizationComponents()
 {
 	// Spawn preview actor
