@@ -152,7 +152,7 @@ public:
 
 	/** Rendering mode selection */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering")
-	EKawaiiFluidRenderingMode RenderingMode = EKawaiiFluidRenderingMode::DebugMesh;
+	EKawaiiFluidRenderingMode RenderingMode = EKawaiiFluidRenderingMode::ISM;
 
 	/** Enable debug rendering */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug")

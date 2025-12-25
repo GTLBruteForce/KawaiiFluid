@@ -87,15 +87,13 @@ public:
 
 	virtual bool ShouldUseSSFR() const override
 	{
-		return RenderingMode == EKawaiiFluidRenderingMode::SSFR || 
-		       RenderingMode == EKawaiiFluidRenderingMode::Both;
+		return RenderingMode == EKawaiiFluidRenderingMode::SSFR;
 	}
 
 	virtual bool ShouldUseDebugMesh() const override
 	{
 		return bEnableDebugRendering && 
-		       (RenderingMode == EKawaiiFluidRenderingMode::DebugMesh || 
-		        RenderingMode == EKawaiiFluidRenderingMode::Both);
+		       RenderingMode == EKawaiiFluidRenderingMode::ISM;
 	}
 
 	virtual UInstancedStaticMeshComponent* GetDebugMeshComponent() const override
@@ -263,12 +261,11 @@ public:
 
 	/** 
 	 * 렌더링 방식 선택
-	 * - DebugMesh: Instanced Static Mesh
+	 * - ISM: Instanced Static Mesh
 	 * - SSFR: Screen Space Fluid Rendering
-	 * - Both: 둘 다 (디버그용)
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering")
-	EKawaiiFluidRenderingMode RenderingMode = EKawaiiFluidRenderingMode::DebugMesh;
+	EKawaiiFluidRenderingMode RenderingMode = EKawaiiFluidRenderingMode::ISM;
 
 	//========================================
 	// 자동 스폰

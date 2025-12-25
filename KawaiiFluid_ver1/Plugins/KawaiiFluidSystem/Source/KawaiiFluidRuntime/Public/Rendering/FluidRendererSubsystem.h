@@ -19,7 +19,7 @@ class UKawaiiFluidRenderController;
  * - IKawaiiFluidRenderable 인터페이스 구현 객체 통합 관리 (레거시)
  * - UKawaiiFluidRenderController 통합 관리 (신규 아키텍처)
  * - SSFR 렌더링 파이프라인 제공 (ViewExtension)
- * - DebugMesh 렌더링은 Unreal 기본 파이프라인 사용
+ * - ISM 렌더링은 Unreal 기본 파이프라인 사용
  *
  * @note 하이브리드 방식: 레거시(IKawaiiFluidRenderable)와 신규(RenderController) 모두 지원
  */

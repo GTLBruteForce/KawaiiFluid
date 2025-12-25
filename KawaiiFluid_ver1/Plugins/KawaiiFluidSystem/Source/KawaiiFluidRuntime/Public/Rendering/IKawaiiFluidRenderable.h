@@ -78,19 +78,19 @@ public:
 
 	/**
 	 * SSFR 렌더링 사용 여부
-	 * @return SSFR 모드 또는 Both 모드일 경우 true
+	 * @return SSFR 모드일 경우 true
 	 */
 	virtual bool ShouldUseSSFR() const = 0;
 
 	/**
-	 * 디버그 메시 렌더링 사용 여부
-	 * @return DebugMesh 모드 또는 Both 모드일 경우 true
+	 * ISM 렌더링 사용 여부
+	 * @return ISM 모드일 경우 true
 	 */
 	virtual bool ShouldUseDebugMesh() const = 0;
 
 	/**
-	 * 디버그 메시 컴포넌트 반환
-	 * @return DebugMesh 모드에서 사용할 InstancedStaticMeshComponent
+	 * ISM 컴포넌트 반환
+	 * @return ISM 모드에서 사용할 InstancedStaticMeshComponent
 	 */
 	virtual UInstancedStaticMeshComponent* GetDebugMeshComponent() const = 0;
 

@@ -45,7 +45,7 @@ public:
 
 	virtual void UpdateRendering(const IKawaiiFluidDataProvider* DataProvider, float DeltaTime) override;
 	virtual bool IsEnabled() const override { return bEnableRendering; }
-	virtual EKawaiiFluidRenderingMode GetRenderingMode() const override { return EKawaiiFluidRenderingMode::DebugMesh; }
+	virtual EKawaiiFluidRenderingMode GetRenderingMode() const override { return EKawaiiFluidRenderingMode::ISM; }
 	virtual void SetEnabled(bool bInEnabled) override { bEnableRendering = bInEnabled; }
 
 	//========================================

@@ -259,15 +259,13 @@ FString UKawaiiFluidSimulationComponent::GetDebugName() const
 
 bool UKawaiiFluidSimulationComponent::ShouldUseSSFR() const
 {
-	return RenderingMode == EKawaiiFluidRenderingMode::SSFR ||
-	       RenderingMode == EKawaiiFluidRenderingMode::Both;
+	return RenderingMode == EKawaiiFluidRenderingMode::SSFR;
 }
 
 bool UKawaiiFluidSimulationComponent::ShouldUseDebugMesh() const
 {
 	return bEnableDebugRendering &&
-	       (RenderingMode == EKawaiiFluidRenderingMode::DebugMesh ||
-	        RenderingMode == EKawaiiFluidRenderingMode::Both);
+	       RenderingMode == EKawaiiFluidRenderingMode::ISM;
 }
 
 UInstancedStaticMeshComponent* UKawaiiFluidSimulationComponent::GetDebugMeshComponent() const

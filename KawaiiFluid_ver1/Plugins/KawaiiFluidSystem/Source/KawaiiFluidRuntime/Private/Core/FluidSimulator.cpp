@@ -120,7 +120,7 @@ void AFluidSimulator::BeginPlay()
 			RendererSubsystem->RegisterSimulator(this);
 			
 			const TCHAR* ModeStr = (RenderingMode == EKawaiiFluidRenderingMode::SSFR) ? TEXT("SSFR") :
-			                       (RenderingMode == EKawaiiFluidRenderingMode::DebugMesh) ? TEXT("DebugMesh") : TEXT("Both");
+			                       (RenderingMode == EKawaiiFluidRenderingMode::ISM) ? TEXT("ISM") : TEXT("Niagara");
 			
 			UE_LOG(LogTemp, Log, TEXT("FluidSimulator registered: %s (Mode: %s)"), *GetName(), ModeStr);
 		}

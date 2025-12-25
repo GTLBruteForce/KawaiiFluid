@@ -96,9 +96,8 @@ public:
 
 	/** 
 	 * 렌더링 방식 선택
-	 * - DebugMesh: Instanced Static Mesh
+	 * - ISM: Instanced Static Mesh
 	 * - SSFR: Screen Space Fluid Rendering
-	 * - Both: 둘 다 (디버그용)
 	 * 
 	 * @note Niagara 렌더링은 Blueprint에서 수동으로 NiagaraComponent 추가하세요!
 	 */
@@ -168,21 +167,18 @@ public:
 
 	virtual bool ShouldUseSSFR() const override
 	{
-		return RenderingMode == EKawaiiFluidRenderingMode::SSFR || 
-		       RenderingMode == EKawaiiFluidRenderingMode::Both;
+		return RenderingMode == EKawaiiFluidRenderingMode::SSFR;
 	}
 
 	virtual bool ShouldUseDebugMesh() const override
 	{
-		return RenderingMode == EKawaiiFluidRenderingMode::DebugMesh || 
-		       RenderingMode == EKawaiiFluidRenderingMode::Both;
+		return RenderingMode == EKawaiiFluidRenderingMode::ISM;
 	}
 
 	/** Niagara 렌더링 사용 여부 */
 	bool ShouldUseNiagara() const
 	{
-		return RenderingMode == EKawaiiFluidRenderingMode::Niagara || 
-		       RenderingMode == EKawaiiFluidRenderingMode::Both;
+		return RenderingMode == EKawaiiFluidRenderingMode::Niagara;
 	}
 
 	virtual UInstancedStaticMeshComponent* GetDebugMeshComponent() const override
