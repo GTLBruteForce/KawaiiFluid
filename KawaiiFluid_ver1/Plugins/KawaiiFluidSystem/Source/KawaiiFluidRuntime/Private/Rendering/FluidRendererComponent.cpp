@@ -81,25 +81,25 @@ void UFluidRendererComponent::SetRenderingQuality(EFluidRenderingQuality Quality
 	{
 	case EFluidRenderingQuality::Low:
 		RenderingParameters.RenderTargetScale = 0.5f;
-		RenderingParameters.BilateralFilterRadius = 3;
+		RenderingParameters.BilateralFilterRadius = 12;
 		RenderingParameters.SmoothingStrength = 0.3f;
 		break;
 
 	case EFluidRenderingQuality::Medium:
 		RenderingParameters.RenderTargetScale = 0.75f;
-		RenderingParameters.BilateralFilterRadius = 5;
+		RenderingParameters.BilateralFilterRadius = 18;
 		RenderingParameters.SmoothingStrength = 0.5f;
 		break;
 
 	case EFluidRenderingQuality::High:
 		RenderingParameters.RenderTargetScale = 1.0f;
-		RenderingParameters.BilateralFilterRadius = 7;
+		RenderingParameters.BilateralFilterRadius = 25;
 		RenderingParameters.SmoothingStrength = 0.7f;
 		break;
 
 	case EFluidRenderingQuality::Ultra:
 		RenderingParameters.RenderTargetScale = 1.0f;
-		RenderingParameters.BilateralFilterRadius = 10;
+		RenderingParameters.BilateralFilterRadius = 35;
 		RenderingParameters.SmoothingStrength = 0.8f;
 		break;
 	}

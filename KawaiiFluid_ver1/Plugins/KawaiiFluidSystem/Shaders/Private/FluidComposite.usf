@@ -1,6 +1,5 @@
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"
-// #include "/Engine/Private/SceneTexturesCommon.ush" // 불필요하면 주석
 
 // -----------------------------------------------------------------------------
 // Parameters
@@ -95,10 +94,8 @@ void MainPS(
     float SceneLinearDepth = ConvertFromDeviceZ(SceneDeviceZ); // 언리얼 단위(cm)
 
     // 3. Occlusion Test (가려짐 처리)
-    // [중요] 유체가 벽 뒤에 있으면 그리지 않음
-    // *주의* FluidDepth와 SceneLinearDepth의 오차가 있을 수 있으므로 여유값(Bias)을 둠
-    // 일단 화면에 나오게 하기 위해 이 부분을 주석 처리 해보셔도 좋습니다.
-    if (FluidDepth > SceneLinearDepth + 2.0f) 
+    // FluidDepth와 SceneLinearDepth의 오차가 있을 수 있으므로 여유값(Bias)을 둠
+    if (FluidDepth > SceneLinearDepth + 2.0f)
     {
         discard;
         return;
@@ -117,34 +114,56 @@ void MainPS(
     // 5. 조명 계산 준비
     float3 ViewPos = ReconstructViewPosition(UV, FluidDepth);
     float3 ViewDir = normalize(-ViewPos); // 카메라를 향하는 벡터
-    
-    // A. Fresnel (반사)
+
+    // A. Fresnel (반사율 - Schlick's approximation)
     float NoV = saturate(dot(Normal, ViewDir));
-    float Fresnel = FresnelStrength + (1.0 - FresnelStrength) * pow(1.0 - NoV, 5.0);
-    
+    float F0 = FresnelStrength;
+    float Fresnel = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);
+
     // B. Specular (하이라이트) - 가상 조명
-    float3 LightDir = normalize(float3(0.5, 0.5, 1.0)); 
+    float3 LightDir = normalize(float3(0.5, 0.5, 1.0));
     float3 HalfDir = normalize(LightDir + ViewDir);
     float NoH = saturate(dot(Normal, HalfDir));
-    float Specular = pow(NoH, SpecularRoughness) * SpecularStrength;
-    
-    // C. Transmittance (투과 / Beer's Law)
-    // Thickness가 0이면 Transmittance는 1(투명)이 됨
-    float3 Transmittance = exp(-AbsorptionCoefficient * Thickness * (1.0 - FluidColor.rgb));
-    
-    // 6. 최종 컬러 합성
-    float3 BaseColor = FluidColor.rgb * Transmittance;
-    float3 FinalColor = BaseColor + Specular; // Specular는 더하기
-    
+
+    // Roughness를 Shininess로 변환 (작은 roughness = 큰 shininess = 날카로운 하이라이트)
+    float Shininess = (1.0 - SpecularRoughness) * 128.0;
+    float Specular = pow(NoH, Shininess) * SpecularStrength;
+
+    // C. Beer's Law (올바른 물리 기반 투과율 계산)
+    // 색상별 흡수 계수: 유체 색상과 반대되는 색을 더 흡수
+    // 예: 파란 유체(0.2, 0.5, 0.8)는 빨간색(0.8)을 많이 흡수
+    float3 ColorAbsorption = (1.0 - FluidColor.rgb) * AbsorptionCoefficient;
+
+    // Transmittance: 두께가 클수록 빛이 덜 투과
+    // exp를 사용하여 지수적 감쇠 (Beer-Lambert Law)
+    float3 Transmittance = exp(-ColorAbsorption * Thickness * 0.1); // 0.1은 스케일 조정
+
+    // D. 환경색 가정 (Scene Color가 없으므로 간단한 환경광 사용)
+    // 실제로는 Scene Color Texture를 샘플링해야 하지만, 없으므로 밝은 회색 가정
+    float3 EnvironmentColor = float3(0.8, 0.9, 1.0); // 하늘빛
+    float3 BackgroundColor = float3(0.5, 0.5, 0.5);  // 배경 (중간 회색)
+
+    // E. 투과된 빛 (배경 + 유체 색상 흡수)
+    // 배경색이 유체를 통과하면서 유체 색상을 띔
+    float3 TransmittedLight = BackgroundColor * Transmittance;
+
+    // 흡수된 빛이 유체 색상으로 보임
+    float3 AbsorbedLight = FluidColor.rgb * (1.0 - Transmittance) * 2.0; // 2.0은 색상 강도
+
+    // F. 반사된 빛 (Fresnel에 의한 환경 반사)
+    float3 ReflectedLight = EnvironmentColor * Fresnel;
+
+    // 6. 최종 컬러 합성 (물리 기반)
+    // Fresnel에 따라 반사와 투과를 혼합
+    float3 BaseColor = lerp(TransmittedLight + AbsorbedLight, ReflectedLight, Fresnel);
+    float3 FinalColor = BaseColor + Specular; // Specular는 추가
+
     // 7. Alpha 계산
     // 두께가 있으면 불투명, 반사가 강하면 불투명
-    float Alpha = saturate(1.0 - exp(-Thickness * 0.5)); 
-    Alpha = max(Alpha, Fresnel); 
-    
-    // [안전장치] Alpha가 너무 작으면 안 보일 수 있으니 최소값 보정 (디버깅용)
-    // Alpha = max(Alpha, 0.2f); 
+    float Alpha = saturate(1.0 - exp(-Thickness * 0.1));
+    Alpha = max(Alpha, Fresnel * 0.8); 
 
     // C++ BlendState: (SrcAlpha, InvSrcAlpha) 사용 중이므로
-    // RGB에 Alpha를 미리 곱하지 않고 내보냅니다.
+    // RGB에 Alpha를 미리 곱하지 않고 내보냄
     OutColor = float4(FinalColor, Alpha);
 }

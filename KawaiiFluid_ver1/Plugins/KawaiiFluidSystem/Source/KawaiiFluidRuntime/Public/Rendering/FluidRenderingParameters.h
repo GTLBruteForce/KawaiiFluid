@@ -43,12 +43,12 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	float SmoothingStrength = 0.5f;
 
 	/** Bilateral filter 반경 (픽셀) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing", meta = (ClampMin = "1", ClampMax = "20"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing", meta = (ClampMin = "1", ClampMax = "50"))
 	int32 BilateralFilterRadius = 20;
 
-	/** Depth threshold (bilateral filter용) */
+	/** Depth threshold (bilateral filter용) - 동적 계산 사용으로 deprecated */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing", meta = (ClampMin = "0.001", ClampMax = "100.0"))
-	float DepthThreshold = 50.0f;
+	float DepthThreshold = 10.0f;
 
 	/** 유체 색상 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance")

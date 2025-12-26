@@ -7,6 +7,7 @@
 #include "FluidRendererSubsystem.h"
 #include "FluidSmoothingPass.h"
 #include "FluidThicknessPass.h"
+#include "IKawaiiFluidRenderable.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphEvent.h"
 #include "RenderGraphUtils.h"
@@ -164,7 +165,31 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 				// Smoothing
 				FRDGTextureRef SmoothedDepthTexture = nullptr;
 				float BlurRadius = (float)SubsystemPtr->RenderingParameters.BilateralFilterRadius;
-				float DepthFalloff = SubsystemPtr->RenderingParameters.DepthThreshold;
+
+				// Calculate DepthFalloff based on average ParticleRenderRadius
+				float AverageParticleRadius = 10.0f; // Default fallback
+				TArray<IKawaiiFluidRenderable*> Renderables = SubsystemPtr->GetAllRenderables();
+				if (Renderables.Num() > 0)
+				{
+					float TotalRadius = 0.0f;
+					int ValidCount = 0;
+					for (IKawaiiFluidRenderable* Renderable : Renderables)
+					{
+						if (Renderable && Renderable->ShouldUseSSFR())
+						{
+							TotalRadius += Renderable->GetParticleRenderRadius();
+							ValidCount++;
+						}
+					}
+					if (ValidCount > 0)
+					{
+						AverageParticleRadius = TotalRadius / ValidCount;
+					}
+				}
+
+				// Dynamic calculation: DepthFalloff = ParticleRadius * 0.7
+				float DepthFalloff = AverageParticleRadius * 0.7f;
+
 				RenderFluidSmoothingPass(GraphBuilder, View, DepthTexture, SmoothedDepthTexture,
 				                         BlurRadius, DepthFalloff);
 				if (!SmoothedDepthTexture) return InInputs.
@@ -248,7 +273,30 @@ void FFluidSceneViewExtension::RenderSmoothingPass(FRDGBuilder& GraphBuilder,
 	}
 
 	float BlurRadius = static_cast<float>(SubsystemPtr->RenderingParameters.BilateralFilterRadius);
-	float DepthFalloff = SubsystemPtr->RenderingParameters.DepthThreshold;
+
+	// Calculate DepthFalloff based on average ParticleRenderRadius
+	float AverageParticleRadius = 10.0f; // Default fallback
+	TArray<IKawaiiFluidRenderable*> Renderables = SubsystemPtr->GetAllRenderables();
+	if (Renderables.Num() > 0)
+	{
+		float TotalRadius = 0.0f;
+		int ValidCount = 0;
+		for (IKawaiiFluidRenderable* Renderable : Renderables)
+		{
+			if (Renderable && Renderable->ShouldUseSSFR())
+			{
+				TotalRadius += Renderable->GetParticleRenderRadius();
+				ValidCount++;
+			}
+		}
+		if (ValidCount > 0)
+		{
+			AverageParticleRadius = TotalRadius / ValidCount;
+		}
+	}
+
+	// Dynamic calculation: DepthFalloff = ParticleRadius * 0.7
+	float DepthFalloff = AverageParticleRadius * 0.7f;
 
 	RenderFluidSmoothingPass(GraphBuilder, View, InputDepthTexture, OutSmoothedDepthTexture,
 	                         BlurRadius, DepthFalloff);

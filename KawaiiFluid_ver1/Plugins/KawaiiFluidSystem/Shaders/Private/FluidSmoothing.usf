@@ -54,7 +54,7 @@ void BilateralBlurCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	// 양방향 필터 파라미터 설정
 	const int KernelRadius = int(BlurRadius);
-	const float SpatialSigma = BlurRadius / 2.0;
+	const float SpatialSigma = BlurRadius / 1.5;
 	const float DepthSigma = BlurDepthFalloff;
 
 	float TotalWeight = 0.0;

@@ -93,8 +93,17 @@ void ReconstructNormalCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     // 미분 연산
     float3 ddx = PositionRight - PositionCenter;
     float3 ddy = PositionBottom - PositionCenter;
-    float3 Normal = normalize(cross(ddy, ddx));
-    
+
+    // Normal 계산
+    float3 Normal = normalize(cross(ddx, ddy));
+
+    // View Space에서 카메라를 향해야 하므로 Z > 0이어야 함
+    // 만약 Z < 0이면 방향 반전
+    if (Normal.z < 0.0)
+    {
+        Normal = -Normal;
+    }
+
     // 저장
     OutputNormalTexture[PixelPosition] = float4(Normal, 1.0);
 }
