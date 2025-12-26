@@ -10,6 +10,7 @@
 class UFluidCollider;
 class UFluidInteractionComponent;
 class UKawaiiFluidSimulationComponent;
+class UKawaiiFluidComponent;
 
 /**
  * Collision event data
@@ -122,5 +123,24 @@ struct FKawaiiFluidBatchInfo
 
 	FKawaiiFluidBatchInfo() = default;
 	FKawaiiFluidBatchInfo(UKawaiiFluidSimulationComponent* InComponent, int32 InStart, int32 InCount)
+		: Component(InComponent), StartIndex(InStart), ParticleCount(InCount) {}
+};
+
+/**
+ * Batching info for new modular components (UKawaiiFluidComponent)
+ */
+struct FKawaiiFluidModularBatchInfo
+{
+	/** Component that owns these particles */
+	UKawaiiFluidComponent* Component = nullptr;
+
+	/** Start index in merged buffer */
+	int32 StartIndex = 0;
+
+	/** Number of particles from this component */
+	int32 ParticleCount = 0;
+
+	FKawaiiFluidModularBatchInfo() = default;
+	FKawaiiFluidModularBatchInfo(UKawaiiFluidComponent* InComponent, int32 InStart, int32 InCount)
 		: Component(InComponent), StartIndex(InStart), ParticleCount(InCount) {}
 };

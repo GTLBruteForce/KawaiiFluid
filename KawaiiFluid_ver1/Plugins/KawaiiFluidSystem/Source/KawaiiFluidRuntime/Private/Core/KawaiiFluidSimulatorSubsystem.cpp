@@ -5,6 +5,8 @@
 #include "Core/SpatialHash.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Components/KawaiiFluidSimulationComponent.h"
+#include "Components/KawaiiFluidComponent.h"
+#include "Modules/KawaiiFluidSimulationModule.h"
 #include "Components/FluidInteractionComponent.h"
 #include "Collision/FluidCollider.h"
 
@@ -40,6 +42,7 @@ void UKawaiiFluidSimulatorSubsystem::Initialize(FSubsystemCollectionBase& Collec
 void UKawaiiFluidSimulatorSubsystem::Deinitialize()
 {
 	AllComponents.Empty();
+	AllFluidComponents.Empty();
 	GlobalColliders.Empty();
 	GlobalInteractionComponents.Empty();
 	ContextCache.Empty();
@@ -64,21 +67,30 @@ void UKawaiiFluidSimulatorSubsystem::Tick(float DeltaTime)
 	// Reset event counter at frame start
 	EventCountThisFrame.store(0, std::memory_order_relaxed);
 
-	if (AllComponents.Num() == 0)
+	//========================================
+	// Legacy: UKawaiiFluidSimulationComponent
+	//========================================
+	if (AllComponents.Num() > 0)
 	{
-		return;
+		// Simulate independent components
+		{
+			SCOPE_CYCLE_COUNTER(STAT_SimulateIndependent);
+			SimulateIndependentComponents(DeltaTime);
+		}
+
+		// Simulate batched components
+		{
+			SCOPE_CYCLE_COUNTER(STAT_SimulateBatched);
+			SimulateBatchedComponents(DeltaTime);
+		}
 	}
 
-	// Simulate independent components
+	//========================================
+	// New: UKawaiiFluidComponent (Modular)
+	//========================================
+	if (AllFluidComponents.Num() > 0)
 	{
-		SCOPE_CYCLE_COUNTER(STAT_SimulateIndependent);
-		SimulateIndependentComponents(DeltaTime);
-	}
-
-	// Simulate batched components
-	{
-		SCOPE_CYCLE_COUNTER(STAT_SimulateBatched);
-		SimulateBatchedComponents(DeltaTime);
+		SimulateFluidComponents(DeltaTime);
 	}
 }
 
@@ -99,6 +111,21 @@ void UKawaiiFluidSimulatorSubsystem::UnregisterComponent(UKawaiiFluidSimulationC
 {
 	AllComponents.Remove(Component);
 	UE_LOG(LogTemp, Verbose, TEXT("Component unregistered: %s"), Component ? *Component->GetName() : TEXT("nullptr"));
+}
+
+void UKawaiiFluidSimulatorSubsystem::RegisterComponent(UKawaiiFluidComponent* Component)
+{
+	if (Component && !AllFluidComponents.Contains(Component))
+	{
+		AllFluidComponents.Add(Component);
+		UE_LOG(LogTemp, Verbose, TEXT("FluidComponent registered: %s"), *Component->GetName());
+	}
+}
+
+void UKawaiiFluidSimulatorSubsystem::UnregisterComponent(UKawaiiFluidComponent* Component)
+{
+	AllFluidComponents.Remove(Component);
+	UE_LOG(LogTemp, Verbose, TEXT("FluidComponent unregistered: %s"), Component ? *Component->GetName() : TEXT("nullptr"));
 }
 
 //========================================
@@ -144,6 +171,7 @@ TArray<FFluidParticle> UKawaiiFluidSimulatorSubsystem::GetAllParticlesInRadius(F
 	TArray<FFluidParticle> Result;
 	const float RadiusSq = Radius * Radius;
 
+	// Legacy components
 	for (const UKawaiiFluidSimulationComponent* Component : AllComponents)
 	{
 		if (!Component)
@@ -160,12 +188,31 @@ TArray<FFluidParticle> UKawaiiFluidSimulatorSubsystem::GetAllParticlesInRadius(F
 		}
 	}
 
+	// New modular components
+	for (const UKawaiiFluidComponent* Component : AllFluidComponents)
+	{
+		if (!Component || !Component->SimulationModule)
+		{
+			continue;
+		}
+
+		for (const FFluidParticle& Particle : Component->SimulationModule->GetParticles())
+		{
+			if (FVector::DistSquared(Particle.Position, Location) <= RadiusSq)
+			{
+				Result.Add(Particle);
+			}
+		}
+	}
+
 	return Result;
 }
 
 int32 UKawaiiFluidSimulatorSubsystem::GetTotalParticleCount() const
 {
 	int32 Total = 0;
+
+	// Legacy components
 	for (const UKawaiiFluidSimulationComponent* Component : AllComponents)
 	{
 		if (Component)
@@ -173,6 +220,16 @@ int32 UKawaiiFluidSimulatorSubsystem::GetTotalParticleCount() const
 			Total += Component->GetParticleCount();
 		}
 	}
+
+	// New modular components
+	for (const UKawaiiFluidComponent* Component : AllFluidComponents)
+	{
+		if (Component)
+		{
+			Total += Component->GetParticleCount();
+		}
+	}
+
 	return Total;
 }
 
@@ -324,6 +381,297 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedComponents(float DeltaTime)
 			SplitParticles(Components);
 		}
 	}
+}
+
+//========================================
+// New Modular Components Simulation
+//========================================
+
+void UKawaiiFluidSimulatorSubsystem::SimulateFluidComponents(float DeltaTime)
+{
+	// Simulate independent components (explicit flag OR has overrides)
+	SimulateIndependentFluidComponents(DeltaTime);
+
+	// Simulate batched components (same preset merged)
+	SimulateBatchedFluidComponents(DeltaTime);
+}
+
+void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float DeltaTime)
+{
+	for (UKawaiiFluidComponent* Component : AllFluidComponents)
+	{
+		if (!Component || !Component->SimulationModule)
+		{
+			continue;
+		}
+
+		UKawaiiFluidSimulationModule* Module = Component->SimulationModule;
+		if (!Module->IsSimulationEnabled() || Module->GetParticleCount() == 0)
+		{
+			continue;
+		}
+
+		// Skip non-independent components (they'll be batched)
+		if (!Module->IsIndependentSimulation())
+		{
+			continue;
+		}
+
+		// Get effective preset
+		UKawaiiFluidPresetDataAsset* EffectivePreset = Module->GetEffectivePreset();
+		if (!EffectivePreset)
+		{
+			continue;
+		}
+
+		// Get or create context
+		UKawaiiFluidSimulationContext* Context = GetOrCreateContext(EffectivePreset);
+		if (!Context)
+		{
+			continue;
+		}
+
+		// Get spatial hash (use module's own)
+		FSpatialHash* SpatialHash = Module->GetSpatialHash();
+		if (!SpatialHash)
+		{
+			continue;
+		}
+
+		// Build simulation params
+		FKawaiiFluidSimulationParams Params = Component->BuildSimulationParams();
+		Params.Colliders.Append(GlobalColliders);
+		Params.InteractionComponents.Append(GlobalInteractionComponents);
+
+		// Simulate
+		TArray<FFluidParticle>& Particles = Module->GetParticlesMutable();
+		float AccumulatedTime = Module->GetAccumulatedTime();
+
+		Context->Simulate(Particles, EffectivePreset, Params, *SpatialHash, DeltaTime, AccumulatedTime);
+
+		Module->SetAccumulatedTime(AccumulatedTime);
+		Module->ResetExternalForce();
+	}
+}
+
+void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaTime)
+{
+	// Group components by preset (only non-independent)
+	TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidComponent*>> PresetGroups = GroupFluidComponentsByPreset();
+
+	// Process each preset group
+	for (auto& Pair : PresetGroups)
+	{
+		UKawaiiFluidPresetDataAsset* Preset = Pair.Key;
+		TArray<UKawaiiFluidComponent*>& Components = Pair.Value;
+
+		if (!Preset || Components.Num() == 0)
+		{
+			continue;
+		}
+
+		// Get context for this preset
+		UKawaiiFluidSimulationContext* Context = GetOrCreateContext(Preset);
+		if (!Context)
+		{
+			continue;
+		}
+
+		// Update shared spatial hash cell size
+		SharedSpatialHash->SetCellSize(Preset->SmoothingRadius);
+
+		// Merge particles from all components
+		MergeFluidParticles(Components);
+
+		if (MergedFluidParticleBuffer.Num() == 0)
+		{
+			continue;
+		}
+
+		// Build merged simulation params
+		FKawaiiFluidSimulationParams Params = BuildMergedFluidSimulationParams(Components);
+		Params.Colliders.Append(GlobalColliders);
+		Params.InteractionComponents.Append(GlobalInteractionComponents);
+
+		// Simulate merged buffer
+		float AccumulatedTime = 0.0f;
+		if (Components.Num() > 0 && Components[0] && Components[0]->SimulationModule)
+		{
+			AccumulatedTime = Components[0]->SimulationModule->GetAccumulatedTime();
+		}
+
+		Context->Simulate(MergedFluidParticleBuffer, Preset, Params, *SharedSpatialHash, DeltaTime, AccumulatedTime);
+
+		// Update accumulated time and reset external force for all components
+		for (UKawaiiFluidComponent* Component : Components)
+		{
+			if (Component && Component->SimulationModule)
+			{
+				Component->SimulationModule->SetAccumulatedTime(AccumulatedTime);
+				Component->SimulationModule->ResetExternalForce();
+			}
+		}
+
+		// Split particles back to components
+		SplitFluidParticles(Components);
+	}
+}
+
+TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidComponent*>>
+UKawaiiFluidSimulatorSubsystem::GroupFluidComponentsByPreset() const
+{
+	TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidComponent*>> Result;
+
+	for (UKawaiiFluidComponent* Component : AllFluidComponents)
+	{
+		if (!Component || !Component->SimulationModule)
+		{
+			continue;
+		}
+
+		UKawaiiFluidSimulationModule* Module = Component->SimulationModule;
+
+		// Only batch non-independent, enabled components with particles
+		if (Module->IsSimulationEnabled() &&
+		    !Module->IsIndependentSimulation() &&
+		    Module->GetParticleCount() > 0 &&
+		    Module->GetPreset())
+		{
+			Result.FindOrAdd(Module->GetPreset()).Add(Component);
+		}
+	}
+
+	return Result;
+}
+
+void UKawaiiFluidSimulatorSubsystem::MergeFluidParticles(const TArray<UKawaiiFluidComponent*>& Components)
+{
+	// Calculate total particle count
+	int32 TotalParticles = 0;
+	for (const UKawaiiFluidComponent* Component : Components)
+	{
+		if (Component && Component->SimulationModule)
+		{
+			TotalParticles += Component->SimulationModule->GetParticleCount();
+		}
+	}
+
+	// Resize merged buffer
+	MergedFluidParticleBuffer.Reset(TotalParticles);
+	ModularBatchInfos.Reset(Components.Num());
+
+	// Copy particles to merged buffer
+	int32 CurrentOffset = 0;
+	for (UKawaiiFluidComponent* Component : Components)
+	{
+		if (!Component || !Component->SimulationModule)
+		{
+			continue;
+		}
+
+		const TArray<FFluidParticle>& Particles = Component->SimulationModule->GetParticles();
+		const int32 Count = Particles.Num();
+
+		// Store batch info
+		ModularBatchInfos.Add(FKawaiiFluidModularBatchInfo(Component, CurrentOffset, Count));
+
+		// Copy particles
+		for (const FFluidParticle& Particle : Particles)
+		{
+			MergedFluidParticleBuffer.Add(Particle);
+		}
+
+		CurrentOffset += Count;
+	}
+}
+
+void UKawaiiFluidSimulatorSubsystem::SplitFluidParticles(const TArray<UKawaiiFluidComponent*>& Components)
+{
+	// Copy particles back from merged buffer
+	for (const FKawaiiFluidModularBatchInfo& Info : ModularBatchInfos)
+	{
+		UKawaiiFluidComponent* Component = Info.Component;
+		if (!Component || !Component->SimulationModule)
+		{
+			continue;
+		}
+
+		TArray<FFluidParticle>& Particles = Component->SimulationModule->GetParticlesMutable();
+
+		// Verify size match
+		if (Particles.Num() != Info.ParticleCount)
+		{
+			continue;
+		}
+
+		// Copy back
+		for (int32 i = 0; i < Info.ParticleCount; ++i)
+		{
+			Particles[i] = MergedFluidParticleBuffer[Info.StartIndex + i];
+		}
+	}
+}
+
+FKawaiiFluidSimulationParams UKawaiiFluidSimulatorSubsystem::BuildMergedFluidSimulationParams(
+	const TArray<UKawaiiFluidComponent*>& Components)
+{
+	FKawaiiFluidSimulationParams Params;
+	Params.World = GetWorld();
+	Params.EventCountPtr = &EventCountThisFrame;
+
+	FVector TotalForce = FVector::ZeroVector;
+	bool bAnyUseWorldCollision = false;
+	ECollisionChannel MergedChannel = ECC_GameTraceChannel1;
+
+	for (const UKawaiiFluidComponent* Component : Components)
+	{
+		if (!Component || !Component->SimulationModule)
+		{
+			continue;
+		}
+
+		UKawaiiFluidSimulationModule* Module = Component->SimulationModule;
+
+		TotalForce += Module->GetAccumulatedExternalForce();
+
+		// Merge colliders
+		Params.Colliders.Append(Module->GetColliders());
+
+		// Merge interaction components
+		Params.InteractionComponents.Append(Module->GetInteractionComponents());
+
+		// Use world collision if any component wants it
+		if (Component->bUseWorldCollision)
+		{
+			bAnyUseWorldCollision = true;
+			if (Module->GetPreset())
+			{
+				MergedChannel = Module->GetPreset()->CollisionChannel;
+			}
+		}
+	}
+
+	Params.ExternalForce = TotalForce;
+	Params.bUseWorldCollision = bAnyUseWorldCollision;
+	Params.CollisionChannel = MergedChannel;
+
+	// Use first component's particle radius
+	if (Components.Num() > 0 && Components[0] && Components[0]->SimulationModule)
+	{
+		UKawaiiFluidPresetDataAsset* Preset = Components[0]->SimulationModule->GetPreset();
+		if (Preset)
+		{
+			Params.ParticleRadius = Preset->ParticleRadius;
+		}
+	}
+
+	// Set current game time
+	if (UWorld* World = GetWorld())
+	{
+		Params.CurrentGameTime = World->GetTimeSeconds();
+	}
+
+	return Params;
 }
 
 TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidSimulationComponent*>>

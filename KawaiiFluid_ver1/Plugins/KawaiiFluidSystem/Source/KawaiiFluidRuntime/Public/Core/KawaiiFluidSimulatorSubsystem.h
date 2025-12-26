@@ -8,6 +8,7 @@
 #include "KawaiiFluidSimulatorSubsystem.generated.h"
 
 class UKawaiiFluidSimulationComponent;
+class UKawaiiFluidComponent;
 class UKawaiiFluidSimulationContext;
 class UKawaiiFluidPresetDataAsset;
 class UFluidCollider;
@@ -50,14 +51,23 @@ public:
 	// Component Registration
 	//========================================
 
-	/** Register simulation component */
+	/** Register simulation component (legacy) */
 	void RegisterComponent(UKawaiiFluidSimulationComponent* Component);
 
-	/** Unregister simulation component */
+	/** Unregister simulation component (legacy) */
 	void UnregisterComponent(UKawaiiFluidSimulationComponent* Component);
 
-	/** Get all registered components */
+	/** Register fluid component (new modular) */
+	void RegisterComponent(UKawaiiFluidComponent* Component);
+
+	/** Unregister fluid component (new modular) */
+	void UnregisterComponent(UKawaiiFluidComponent* Component);
+
+	/** Get all registered legacy components */
 	const TArray<UKawaiiFluidSimulationComponent*>& GetAllComponents() const { return AllComponents; }
+
+	/** Get all registered new components */
+	const TArray<UKawaiiFluidComponent*>& GetAllFluidComponents() const { return AllFluidComponents; }
 
 	//========================================
 	// Global Colliders
@@ -99,9 +109,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "KawaiiFluid|Query")
 	int32 GetTotalParticleCount() const;
 
-	/** Get component count */
+	/** Get component count (legacy + new) */
 	UFUNCTION(BlueprintCallable, Category = "KawaiiFluid|Query")
-	int32 GetComponentCount() const { return AllComponents.Num(); }
+	int32 GetComponentCount() const { return AllComponents.Num() + AllFluidComponents.Num(); }
 
 	//========================================
 	// Context Management
@@ -115,9 +125,13 @@ private:
 	// Component Management
 	//========================================
 
-	/** All registered components */
+	/** All registered legacy components */
 	UPROPERTY()
 	TArray<UKawaiiFluidSimulationComponent*> AllComponents;
+
+	/** All registered new modular components */
+	UPROPERTY()
+	TArray<UKawaiiFluidComponent*> AllFluidComponents;
 
 	/** Global colliders */
 	UPROPERTY()
@@ -145,14 +159,20 @@ private:
 	/** Merged particle buffer for batching */
 	TArray<FFluidParticle> MergedParticleBuffer;
 
-	/** Batch info array */
+	/** Batch info array (legacy) */
 	TArray<FKawaiiFluidBatchInfo> BatchInfos;
+
+	/** Batch info array (modular) */
+	TArray<FKawaiiFluidModularBatchInfo> ModularBatchInfos;
+
+	/** Merged particle buffer for modular batching */
+	TArray<FFluidParticle> MergedFluidParticleBuffer;
 
 	/** Atomic event counter for thread-safe collision event tracking */
 	std::atomic<int32> EventCountThisFrame{0};
 
 	//========================================
-	// Simulation Methods
+	// Simulation Methods (Legacy)
 	//========================================
 
 	/** Simulate independent components (each has own spatial hash) */
@@ -161,8 +181,33 @@ private:
 	/** Simulate batched components (same preset merged) */
 	void SimulateBatchedComponents(float DeltaTime);
 
+	//========================================
+	// Simulation Methods (New Modular)
+	//========================================
+
+	/** Simulate new modular fluid components */
+	void SimulateFluidComponents(float DeltaTime);
+
+	/** Simulate independent modular components */
+	void SimulateIndependentFluidComponents(float DeltaTime);
+
+	/** Simulate batched modular components */
+	void SimulateBatchedFluidComponents(float DeltaTime);
+
 	/** Group components by preset */
 	TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidSimulationComponent*>> GroupComponentsByPreset() const;
+
+	/** Group modular components by preset */
+	TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidComponent*>> GroupFluidComponentsByPreset() const;
+
+	/** Merge particles from modular components */
+	void MergeFluidParticles(const TArray<UKawaiiFluidComponent*>& Components);
+
+	/** Split particles back to modular components */
+	void SplitFluidParticles(const TArray<UKawaiiFluidComponent*>& Components);
+
+	/** Build merged params for modular components */
+	FKawaiiFluidSimulationParams BuildMergedFluidSimulationParams(const TArray<UKawaiiFluidComponent*>& Components);
 
 	/** Merge particles from components into single buffer */
 	void MergeParticles(const TArray<UKawaiiFluidSimulationComponent*>& Components);

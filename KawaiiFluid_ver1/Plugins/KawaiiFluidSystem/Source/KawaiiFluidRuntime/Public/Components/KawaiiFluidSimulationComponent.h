@@ -18,10 +18,10 @@ class FKawaiiFluidRenderResource;
 class FSpatialHash;
 
 /**
- * Particle collision event delegate
+ * Particle collision event delegate (Legacy)
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(
-	FOnFluidParticleHitComponent,
+	FOnFluidParticleHitLegacy,
 	int32, ParticleIndex,
 	AActor*, HitActor,
 	FVector, HitLocation,
@@ -168,7 +168,7 @@ public:
 
 	/** Particle collision event (Blueprint bindable) */
 	UPROPERTY(BlueprintAssignable, Category = "Fluid|Events")
-	FOnFluidParticleHitComponent OnParticleHit;
+	FOnFluidParticleHitLegacy OnParticleHit;
 
 	/** Enable particle hit events (performance consideration - default off) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Events")
