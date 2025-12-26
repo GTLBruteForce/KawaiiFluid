@@ -23,6 +23,7 @@ void RenderFluidDepthPass(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
 	UFluidRendererSubsystem* Subsystem,
+	FRDGTextureRef SceneDepthTexture,
 	FRDGTextureRef& OutLinearDepthTexture)
 {
 	RDG_EVENT_SCOPE(GraphBuilder, "FluidDepthPass");
@@ -105,6 +106,8 @@ void RenderFluidDepthPass(
 		PassParameters->ViewMatrix = FMatrix44f(ViewMatrix);
 		PassParameters->ProjectionMatrix = FMatrix44f(ProjectionMatrix);
 		PassParameters->ViewProjectionMatrix = FMatrix44f(ViewProjectionMatrix);
+		PassParameters->SceneDepthTexture = SceneDepthTexture; // Scene depth (occlusion test용)
+		PassParameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 
 		// Color Target (Linear Depth용, R32F)
 		// 첫 번째 패스면 Clear, 아니면 Load

@@ -148,9 +148,16 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 
 				RDG_EVENT_SCOPE(GraphBuilder, "KawaiiFluidRendering");
 
+				// Scene Depth 가져오기
+				FRDGTextureRef SceneDepthTexture = nullptr;
+				if (InInputs.SceneTextures.SceneTextures)
+				{
+					SceneDepthTexture = InInputs.SceneTextures.SceneTextures->GetContents()->SceneDepthTexture;
+				}
+
 				// Depth
 				FRDGTextureRef DepthTexture = nullptr;
-				RenderFluidDepthPass(GraphBuilder, View, SubsystemPtr, DepthTexture);
+				RenderFluidDepthPass(GraphBuilder, View, SubsystemPtr, SceneDepthTexture, DepthTexture);
 				if (!DepthTexture) return InInputs.ReturnUntouchedSceneColorForPostProcessing(
 					GraphBuilder);
 
@@ -180,13 +187,6 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 					InInputs.GetInput(EPostProcessMaterialInput::SceneColor));
 				if (!SceneColorInput.IsValid()) return InInputs.
 					ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
-
-				FRDGTextureRef SceneDepthTexture = nullptr;
-				if (InInputs.SceneTextures.SceneTextures)
-				{
-					SceneDepthTexture = InInputs.SceneTextures.SceneTextures->GetContents()->
-					                             SceneDepthTexture;
-				}
 
 				// Output Target 결정
 				FScreenPassRenderTarget Output = InInputs.OverrideOutput;
@@ -233,7 +233,7 @@ void FFluidSceneViewExtension::RenderDepthPass(FRDGBuilder& GraphBuilder, const 
 	}
 
 	FRDGTextureRef DepthTexture = nullptr;
-	RenderFluidDepthPass(GraphBuilder, View, SubsystemPtr, DepthTexture);
+	RenderFluidDepthPass(GraphBuilder, View, SubsystemPtr, nullptr, DepthTexture);
 }
 
 void FFluidSceneViewExtension::RenderSmoothingPass(FRDGBuilder& GraphBuilder,

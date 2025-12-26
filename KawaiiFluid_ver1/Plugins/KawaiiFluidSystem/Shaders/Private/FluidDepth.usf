@@ -18,6 +18,10 @@ float4x4 ViewMatrix;
 float4x4 ProjectionMatrix;
 float4x4 ViewProjectionMatrix;
 
+// Occlusion test용 Scene Depth
+Texture2D SceneDepthTexture;
+SamplerState SceneDepthSampler;
+
 //-----------------------------------------------------------------------------
 // 버텍스 셰이더 (Vertex Shader)
 //-----------------------------------------------------------------------------
@@ -36,6 +40,7 @@ struct FVertexOutput
 	float3 ParticleCenter : TEXCOORD2;
 	float ParticleRadius : TEXCOORD3;
 	uint InstanceId : TEXCOORD4;
+	float4 ScreenPosition : TEXCOORD5; // Screen space position for depth comparison
 };
 
 // 빌보드 쿼드 정점
@@ -70,6 +75,7 @@ FVertexOutput MainVS(FVertexInput Input)
 	Output.ParticleCenter = ParticleViewPosition.xyz;
 	Output.ParticleRadius = ParticleRadius;
 	Output.InstanceId = Input.InstanceId;
+	Output.ScreenPosition = Output.Position; // Screen position for depth comparison
 
 	return Output;
 }
@@ -87,6 +93,21 @@ struct FPixelOutput
 FPixelOutput MainPS(FVertexOutput Input)
 {
 	FPixelOutput Output;
+
+	// Calculate screen UV for depth sampling
+	float2 ScreenUV = Input.ScreenPosition.xy / Input.ScreenPosition.w;
+	ScreenUV = ScreenUV * 0.5 + 0.5;
+	ScreenUV.y = 1.0 - ScreenUV.y;
+
+	// Sample scene depth and perform occlusion test
+	float SceneDeviceDepth = SceneDepthTexture.Sample(SceneDepthSampler, ScreenUV).r;
+
+	// Early discard if quad is behind scene geometry
+	// Reversed-Z: 0.0 = far, 1.0 = near, so if quad depth < scene depth, it's farther away
+	if (Input.Position.z < SceneDeviceDepth)
+	{
+		discard;
+	}
 
 	// 뷰 공간에서 레이(Ray) 방향 계산
 	float3 RayDirection = normalize(Input.ViewSpacePosition);

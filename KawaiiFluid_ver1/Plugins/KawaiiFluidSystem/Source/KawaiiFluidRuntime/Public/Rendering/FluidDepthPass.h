@@ -18,4 +18,5 @@ void RenderFluidDepthPass(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
 	UFluidRendererSubsystem* Subsystem,
+	FRDGTextureRef SceneDepthTexture,
 	FRDGTextureRef& OutLinearDepthTexture);
