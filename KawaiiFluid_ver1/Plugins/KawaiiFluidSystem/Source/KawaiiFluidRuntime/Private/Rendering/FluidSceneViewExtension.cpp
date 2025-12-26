@@ -17,6 +17,8 @@
 #include "PixelShaderUtils.h"
 #include "SceneTextureParameters.h"
 #include "Rendering/FluidCompositeShaders.h"
+#include "Rendering/KawaiiFluidRenderController.h"
+#include "Rendering/KawaiiFluidSSFRRenderer.h"
 
 static TRefCountPtr<IPooledRenderTarget> GFluidCompositeDebug_KeepAlive;
 
@@ -140,9 +142,12 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 			{
 				UFluidRendererSubsystem* SubsystemPtr = Subsystem.Get();
 
-				// 유효성 검사
+				// 유효성 검사 (Legacy + New Architecture 모두 지원)
+				bool bHasAnyRenderables = SubsystemPtr && SubsystemPtr->GetAllRenderables().Num() > 0;
+				bool bHasAnyControllers = SubsystemPtr && SubsystemPtr->GetAllRenderControllers().Num() > 0;
+
 				if (!SubsystemPtr || !SubsystemPtr->RenderingParameters.bEnableRendering ||
-					SubsystemPtr->GetAllRenderables().Num() == 0)
+					(!bHasAnyRenderables && !bHasAnyControllers))
 				{
 					return InInputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
 				}
@@ -168,23 +173,37 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 
 				// Calculate DepthFalloff based on average ParticleRenderRadius
 				float AverageParticleRadius = 10.0f; // Default fallback
+				float TotalRadius = 0.0f;
+				int ValidCount = 0;
+
+				// Legacy: Collect from IKawaiiFluidRenderable
 				TArray<IKawaiiFluidRenderable*> Renderables = SubsystemPtr->GetAllRenderables();
-				if (Renderables.Num() > 0)
+				for (IKawaiiFluidRenderable* Renderable : Renderables)
 				{
-					float TotalRadius = 0.0f;
-					int ValidCount = 0;
-					for (IKawaiiFluidRenderable* Renderable : Renderables)
+					if (Renderable && Renderable->ShouldUseSSFR())
 					{
-						if (Renderable && Renderable->ShouldUseSSFR())
-						{
-							TotalRadius += Renderable->GetParticleRenderRadius();
-							ValidCount++;
-						}
+						TotalRadius += Renderable->GetParticleRenderRadius();
+						ValidCount++;
 					}
-					if (ValidCount > 0)
+				}
+
+				// New: Collect from RenderControllers
+				const TArray<UKawaiiFluidRenderController*>& Controllers = SubsystemPtr->GetAllRenderControllers();
+				for (UKawaiiFluidRenderController* Controller : Controllers)
+				{
+					if (!Controller) continue;
+
+					UKawaiiFluidSSFRRenderer* SSFRRenderer = Controller->GetSSFRRenderer();
+					if (SSFRRenderer && SSFRRenderer->IsRenderingActive())
 					{
-						AverageParticleRadius = TotalRadius / ValidCount;
+						TotalRadius += SSFRRenderer->GetCachedParticleRadius();
+						ValidCount++;
 					}
+				}
+
+				if (ValidCount > 0)
+				{
+					AverageParticleRadius = TotalRadius / ValidCount;
 				}
 
 				// Dynamic calculation: DepthFalloff = ParticleRadius * 0.7
@@ -276,23 +295,37 @@ void FFluidSceneViewExtension::RenderSmoothingPass(FRDGBuilder& GraphBuilder,
 
 	// Calculate DepthFalloff based on average ParticleRenderRadius
 	float AverageParticleRadius = 10.0f; // Default fallback
+	float TotalRadius = 0.0f;
+	int ValidCount = 0;
+
+	// Legacy: Collect from IKawaiiFluidRenderable
 	TArray<IKawaiiFluidRenderable*> Renderables = SubsystemPtr->GetAllRenderables();
-	if (Renderables.Num() > 0)
+	for (IKawaiiFluidRenderable* Renderable : Renderables)
 	{
-		float TotalRadius = 0.0f;
-		int ValidCount = 0;
-		for (IKawaiiFluidRenderable* Renderable : Renderables)
+		if (Renderable && Renderable->ShouldUseSSFR())
 		{
-			if (Renderable && Renderable->ShouldUseSSFR())
-			{
-				TotalRadius += Renderable->GetParticleRenderRadius();
-				ValidCount++;
-			}
+			TotalRadius += Renderable->GetParticleRenderRadius();
+			ValidCount++;
 		}
-		if (ValidCount > 0)
+	}
+
+	// New: Collect from RenderControllers
+	const TArray<UKawaiiFluidRenderController*>& Controllers = SubsystemPtr->GetAllRenderControllers();
+	for (UKawaiiFluidRenderController* Controller : Controllers)
+	{
+		if (!Controller) continue;
+
+		UKawaiiFluidSSFRRenderer* SSFRRenderer = Controller->GetSSFRRenderer();
+		if (SSFRRenderer && SSFRRenderer->IsRenderingActive())
 		{
-			AverageParticleRadius = TotalRadius / ValidCount;
+			TotalRadius += SSFRRenderer->GetCachedParticleRadius();
+			ValidCount++;
 		}
+	}
+
+	if (ValidCount > 0)
+	{
+		AverageParticleRadius = TotalRadius / ValidCount;
 	}
 
 	// Dynamic calculation: DepthFalloff = ParticleRadius * 0.7

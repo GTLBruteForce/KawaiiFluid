@@ -5,6 +5,8 @@
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/IKawaiiFluidRenderable.h"
 #include "Rendering/KawaiiFluidRenderResource.h"
+#include "Rendering/KawaiiFluidRenderController.h"
+#include "Rendering/KawaiiFluidSSFRRenderer.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
@@ -14,6 +16,57 @@
 #include "PipelineStateCache.h"
 #include "RHIStaticStates.h"
 #include "CommonRenderResources.h"
+
+//=============================================================================
+// Helper: Collect Active SSFR Renderers (Legacy + New Architecture)
+//=============================================================================
+
+static void CollectActiveSSFRRenderers(
+	UFluidRendererSubsystem* Subsystem,
+	TArray<FKawaiiFluidRenderResource*>& OutResources,
+	TArray<float>& OutRadii,
+	TArray<FString>& OutDebugNames)
+{
+	if (!Subsystem)
+	{
+		return;
+	}
+
+	// Legacy: Collect from IKawaiiFluidRenderable
+	TArray<IKawaiiFluidRenderable*> Renderables = Subsystem->GetAllRenderables();
+	for (IKawaiiFluidRenderable* Renderable : Renderables)
+	{
+		if (Renderable && Renderable->ShouldUseSSFR())
+		{
+			FKawaiiFluidRenderResource* Resource = Renderable->GetFluidRenderResource();
+			if (Resource && Resource->IsValid())
+			{
+				OutResources.Add(Resource);
+				OutRadii.Add(Renderable->GetParticleRenderRadius());
+				OutDebugNames.Add(Renderable->GetDebugName());
+			}
+		}
+	}
+
+	// New: Collect from RenderControllers
+	const TArray<UKawaiiFluidRenderController*>& Controllers = Subsystem->GetAllRenderControllers();
+	for (UKawaiiFluidRenderController* Controller : Controllers)
+	{
+		if (!Controller) continue;
+
+		UKawaiiFluidSSFRRenderer* SSFRRenderer = Controller->GetSSFRRenderer();
+		if (SSFRRenderer && SSFRRenderer->IsRenderingActive())
+		{
+			FKawaiiFluidRenderResource* Resource = SSFRRenderer->GetFluidRenderResource();
+			if (Resource && Resource->IsValid())
+			{
+				OutResources.Add(Resource);
+				OutRadii.Add(SSFRRenderer->GetCachedParticleRadius());
+				OutDebugNames.Add(TEXT("SSFR_RenderController"));
+			}
+		}
+	}
+}
 
 //=============================================================================
 // Depth Pass Implementation
@@ -53,18 +106,24 @@ void RenderFluidDepthPass(
 	// Hardware Depth를 Far로 초기화 (Reversed-Z 기준)
 	AddClearDepthStencilPass(GraphBuilder, FluidDepthStencil, true, 0.0f, true, 0);
 
-	TArray<IKawaiiFluidRenderable*> Renderables = Subsystem->GetAllRenderables();
+	// Collect active SSFR renderers (Legacy + New Architecture)
+	TArray<FKawaiiFluidRenderResource*> Resources;
+	TArray<float> Radii;
+	TArray<FString> DebugNames;
+	CollectActiveSSFRRenderers(Subsystem, Resources, Radii, DebugNames);
 
-	for (IKawaiiFluidRenderable* Renderable : Renderables)
+	if (Resources.Num() == 0)
 	{
-		// 유효성 검증
-		if (!Renderable || !Renderable->ShouldUseSSFR() || !Renderable->
-			IsFluidRenderResourceValid())
-		{
-			continue;
-		}
+		return; // No SSFR renderers active
+	}
 
-		FKawaiiFluidRenderResource* RR = Renderable->GetFluidRenderResource();
+	// Render each SSFR renderer's particles
+	for (int32 i = 0; i < Resources.Num(); ++i)
+	{
+		FKawaiiFluidRenderResource* RR = Resources[i];
+		float ParticleRadius = Radii[i];
+		const FString& DebugName = DebugNames[i];
+
 		const TArray<FKawaiiRenderParticle>& CachedParticles = RR->GetCachedParticles();
 
 		if (CachedParticles.Num() == 0)
@@ -73,7 +132,7 @@ void RenderFluidDepthPass(
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("DepthPass (SSFR): %s with %d particles"),
-		       *Renderable->GetDebugName(), CachedParticles.Num());
+		       *DebugName, CachedParticles.Num());
 
 		// Position만 추출
 		TArray<FVector3f> ParticlePositions;
@@ -97,7 +156,6 @@ void RenderFluidDepthPass(
 		FMatrix ViewMatrix = View.ViewMatrices.GetViewMatrix();
 		FMatrix ProjectionMatrix = View.ViewMatrices.GetProjectionMatrix();
 		FMatrix ViewProjectionMatrix = View.ViewMatrices.GetViewProjectionMatrix();
-		float ParticleRadius = Renderable->GetParticleRenderRadius();
 
 		// Shader Parameters
 		auto* PassParameters = GraphBuilder.AllocParameters<FFluidDepthParameters>();
@@ -130,7 +188,7 @@ void RenderFluidDepthPass(
 		TShaderMapRef<FFluidDepthPS> PixelShader(GlobalShaderMap);
 
 		GraphBuilder.AddPass(
-			RDG_EVENT_NAME("DepthDraw_SSFR_%s", *Renderable->GetDebugName()),
+			RDG_EVENT_NAME("DepthDraw_SSFR_%s", *DebugName),
 			PassParameters,
 			ERDGPassFlags::Raster,
 			[VertexShader, PixelShader, PassParameters, ParticleCount = CachedParticles.Num()](

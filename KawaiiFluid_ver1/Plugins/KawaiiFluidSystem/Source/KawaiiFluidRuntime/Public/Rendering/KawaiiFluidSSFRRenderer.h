@@ -6,10 +6,12 @@
 #include "UObject/Object.h"
 #include "Interfaces/IKawaiiFluidRenderer.h"
 #include "Core/FluidParticle.h"
+#include "Core/KawaiiRenderParticle.h"
 #include "Rendering/KawaiiFluidRendererSettings.h"
 #include "KawaiiFluidSSFRRenderer.generated.h"
 
 class UFluidRendererSubsystem;
+class FKawaiiFluidRenderResource;
 
 /**
  * Screen Space Fluid Rendering (SSFR) renderer (UObject-based)
@@ -57,6 +59,19 @@ public:
 	virtual bool IsEnabled() const override { return bEnabled; }
 	virtual EKawaiiFluidRenderingMode GetRenderingMode() const override { return EKawaiiFluidRenderingMode::SSFR; }
 	virtual void SetEnabled(bool bInEnabled) override { bEnabled = bInEnabled; }
+
+	//========================================
+	// GPU Resource Access (for ViewExtension)
+	//========================================
+
+	/** Get GPU render resource (for ViewExtension access) */
+	FKawaiiFluidRenderResource* GetFluidRenderResource() const;
+
+	/** Check if rendering is active and resource is valid */
+	bool IsRenderingActive() const;
+
+	/** Get cached particle radius (for ViewExtension access) */
+	float GetCachedParticleRadius() const { return CachedParticleRadius; }
 
 	//========================================
 	// Enable Control
@@ -157,9 +172,6 @@ protected:
 	/** Update GPU render resources */
 	void UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius);
 
-	/** Execute SSFR pipeline (via ViewExtension) */
-	void ExecuteSSFRPipeline();
-
 private:
 	/** Cached particle positions */
 	TArray<FVector> CachedParticlePositions;
@@ -170,4 +182,14 @@ private:
 	/** Cached renderer subsystem reference (for ViewExtension access) */
 	UPROPERTY()
 	TObjectPtr<UFluidRendererSubsystem> RendererSubsystem;
+
+	//========================================
+	// GPU Resources (SSFR Pipeline)
+	//========================================
+
+	/** GPU render resource (manages structured buffers for SSFR) */
+	TSharedPtr<FKawaiiFluidRenderResource> RenderResource;
+
+	/** Converted render particles cache (FFluidParticle → FKawaiiRenderParticle) */
+	TArray<FKawaiiRenderParticle> RenderParticlesCache;
 };

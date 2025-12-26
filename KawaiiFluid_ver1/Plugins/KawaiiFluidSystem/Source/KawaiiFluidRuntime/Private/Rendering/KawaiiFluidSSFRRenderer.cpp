@@ -3,6 +3,8 @@
 #include "Rendering/KawaiiFluidSSFRRenderer.h"
 #include "Interfaces/IKawaiiFluidDataProvider.h"
 #include "Rendering/FluidRendererSubsystem.h"
+#include "Rendering/KawaiiFluidRenderResource.h"
+#include "Core/KawaiiRenderParticle.h"
 
 UKawaiiFluidSSFRRenderer::UKawaiiFluidSSFRRenderer()
 {
@@ -35,15 +37,42 @@ void UKawaiiFluidSSFRRenderer::Initialize(UWorld* InWorld, AActor* InOwner)
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("KawaiiFluidSSFRRenderer: Initialized (FluidColor: %s, MaxParticles: %d)"),
+	// Create GPU render resource
+	RenderResource = MakeShared<FKawaiiFluidRenderResource>();
+
+	// Initialize on render thread
+	ENQUEUE_RENDER_COMMAND(InitSSFRRenderResource)(
+		[RenderResourcePtr = RenderResource.Get()](FRHICommandListImmediate& RHICmdList)
+		{
+			RenderResourcePtr->InitResource(RHICmdList);
+		}
+	);
+
+	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Initialized GPU resources (FluidColor: %s, MaxParticles: %d)"),
 		*FluidColor.ToString(),
 		MaxRenderParticles);
 }
 
 void UKawaiiFluidSSFRRenderer::Cleanup()
 {
+	// Release render resource
+	if (RenderResource.IsValid())
+	{
+		ENQUEUE_RENDER_COMMAND(ReleaseSSFRRenderResource)(
+			[RenderResource = MoveTemp(RenderResource)](FRHICommandListImmediate& RHICmdList) mutable
+			{
+				if (RenderResource.IsValid())
+				{
+					RenderResource->ReleaseResource();
+					RenderResource.Reset();
+				}
+			}
+		);
+	}
+
 	// Clear cached data
 	CachedParticlePositions.Empty();
+	RenderParticlesCache.Empty();
 	RendererSubsystem = nullptr;
 	bIsRenderingActive = false;
 
@@ -51,6 +80,8 @@ void UKawaiiFluidSSFRRenderer::Cleanup()
 	CachedWorld = nullptr;
 	CachedOwner = nullptr;
 	bEnabled = false;
+
+	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Cleanup completed"));
 }
 
 void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSettings& Settings)
@@ -96,11 +127,8 @@ void UKawaiiFluidSSFRRenderer::UpdateRendering(const IKawaiiFluidDataProvider* D
 	// Get particle radius
 	float ParticleRadius = DataProvider->GetParticleRenderRadius();
 
-	// Update GPU resources
+	// Update GPU resources (ViewExtension will handle rendering automatically)
 	UpdateGPUResources(SimParticles, ParticleRadius);
-
-	// Execute SSFR pipeline (via ViewExtension)
-	ExecuteSSFRPipeline();
 
 	// Update stats
 	LastRenderedParticleCount = NumParticles;
@@ -112,31 +140,32 @@ void UKawaiiFluidSSFRRenderer::UpdateGPUResources(const TArray<FFluidParticle>& 
 	// Limit particle count
 	int32 NumParticles = FMath::Min(Particles.Num(), MaxRenderParticles);
 
-	// Update position data cache
-	CachedParticlePositions.SetNum(NumParticles);
+	// Convert FFluidParticle → FKawaiiRenderParticle
+	RenderParticlesCache.SetNum(NumParticles);
 	for (int32 i = 0; i < NumParticles; ++i)
 	{
-		CachedParticlePositions[i] = Particles[i].Position;
+		RenderParticlesCache[i].Position = FVector3f(Particles[i].Position);
+		RenderParticlesCache[i].Velocity = FVector3f(Particles[i].Velocity);
+		RenderParticlesCache[i].Radius = ParticleRadius;
+		RenderParticlesCache[i].Padding = 0.0f;
 	}
 
-	CachedParticleRadius = ParticleRadius;
+	// Upload to GPU (via RenderResource)
+	if (RenderResource.IsValid())
+	{
+		RenderResource->UpdateParticleData(RenderParticlesCache);
+	}
 
-	// TODO: Upload to GPU buffers
-	// - Structured Buffer for particle positions
-	// - Constant Buffer for rendering parameters
-	// - Interface with ViewExtension for GPU rendering
+	// Cache particle radius for ViewExtension access
+	CachedParticleRadius = ParticleRadius;
 }
 
-void UKawaiiFluidSSFRRenderer::ExecuteSSFRPipeline()
+FKawaiiFluidRenderResource* UKawaiiFluidSSFRRenderer::GetFluidRenderResource() const
 {
-	// TODO: Trigger SSFR rendering via ViewExtension
-	// - Pass particle data to ViewExtension
-	// - Execute depth pass
-	// - Execute thickness pass (if enabled)
-	// - Execute smoothing/filtering passes
-	// - Execute surface reconstruction
-	// - Composite with scene
+	return RenderResource.Get();
+}
 
-	// Note: Actual implementation requires ViewExtension integration
-	// which communicates with the cached RendererSubsystem
+bool UKawaiiFluidSSFRRenderer::IsRenderingActive() const
+{
+	return bIsRenderingActive && RenderResource.IsValid();
 }
