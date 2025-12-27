@@ -270,6 +270,13 @@ UKawaiiFluidSimulationContext* UKawaiiFluidSimulatorSubsystem::GetOrCreateContex
 
 void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float DeltaTime)
 {
+	static bool bLoggedOnce = false;
+	if (!bLoggedOnce && AllModules.Num() > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Subsystem SimulateIndependent: AllModules.Num()=%d"), AllModules.Num());
+		bLoggedOnce = true;
+	}
+
 	for (UKawaiiFluidSimulationModule* Module : AllModules)
 	{
 		if (!Module)
@@ -317,6 +324,13 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 		// Simulate
 		TArray<FFluidParticle>& Particles = Module->GetParticlesMutable();
 		float AccumulatedTime = Module->GetAccumulatedTime();
+
+		static bool bSimLoggedOnce = false;
+		if (!bSimLoggedOnce)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Subsystem: Calling Context->Simulate for Module with %d particles"), Particles.Num());
+			bSimLoggedOnce = true;
+		}
 
 		Context->Simulate(Particles, EffectivePreset, Params, *SpatialHash, DeltaTime, AccumulatedTime);
 

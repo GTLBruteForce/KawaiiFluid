@@ -54,7 +54,7 @@ public:
 
 	/** 모듈 초기화 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Module")
-	void Initialize(UKawaiiFluidPresetDataAsset* InPreset);
+	virtual void Initialize(UKawaiiFluidPresetDataAsset* InPreset);
 
 	/** 모듈 정리 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Module")
@@ -77,7 +77,7 @@ public:
 	UKawaiiFluidPresetDataAsset* GetPreset() const { return Preset; }
 
 	/** 시뮬레이션 파라미터 빌드 */
-	FKawaiiFluidSimulationParams BuildSimulationParams() const;
+	virtual FKawaiiFluidSimulationParams BuildSimulationParams() const;
 
 	/** Override 적용된 Effective Preset 반환 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Module")

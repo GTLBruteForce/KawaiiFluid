@@ -3,191 +3,95 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/KawaiiFluidSimulationComponent.h"
+#include "Components/ActorComponent.h"
+#include "Modules/KawaiiSlimeSimulationModule.h"
+#include "Rendering/KawaiiFluidRendererSettings.h"
 #include "KawaiiSlimeComponent.generated.h"
 
-/**
- * Slime Interaction Delegates (Section 11 of SlimeImplementationInsights.md)
- */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnSlimeGroundContact, FVector, Location, FVector, Normal);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSlimeObjectEntered, AActor*, Object);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSlimeObjectExited, AActor*, Object);
+class UKawaiiFluidRenderingModule;
+class UKawaiiFluidPresetDataAsset;
 
 /**
- * Kawaii Slime Component
+ * Kawaii Slime Component (모듈 기반)
  *
- * Implementation based on SlimeImplementationInsights.md
+ * 슬라임 시뮬레이션을 위한 통합 컴포넌트입니다.
+ * UKawaiiSlimeSimulationModule을 통해 슬라임 전용 기능을 제공합니다.
  *
- * Core Features (Section 3):
- * 1. Shape Matching - Form restoration (most important!)
- * 2. Clustering - Split/merge handling (Union-Find)
- * 3. Nucleus Control - Player movement (core particles only)
- *
- * Additional Features:
- * - Surface Tension (Section 7)
- * - Anti-Gravity (Section 13.1)
- * - Decompose Mode (fluid-like behavior)
- * - Interaction Events (Section 11)
+ * 사용:
+ * @code
+ * SlimeComponent = CreateDefaultSubobject<UKawaiiSlimeComponent>(TEXT("SlimeComponent"));
+ * SlimeComponent->SlimeModule->ApplyMovementInput(Input);
+ * @endcode
  */
-UCLASS(ClassGroup=(KawaiiFluid), meta=(BlueprintSpawnableComponent))
-class KAWAIIFLUIDRUNTIME_API UKawaiiSlimeComponent : public UKawaiiFluidSimulationComponent
+UCLASS(ClassGroup=(KawaiiFluid), meta=(BlueprintSpawnableComponent, DisplayName="Kawaii Slime"))
+class KAWAIIFLUIDRUNTIME_API UKawaiiSlimeComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
 public:
 	UKawaiiSlimeComponent();
 
+	//========================================
+	// UActorComponent Interface
+	//========================================
+
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	//========================================
-	// Shape Matching (Section 4)
-	// Most important for slime form maintenance!
+	// Modules (Blueprint 직접 접근 가능)
 	//========================================
 
-	/** Enable shape matching constraint */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|ShapeMatching")
-	bool bEnableShapeMatching = true;
-
-	/** Shape matching stiffness (0 = soft slime, 1 = rigid jelly) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|ShapeMatching", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float ShapeMatchingStiffness = 0.3f;
-
-	/** Core particle stiffness multiplier (anchor particles get stronger restoration) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|ShapeMatching", meta = (ClampMin = "1.0", ClampMax = "5.0"))
-	float CoreStiffnessMultiplier = 2.5f;
-
-	/** Core radius ratio (particles within this ratio from center are "core") */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|ShapeMatching", meta = (ClampMin = "0.1", ClampMax = "0.5"))
-	float CoreRadiusRatio = 0.3f;
+	/** 슬라임 시뮬레이션 모듈 - 슬라임 전용 API 제공 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Instanced, Category = "Slime")
+	TObjectPtr<UKawaiiSlimeSimulationModule> SlimeModule;
 
 	//========================================
-	// Nucleus Control (Section 6)
-	// Player input goes to nucleus -> particles follow
+	// Preset (SimulationModule에 전달)
 	//========================================
 
-	/** Nucleus position (center of slime, camera follows this) */
-	UPROPERTY(BlueprintReadOnly, Category = "Slime|Nucleus")
-	FVector NucleusPosition;
-
-	/** Nucleus velocity */
-	UPROPERTY(BlueprintReadOnly, Category = "Slime|Nucleus")
-	FVector NucleusVelocity;
-
-	/** Nucleus attraction strength - how strongly particles are pulled toward center */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Nucleus", meta = (ClampMin = "0.0", ClampMax = "100.0"))
-	float NucleusAttractionStrength = 15.0f;
-
-	/** Attraction falloff - outer particles get weaker attraction (0 = uniform, 1 = strong falloff) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Nucleus", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AttractionFalloff = 0.3f;
-
-	/** How strongly nucleus follows particle center (0 = fixed, 1 = instant follow) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Nucleus", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float NucleusFollowStrength = 0.1f;
+	/** Fluid preset data asset */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Configuration")
+	TObjectPtr<UKawaiiFluidPresetDataAsset> Preset;
 
 	//========================================
-	// Movement (Player Input - Section 6.2)
+	// Rendering Settings
 	//========================================
 
-	/** Movement force applied to core particles */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Movement")
-	float MoveForce = 500.0f;
+	/** Enable rendering */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Rendering")
+	bool bEnableRendering = true;
 
-	/** Jump impulse strength */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Movement")
-	float JumpStrength = 800.0f;
+	/** ISM Renderer Settings */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "ISM Settings"))
+	FKawaiiFluidISMRendererSettings ISMSettings;
 
-	/** Max move speed */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Movement")
-	float MaxMoveSpeed = 600.0f;
-
-	//========================================
-	// Clustering (Section 5)
-	// Split/merge detection using Union-Find
-	//========================================
-
-	/** Enable clustering (split/merge detection) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Cluster")
-	bool bEnableClustering = true;
-
-	/** Main cluster ID (player controlled) */
-	UPROPERTY(BlueprintReadOnly, Category = "Slime|Cluster")
-	int32 MainClusterID = 0;
-
-	/** Number of clusters */
-	UPROPERTY(BlueprintReadOnly, Category = "Slime|Cluster")
-	int32 ClusterCount = 1;
+	/** SSFR Renderer Settings */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "SSFR Settings"))
+	FKawaiiFluidSSFRRendererSettings SSFRSettings;
 
 	//========================================
-	// Surface Tension (Section 7)
+	// Auto Spawn
 	//========================================
 
-	/** Enable surface tension for slime */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Surface")
-	bool bEnableSurfaceTension = true;
+	/** Spawn on begin play */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Spawn")
+	bool bSpawnOnBeginPlay = true;
 
-	/** Surface tension coefficient */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Surface", meta = (ClampMin = "0.0"))
-	float SurfaceTensionCoefficient = 0.5f;
+	/** Auto spawn count */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Spawn", meta = (ClampMin = "1", ClampMax = "5000", EditCondition = "bSpawnOnBeginPlay"))
+	int32 AutoSpawnCount = 100;
 
-	/** Surface detection threshold */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Surface", meta = (ClampMin = "0.1", ClampMax = "2.0"))
-	float SurfaceThreshold = 0.5f;
-
-	//========================================
-	// Decompose Mode (Fluid-like behavior)
-	//========================================
-
-	/** Enable decompose mode - particles behave like fluid (no shape matching/nucleus attraction) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Decompose")
-	bool bDecomposeMode = false;
-
-	/** Auto-recompose after time (0 = never) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Decompose", meta = (ClampMin = "0.0"))
-	float RecomposeDelay = 3.0f;
+	/** Auto spawn radius */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Spawn", meta = (ClampMin = "1.0", ClampMax = "500.0", EditCondition = "bSpawnOnBeginPlay"))
+	float AutoSpawnRadius = 50.0f;
 
 	//========================================
-	// Anti-Gravity (Section 13.1 - Jump Form Preservation)
+	// Blueprint API (모듈에 위임)
 	//========================================
 
-	/** Anti-gravity strength during jump (counters gravity to maintain form) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|AntiGravity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AntiGravityStrength = 0.5f;
-
-	/** Is slime currently in air (jumping) */
-	UPROPERTY(BlueprintReadOnly, Category = "Slime|AntiGravity")
-	bool bIsInAir = false;
-
-	/** Grounded threshold (ratio of particles touching ground) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|AntiGravity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float GroundedThreshold = 0.2f;
-
-	//========================================
-	// Interaction Events (Section 11)
-	//========================================
-
-	/** Fired when slime contacts ground */
-	UPROPERTY(BlueprintAssignable, Category = "Slime|Events")
-	FOnSlimeGroundContact OnGroundContact;
-
-	/** Fired when object enters slime */
-	UPROPERTY(BlueprintAssignable, Category = "Slime|Events")
-	FOnSlimeObjectEntered OnObjectEntered;
-
-	/** Fired when object exits slime */
-	UPROPERTY(BlueprintAssignable, Category = "Slime|Events")
-	FOnSlimeObjectExited OnObjectExited;
-
-	/** Threshold for "inside slime" detection (nearby particle count) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Interaction", meta = (ClampMin = "1", ClampMax = "20"))
-	int32 InsideThreshold = 5;
-
-	//========================================
-	// Blueprint API
-	//========================================
-
-	/** Apply movement input (call from Pawn) - Section 6.2/10.3 */
+	/** Apply movement input (call from Pawn) */
 	UFUNCTION(BlueprintCallable, Category = "Slime|Input")
 	void ApplyMovementInput(FVector Input);
 
@@ -207,7 +111,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Slime|Query")
 	int32 GetMainClusterParticleCount() const;
 
-	/** Check if actor is inside slime (Section 11.2) */
+	/** Check if actor is inside slime */
 	UFUNCTION(BlueprintCallable, Category = "Slime|Query")
 	bool IsActorInsideSlime(AActor* Actor) const;
 
@@ -215,76 +119,55 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Slime|Query")
 	bool IsGrounded() const;
 
+	/** Get nucleus position */
+	UFUNCTION(BlueprintCallable, Category = "Slime|Query")
+	FVector GetNucleusPosition() const;
+
+	/** Get particle count */
+	UFUNCTION(BlueprintCallable, Category = "Slime|Query")
+	int32 GetParticleCount() const;
+
 	//========================================
-	// Overrides
+	// Events (모듈 이벤트 바인딩용)
 	//========================================
 
-	virtual FKawaiiFluidSimulationParams BuildSimulationParams() const override;
+	/** Fired when slime contacts ground */
+	UPROPERTY(BlueprintAssignable, Category = "Slime|Events")
+	FOnSlimeGroundContactModule OnGroundContact;
 
-protected:
-	//========================================
-	// Core Slime Logic (Section 3)
-	//========================================
+	/** Fired when object enters slime */
+	UPROPERTY(BlueprintAssignable, Category = "Slime|Events")
+	FOnSlimeObjectEnteredModule OnObjectEntered;
 
-	/** Initialize rest shape for shape matching (called when particles spawn) */
-	void InitializeRestShape();
-
-	/** Update core particle flags based on distance from center */
-	void UpdateCoreParticles();
-
-	/** Apply nucleus attraction - pull particles toward center (Section 6.2 Method 1) */
-	void ApplyNucleusAttraction(float DeltaTime);
-
-	/** Update nucleus position and velocity */
-	void UpdateNucleus(float DeltaTime);
-
-	/** Apply anti-gravity during jump */
-	void ApplyAntiGravity(float DeltaTime);
-
-	/** Update cluster assignments using Union-Find (Section 5.3) */
-	void UpdateClusters();
-
-	/** Detect surface particles and compute normals (Section 7.3) */
-	void UpdateSurfaceParticles();
-
-	/** Apply surface tension to surface particles (Section 7.2) */
-	void ApplySurfaceTension();
-
-	/** Check ground contact and update grounded state */
-	void UpdateGroundedState();
-
-	/** Check for ground contact and fire events (Section 11.3) */
-	void CheckGroundContact();
-
-	/** Track objects inside slime for enter/exit events */
-	void UpdateObjectTracking();
+	/** Fired when object exits slime */
+	UPROPERTY(BlueprintAssignable, Category = "Slime|Events")
+	FOnSlimeObjectExitedModule OnObjectExited;
 
 private:
 	//========================================
-	// Union-Find Helpers (Section 5.3)
+	// Rendering Module
 	//========================================
 
-	int32 FindRoot(TArray<int32>& Parent, int32 Index);
-	void UnionSets(TArray<int32>& Parent, TArray<int32>& Rank, int32 A, int32 B);
-
-	//========================================
-	// Internal State
-	//========================================
-
-	/** Timer for auto-recompose */
-	float DecomposeTimer = 0.0f;
-
-	/** Flag to initialize rest shape once */
-	bool bRestShapeInitialized = false;
-
-	/** Cached max distance from center (for core particle calculation) */
-	float CachedMaxDistanceFromCenter = 0.0f;
-
-	/** Tracked actors currently inside slime (for enter/exit events) */
 	UPROPERTY()
-	TSet<TWeakObjectPtr<AActor>> ActorsInsideSlime;
+	TObjectPtr<UKawaiiFluidRenderingModule> RenderingModule;
 
-	/** Actors to check for interaction (registered externally or found via overlap) */
-	UPROPERTY()
-	TArray<TWeakObjectPtr<AActor>> TrackedActors;
+	//========================================
+	// Subsystem Registration
+	//========================================
+
+	void RegisterToSubsystem();
+	void UnregisterFromSubsystem();
+
+	//========================================
+	// Event Binding
+	//========================================
+
+	UFUNCTION()
+	void HandleGroundContact(FVector Location, FVector Normal);
+
+	UFUNCTION()
+	void HandleObjectEntered(AActor* Object);
+
+	UFUNCTION()
+	void HandleObjectExited(AActor* Object);
 };
