@@ -68,6 +68,34 @@ struct KAWAIIFLUIDRUNTIME_API FFluidParticle
 	// 이웃 입자 인덱스 (캐싱용)
 	TArray<int32> NeighborIndices;
 
+	//========================================
+	// Slime-specific fields
+	//========================================
+
+	// 클러스터 ID (슬라임 분리/합체용)
+	UPROPERTY(BlueprintReadOnly, Category = "Particle|Slime")
+	int32 ClusterID;
+
+	// Shape Matching용 초기 오프셋 (중심으로부터의 상대 위치)
+	FVector RestOffset;
+
+	// 표면 파티클 여부
+	UPROPERTY(BlueprintReadOnly, Category = "Particle|Slime")
+	bool bIsSurfaceParticle;
+
+	// 표면 법선 (표면장력 계산용)
+	FVector SurfaceNormal;
+
+	// 코어 파티클 여부 (형태 유지의 앵커 역할)
+	UPROPERTY(BlueprintReadOnly, Category = "Particle|Slime")
+	bool bIsCoreParticle;
+
+	// 코어로부터의 거리 비율 (0 = 중심, 1 = 표면)
+	float DistanceFromCoreRatio;
+
+	// 흔적 스폰 여부 (중복 방지용)
+	bool bTrailSpawned;
+
 	FFluidParticle()
 		: Position(FVector::ZeroVector)
 		, PredictedPosition(FVector::ZeroVector)
@@ -82,6 +110,13 @@ struct KAWAIIFLUIDRUNTIME_API FFluidParticle
 		, bJustDetached(false)
 		, bNearGround(false)
 		, ParticleID(-1)
+		, ClusterID(0)
+		, RestOffset(FVector::ZeroVector)
+		, bIsSurfaceParticle(false)
+		, SurfaceNormal(FVector::ZeroVector)
+		, bIsCoreParticle(false)
+		, DistanceFromCoreRatio(1.0f)
+		, bTrailSpawned(false)
 	{
 	}
 
@@ -99,6 +134,13 @@ struct KAWAIIFLUIDRUNTIME_API FFluidParticle
 		, bJustDetached(false)
 		, bNearGround(false)
 		, ParticleID(InID)
+		, ClusterID(0)
+		, RestOffset(FVector::ZeroVector)
+		, bIsSurfaceParticle(false)
+		, SurfaceNormal(FVector::ZeroVector)
+		, bIsCoreParticle(false)
+		, DistanceFromCoreRatio(1.0f)
+		, bTrailSpawned(false)
 	{
 	}
 };

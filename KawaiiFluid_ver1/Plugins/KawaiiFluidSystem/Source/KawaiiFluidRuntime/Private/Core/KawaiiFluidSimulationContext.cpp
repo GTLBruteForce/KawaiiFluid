@@ -114,7 +114,49 @@ void UKawaiiFluidSimulationContext::SimulateSubstep(
 	// 3. Solve density constraints
 	{
 		SCOPE_CYCLE_COUNTER(STAT_ContextSolveDensity);
+
+		// Determine if we need to store original positions for core particle reduction
+		const bool bHasCoreReduction = Params.CoreDensityConstraintReduction > 0.0f;
+
+		// Store original predicted positions (before density constraint)
+		TArray<FVector> OriginalPositions;
+		if (bHasCoreReduction)
+		{
+			OriginalPositions.SetNum(Particles.Num());
+			for (int32 i = 0; i < Particles.Num(); ++i)
+			{
+				OriginalPositions[i] = Particles[i].PredictedPosition;
+			}
+		}
+
 		SolveDensityConstraints(Particles, Preset, SubstepDT);
+
+		// Apply density constraint reduction for core particles
+		if (bHasCoreReduction)
+		{
+			ParallelFor(Particles.Num(), [&](int32 i)
+			{
+				FFluidParticle& P = Particles[i];
+
+				// Core particles have reduced density constraint effect
+				if (P.bIsCoreParticle)
+				{
+					// Blend between density-corrected position and original position
+					// Higher reduction = closer to original position (less density constraint effect)
+					P.PredictedPosition = FMath::Lerp(
+						P.PredictedPosition,
+						OriginalPositions[i],
+						Params.CoreDensityConstraintReduction
+					);
+				}
+			});
+		}
+	}
+
+	// 3.5. Apply shape matching (for slime - after density, before collision)
+	if (Params.bEnableShapeMatching)
+	{
+		ApplyShapeMatchingConstraint(Particles, Params);
 	}
 
 	// 4. Handle collisions
@@ -549,6 +591,98 @@ void UKawaiiFluidSimulationContext::ApplyAdhesion(
 			Preset->AdhesionRadius,
 			Preset->DetachThreshold
 		);
+	}
+}
+
+void UKawaiiFluidSimulationContext::ApplyShapeMatchingConstraint(
+	TArray<FFluidParticle>& Particles,
+	const FKawaiiFluidSimulationParams& Params)
+{
+	if (Particles.Num() < 2)
+	{
+		return;
+	}
+
+	// DEBUG: Log first few frames
+	static int32 DebugFrameCount = 0;
+	bool bDebugLog = (DebugFrameCount++ < 5);
+	if (bDebugLog)
+	{
+		int32 ValidRestOffsetCount = 0;
+		for (const FFluidParticle& P : Particles)
+		{
+			if (!P.RestOffset.IsNearlyZero())
+			{
+				ValidRestOffsetCount++;
+			}
+		}
+		UE_LOG(LogTemp, Warning, TEXT("ShapeMatching: Particles=%d, ValidRestOffsets=%d, Stiffness=%.2f"),
+			Particles.Num(), ValidRestOffsetCount, Params.ShapeMatchingStiffness);
+	}
+
+	// Group particles by cluster
+	TMap<int32, TArray<int32>> ClusterParticleMap;
+	for (int32 i = 0; i < Particles.Num(); ++i)
+	{
+		ClusterParticleMap.FindOrAdd(Particles[i].ClusterID).Add(i);
+	}
+
+	// Apply shape matching per cluster
+	for (auto& Pair : ClusterParticleMap)
+	{
+		const TArray<int32>& Indices = Pair.Value;
+
+		if (Indices.Num() < 2)
+		{
+			continue;
+		}
+
+		// Compute current center of mass (using PredictedPosition)
+		FVector xcm = FVector::ZeroVector;
+		float TotalMass = 0.0f;
+
+		for (int32 Idx : Indices)
+		{
+			const FFluidParticle& P = Particles[Idx];
+			xcm += P.PredictedPosition * P.Mass;
+			TotalMass += P.Mass;
+		}
+
+		if (TotalMass < KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+
+		xcm /= TotalMass;
+
+		// Apply shape matching constraint via Velocity
+		for (int32 Idx : Indices)
+		{
+			FFluidParticle& P = Particles[Idx];
+
+			if (P.RestOffset.IsNearlyZero())
+			{
+				continue;
+			}
+
+			// Goal position = current center + rest offset (no rotation for now)
+			FVector GoalPosition = xcm + P.RestOffset;
+
+			// Compute correction direction and magnitude
+			FVector Correction = GoalPosition - P.PredictedPosition;
+
+			// Apply stiffness (core particles get stronger correction)
+			float EffectiveStiffness = Params.ShapeMatchingStiffness;
+			if (P.bIsCoreParticle)
+			{
+				EffectiveStiffness *= Params.ShapeMatchingCoreMultiplier;
+			}
+			EffectiveStiffness = FMath::Clamp(EffectiveStiffness, 0.0f, 1.0f);
+
+			// Apply correction to PredictedPosition (proper PBF approach)
+			// FinalizePositions will derive Velocity from position change
+			P.PredictedPosition += Correction * EffectiveStiffness;
+		}
 	}
 }
 

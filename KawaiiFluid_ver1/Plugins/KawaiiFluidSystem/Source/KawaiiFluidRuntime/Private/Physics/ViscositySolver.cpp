@@ -15,12 +15,25 @@ void FViscositySolver::ApplyXSPH(TArray<FFluidParticle>& Particles, float Viscos
 		return;
 	}
 
+	const int32 ParticleCount = Particles.Num();
+	if (ParticleCount == 0)
+	{
+		return;
+	}
+
+	// [개선 1] 커널 계수 캐싱 - 프레임당 한 번만 계산
+	SPHKernels::FKernelCoefficients KernelCoeffs;
+	KernelCoeffs.Precompute(SmoothingRadius);
+
+	// 반경 제곱 (sqrt 호출 회피용)
+	const float RadiusSquared = SmoothingRadius * SmoothingRadius;
+
 	// 임시 배열에 새 속도 저장
 	TArray<FVector> NewVelocities;
-	NewVelocities.SetNum(Particles.Num());
+	NewVelocities.SetNum(ParticleCount);
 
-	// 병렬 계산
-	ParallelFor(Particles.Num(), [&](int32 i)
+	// [개선 4] 작업량 균등화 - Unbalanced 플래그로 이웃 수 편차 대응
+	ParallelFor(ParticleCount, [&](int32 i)
 	{
 		const FFluidParticle& Particle = Particles[i];
 		FVector VelocityCorrection = FVector::ZeroVector;
@@ -34,13 +47,26 @@ void FViscositySolver::ApplyXSPH(TArray<FFluidParticle>& Particles, float Viscos
 			}
 
 			const FFluidParticle& Neighbor = Particles[NeighborIdx];
-			FVector r = Particle.Position - Neighbor.Position;
+			const FVector r = Particle.Position - Neighbor.Position;
 
-			// Poly6 커널로 가중치 계산
-			float Weight = SPHKernels::Poly6(r, SmoothingRadius);
+			// [개선 2] 반경 기반 필터링 - r² > h² 이면 조기 스킵 (sqrt 회피)
+			const float rSquared = r.SizeSquared();
+			if (rSquared > RadiusSquared)
+			{
+				continue;
+			}
+
+			// [개선 1] 캐싱된 계수로 Poly6 직접 계산
+			// W(r, h) = Poly6Coeff * (h² - r²)³
+			// 단위 변환: cm -> m (계수는 이미 m 단위로 계산됨)
+			constexpr float CM_TO_M_SQ = 0.0001f; // (0.01)²
+			const float h2_m = KernelCoeffs.h2;
+			const float r2_m = rSquared * CM_TO_M_SQ;
+			const float diff = h2_m - r2_m;
+			const float Weight = (diff > 0.0f) ? KernelCoeffs.Poly6Coeff * diff * diff * diff : 0.0f;
 
 			// 속도 차이
-			FVector VelocityDiff = Neighbor.Velocity - Particle.Velocity;
+			const FVector VelocityDiff = Neighbor.Velocity - Particle.Velocity;
 
 			VelocityCorrection += VelocityDiff * Weight;
 			WeightSum += Weight;
@@ -54,13 +80,15 @@ void FViscositySolver::ApplyXSPH(TArray<FFluidParticle>& Particles, float Viscos
 
 		// XSPH 점성 적용: v_new = v + c * Σ(v_j - v_i) * W
 		NewVelocities[i] = Particle.Velocity + ViscosityCoeff * VelocityCorrection;
-	});
 
-	// 병렬 속도 업데이트
-	ParallelFor(Particles.Num(), [&](int32 i)
+	}, EParallelForFlags::Unbalanced);
+
+	// [개선 3] 속도 적용 루프 단순화 - ParallelFor 대신 단순 for 루프
+	// 단순 복사 작업은 스케줄러 오버헤드가 더 큼
+	for (int32 i = 0; i < ParticleCount; ++i)
 	{
 		Particles[i].Velocity = NewVelocities[i];
-	});
+	}
 }
 
 void FViscositySolver::ApplyViscoelasticSprings(TArray<FFluidParticle>& Particles, float SpringStiffness, float DeltaTime)

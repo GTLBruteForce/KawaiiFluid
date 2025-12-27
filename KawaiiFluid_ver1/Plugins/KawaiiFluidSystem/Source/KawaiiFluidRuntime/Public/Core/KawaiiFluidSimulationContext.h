@@ -129,6 +129,12 @@ protected:
 		const TArray<UFluidCollider*>& Colliders
 	);
 
+	/** 3.5. Apply shape matching constraint (for slime) */
+	virtual void ApplyShapeMatchingConstraint(
+		TArray<FFluidParticle>& Particles,
+		const FKawaiiFluidSimulationParams& Params
+	);
+
 	/** Update attached particle positions (bone tracking) */
 	virtual void UpdateAttachedParticlePositions(
 		TArray<FFluidParticle>& Particles,
