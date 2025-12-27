@@ -84,6 +84,9 @@ public:
 	/** Get local rendering parameters for batching */
 	const FFluidRenderingParameters& GetLocalParameters() const { return LocalParameters; }
 
+	/** Get composite pass (for ViewExtension access) */
+	TSharedPtr<class IFluidCompositePass> GetCompositePass() const { return CompositePass; }
+
 	//========================================
 	// Enable Control
 	//========================================
@@ -134,6 +137,9 @@ protected:
 	/** Update GPU render resources */
 	void UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius);
 
+	/** Update composite pass if mode changed */
+	void UpdateCompositePass();
+
 private:
 	/** Cached particle positions */
 	TArray<FVector> CachedParticlePositions;
@@ -154,4 +160,14 @@ private:
 
 	/** Converted render particles cache (FFluidParticle → FKawaiiRenderParticle) */
 	TArray<FKawaiiRenderParticle> RenderParticlesCache;
+
+	//========================================
+	// Composite Pass (Custom vs GBuffer rendering)
+	//========================================
+
+	/** Composite rendering pass (Custom or GBuffer) */
+	TSharedPtr<IFluidCompositePass> CompositePass;
+
+	/** Cached rendering mode (to detect mode changes) */
+	ESSFRRenderingMode CachedSSFRMode = ESSFRRenderingMode::Custom;
 };

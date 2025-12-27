@@ -18,6 +18,21 @@ enum class EFluidRenderingQuality : uint8
 };
 
 /**
+ * SSFR Rendering Mode
+ * - Custom: Custom lighting (Blinn-Phong, manual Fresnel)
+ * - GBuffer: Write to GBuffer for Unreal's Lumen/VSM (deferred rendering)
+ */
+UENUM(BlueprintType)
+enum class ESSFRRenderingMode : uint8
+{
+	/** Custom lighting implementation (Blinn-Phong, Fresnel, Beer's Law) */
+	Custom UMETA(DisplayName = "Custom"),
+
+	/** Write to GBuffer for Lumen/VSM integration */
+	GBuffer UMETA(DisplayName = "G-Buffer")
+};
+
+/**
  * 유체 렌더링 파라미터
  * SSFR 파이프라인 전반에 사용되는 설정들
  */
@@ -86,6 +101,29 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Performance", meta = (ClampMin = "0.25", ClampMax = "1.0"))
 	float RenderTargetScale = 1.0f;
 
+	/** SSFR rendering mode */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering")
+	ESSFRRenderingMode SSFRMode = ESSFRRenderingMode::Custom;
+
+	//========================================
+	// G-Buffer Mode Parameters (for future implementation)
+	//========================================
+
+	/** Metallic value for GBuffer (G-Buffer mode only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
+		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+	float Metallic = 0.1f;
+
+	/** Roughness value for GBuffer (G-Buffer mode only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
+		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+	float Roughness = 0.3f;
+
+	/** Subsurface scattering opacity (G-Buffer mode only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
+		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+	float SubsurfaceOpacity = 0.5f;
+
 	FFluidRenderingParameters() = default;
 };
 
@@ -93,6 +131,7 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
 {
 	uint32 Hash = GetTypeHash(Params.bEnableRendering);
+	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Params.SSFRMode)));
 	Hash = HashCombine(Hash, GetTypeHash(Params.FluidColor.ToString()));
 	Hash = HashCombine(Hash, GetTypeHash(Params.FresnelStrength));
 	Hash = HashCombine(Hash, GetTypeHash(Params.RefractiveIndex));
@@ -105,6 +144,9 @@ FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
 	Hash = HashCombine(Hash, GetTypeHash(Params.BilateralFilterRadius));
 	Hash = HashCombine(Hash, GetTypeHash(Params.RenderTargetScale));
 	Hash = HashCombine(Hash, GetTypeHash(Params.ThicknessScale));
+	Hash = HashCombine(Hash, GetTypeHash(Params.Metallic));
+	Hash = HashCombine(Hash, GetTypeHash(Params.Roughness));
+	Hash = HashCombine(Hash, GetTypeHash(Params.SubsurfaceOpacity));
 	return Hash;
 }
 
@@ -112,6 +154,7 @@ FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
 FORCEINLINE bool operator==(const FFluidRenderingParameters& A, const FFluidRenderingParameters& B)
 {
 	return A.bEnableRendering == B.bEnableRendering &&
+	       A.SSFRMode == B.SSFRMode &&
 	       A.FluidColor.Equals(B.FluidColor, 0.001f) &&
 	       FMath::IsNearlyEqual(A.FresnelStrength, B.FresnelStrength, 0.001f) &&
 	       FMath::IsNearlyEqual(A.RefractiveIndex, B.RefractiveIndex, 0.001f) &&
@@ -123,5 +166,8 @@ FORCEINLINE bool operator==(const FFluidRenderingParameters& A, const FFluidRend
 	       FMath::IsNearlyEqual(A.SmoothingStrength, B.SmoothingStrength, 0.001f) &&
 	       A.BilateralFilterRadius == B.BilateralFilterRadius &&
 	       FMath::IsNearlyEqual(A.RenderTargetScale, B.RenderTargetScale, 0.001f) &&
-	       FMath::IsNearlyEqual(A.ThicknessScale, B.ThicknessScale, 0.001f);
+	       FMath::IsNearlyEqual(A.ThicknessScale, B.ThicknessScale, 0.001f) &&
+	       FMath::IsNearlyEqual(A.Metallic, B.Metallic, 0.001f) &&
+	       FMath::IsNearlyEqual(A.Roughness, B.Roughness, 0.001f) &&
+	       FMath::IsNearlyEqual(A.SubsurfaceOpacity, B.SubsurfaceOpacity, 0.001f);
 }

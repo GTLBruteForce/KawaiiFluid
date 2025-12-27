@@ -5,6 +5,7 @@
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/KawaiiFluidRenderResource.h"
 #include "Core/KawaiiRenderParticle.h"
+#include "Rendering/Composite/FluidCompositePassFactory.h"
 
 UKawaiiFluidSSFRRenderer::UKawaiiFluidSSFRRenderer()
 {
@@ -48,6 +49,9 @@ void UKawaiiFluidSSFRRenderer::Initialize(UWorld* InWorld, AActor* InOwner)
 		}
 	);
 
+	// Create initial composite pass
+	UpdateCompositePass();
+
 	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Initialized GPU resources (MaxParticles: %d)"),
 		MaxRenderParticles);
 }
@@ -90,6 +94,7 @@ void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSetti
 
 	// Map settings to LocalParameters
 	LocalParameters.bEnableRendering = Settings.bEnabled;
+	LocalParameters.SSFRMode = Settings.SSFRMode;
 	LocalParameters.FluidColor = Settings.FluidColor;
 	LocalParameters.FresnelStrength = Settings.FresnelStrength;
 	LocalParameters.RefractiveIndex = Settings.RefractiveIndex;
@@ -101,9 +106,15 @@ void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSetti
 	LocalParameters.BilateralFilterRadius = Settings.BilateralFilterRadius;
 	LocalParameters.RenderTargetScale = Settings.RenderTargetScale;
 	LocalParameters.ThicknessScale = Settings.ThicknessScale;
+	LocalParameters.Metallic = Settings.Metallic;
+	LocalParameters.Roughness = Settings.Roughness;
+	LocalParameters.SubsurfaceOpacity = Settings.SubsurfaceOpacity;
 
 	// MaxRenderParticles stays as member variable (not in LocalParameters)
 	MaxRenderParticles = Settings.MaxRenderParticles;
+
+	// Update composite pass if mode changed
+	UpdateCompositePass();
 
 	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Applied settings (Enabled: %s, UseSimRadius: %s, Color: %s, MaxParticles: %d)"),
 		bEnabled ? TEXT("true") : TEXT("false"),
@@ -191,4 +202,17 @@ FKawaiiFluidRenderResource* UKawaiiFluidSSFRRenderer::GetFluidRenderResource() c
 bool UKawaiiFluidSSFRRenderer::IsRenderingActive() const
 {
 	return bIsRenderingActive && RenderResource.IsValid();
+}
+
+void UKawaiiFluidSSFRRenderer::UpdateCompositePass()
+{
+	// Recreate composite pass if mode changed or pass doesn't exist
+	if (!CompositePass || CachedSSFRMode != LocalParameters.SSFRMode)
+	{
+		CachedSSFRMode = LocalParameters.SSFRMode;
+		CompositePass = FFluidCompositePassFactory::Create(CachedSSFRMode);
+
+		UE_LOG(LogTemp, Log, TEXT("SSFR Renderer mode changed to: %s"),
+			CachedSSFRMode == ESSFRRenderingMode::Custom ? TEXT("Custom") : TEXT("G-Buffer"));
+	}
 }

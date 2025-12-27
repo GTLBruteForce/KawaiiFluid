@@ -20,6 +20,7 @@
 #include "Rendering/FluidCompositeShaders.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
 #include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/Composite/IFluidCompositePass.h"
 
 static TRefCountPtr<IPooledRenderTarget> GFluidCompositeDebug_KeepAlive;
 
@@ -159,8 +160,10 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 
 				// ============================================
 				// Batch renderers by LocalParameters (New Architecture only)
+				// Separate batches by rendering mode
 				// ============================================
-				TMap<FFluidRenderingParameters, TArray<UKawaiiFluidSSFRRenderer*>> Batches;
+				TMap<FFluidRenderingParameters, TArray<UKawaiiFluidSSFRRenderer*>> CustomBatches;
+				TMap<FFluidRenderingParameters, TArray<UKawaiiFluidSSFRRenderer*>> GBufferBatches;
 
 				const TArray<UKawaiiFluidRenderingModule*>& Modules = SubsystemPtr->GetAllRenderingModules();
 				for (UKawaiiFluidRenderingModule* Module : Modules)
@@ -171,7 +174,16 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 					if (SSFRRenderer && SSFRRenderer->IsRenderingActive())
 					{
 						const FFluidRenderingParameters& Params = SSFRRenderer->GetLocalParameters();
-						Batches.FindOrAdd(Params).Add(SSFRRenderer);
+
+						// Route to appropriate batch based on rendering mode
+						if (Params.SSFRMode == ESSFRRenderingMode::Custom)
+						{
+							CustomBatches.FindOrAdd(Params).Add(SSFRRenderer);
+						}
+						else if (Params.SSFRMode == ESSFRRenderingMode::GBuffer)
+						{
+							GBufferBatches.FindOrAdd(Params).Add(SSFRRenderer);
+						}
 					}
 				}
 
@@ -187,7 +199,7 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 					}
 				}
 
-				if (!bHasLegacySSFR && Batches.Num() == 0)
+				if (!bHasLegacySSFR && CustomBatches.Num() == 0 && GBufferBatches.Num() == 0)
 				{
 					return InInputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
 				}
@@ -310,9 +322,9 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 				}
 
 				// ============================================
-				// NEW PATH: Batched Rendering (per LocalParameters)
+				// NEW PATH: Custom Mode Batched Rendering
 				// ============================================
-				for (auto& Batch : Batches)
+				for (auto& Batch : CustomBatches)
 				{
 					const FFluidRenderingParameters& BatchParams = Batch.Key;
 					const TArray<UKawaiiFluidSSFRRenderer*>& Renderers = Batch.Value;
@@ -363,22 +375,49 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 
 							if (BatchNormalTexture && BatchThicknessTexture)
 							{
-								// Composite Pass (use BatchParams for per-batch settings)
-								RenderFluidCompositePass_Internal(
-									GraphBuilder,
-									View,
-									BatchParams,  // Use batch-specific parameters
-									BatchSmoothedDepthTexture,
-									BatchNormalTexture,
-									BatchThicknessTexture,
-									SceneDepthTexture,
-									SceneColorInput.Texture,
-									Output
-								);
+								// Composite Pass - Use appropriate composite pass implementation
+								// Get composite pass from first renderer (all renderers in batch share same params/mode)
+								if (Renderers.Num() > 0 && Renderers[0]->GetCompositePass())
+								{
+									FFluidIntermediateTextures IntermediateTextures;
+									IntermediateTextures.SmoothedDepthTexture = BatchSmoothedDepthTexture;
+									IntermediateTextures.NormalTexture = BatchNormalTexture;
+									IntermediateTextures.ThicknessTexture = BatchThicknessTexture;
+
+									Renderers[0]->GetCompositePass()->RenderComposite(
+										GraphBuilder,
+										View,
+										BatchParams,
+										IntermediateTextures,
+										SceneDepthTexture,
+										SceneColorInput.Texture,
+										Output
+									);
+								}
 							}
 						}
 					}
 				}
+
+				// ============================================
+				// G-Buffer Mode Warning (Not Yet Implemented)
+				// ============================================
+				if (GBufferBatches.Num() > 0)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("G-Buffer mode renderers detected but not yet supported in Tonemap pass. Count: %d"), GBufferBatches.Num());
+					UE_LOG(LogTemp, Warning, TEXT("G-Buffer mode requires implementation in MotionBlur pass (pre-lighting). See IMPLEMENTATION_GUIDE.md"));
+				}
+
+				// TODO (TEAM MEMBER): Implement G-Buffer mode rendering in MotionBlur pass
+				// G-Buffer mode should write to GBuffer BEFORE lighting (pre-lighting stage)
+				// This allows Lumen/VSM to process the fluid surface
+				//
+				// Implementation steps:
+				// 1. Add MotionBlur pass subscription (similar to Tonemap above)
+				// 2. Process GBufferBatches in MotionBlur callback
+				// 3. Run Depth/Smoothing/Normal/Thickness passes (same as Custom mode)
+				// 4. Call CompositePass->RenderComposite() which writes to GBuffer
+				// 5. Test with Lumen reflections and VSM shadows
 
 				// Debug Keep Alive
 				GraphBuilder.QueueTextureExtraction(Output.Texture, &GFluidCompositeDebug_KeepAlive);

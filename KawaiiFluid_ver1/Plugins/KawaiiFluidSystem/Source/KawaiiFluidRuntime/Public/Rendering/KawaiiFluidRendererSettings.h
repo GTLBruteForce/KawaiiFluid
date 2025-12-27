@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
+#include "Rendering/FluidRenderingParameters.h"
 #include "KawaiiFluidRendererSettings.generated.h"
 
 /**
@@ -97,6 +98,10 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	// Rendering
 	//========================================
 
+	/** SSFR rendering mode selection */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled"))
+	ESSFRRenderingMode SSFRMode = ESSFRRenderingMode::Custom;
+
 	/** Use simulation particle radius for rendering (if true, ignores ParticleRenderRadius) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled"))
 	bool bUseSimulationRadius = false;
@@ -104,6 +109,25 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	/** Particle render radius (screen space, cm) - only used when bUseSimulationRadius is false */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled && !bUseSimulationRadius", ClampMin = "1.0", ClampMax = "100.0"))
 	float ParticleRenderRadius = 15.0f;
+
+	//========================================
+	// G-Buffer Mode Parameters
+	//========================================
+
+	/** Metallic value for GBuffer (G-Buffer mode only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
+		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+	float Metallic = 0.1f;
+
+	/** Roughness value for GBuffer (G-Buffer mode only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
+		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+	float Roughness = 0.3f;
+
+	/** Subsurface scattering opacity (G-Buffer mode only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
+		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+	float SubsurfaceOpacity = 0.5f;
 
 	//========================================
 	// Smoothing
