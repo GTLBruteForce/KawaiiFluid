@@ -44,46 +44,6 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidISMRendererSettings
 	/** Particle scale multiplier */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Configuration", meta = (EditCondition = "bEnabled", ClampMin = "0.01", ClampMax = "10.0"))
 	float ParticleScale = 1.0f;
-
-	//========================================
-	// Performance
-	//========================================
-
-	/** Maximum particles to render */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (EditCondition = "bEnabled", ClampMin = "1", ClampMax = "100000"))
-	int32 MaxRenderParticles = 10000;
-
-	/** Cull distance (cm) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (EditCondition = "bEnabled", ClampMin = "0.0"))
-	float CullDistance = 10000.0f;
-
-	/** Cast shadows */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (EditCondition = "bEnabled"))
-	bool bCastShadow = false;
-
-	//========================================
-	// Visual
-	//========================================
-
-	/** Enable velocity-based rotation */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (EditCondition = "bEnabled"))
-	bool bRotateByVelocity = false;
-
-	/** Enable velocity-based color */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (EditCondition = "bEnabled"))
-	bool bColorByVelocity = false;
-
-	/** Minimum velocity color */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (EditCondition = "bEnabled && bColorByVelocity"))
-	FLinearColor MinVelocityColor = FLinearColor::Blue;
-
-	/** Maximum velocity color */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (EditCondition = "bEnabled && bColorByVelocity"))
-	FLinearColor MaxVelocityColor = FLinearColor::Red;
-
-	/** Velocity normalization value */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (EditCondition = "bEnabled && bColorByVelocity", ClampMin = "1.0"))
-	float MaxVelocityForColor = 1000.0f;
 };
 
 /**

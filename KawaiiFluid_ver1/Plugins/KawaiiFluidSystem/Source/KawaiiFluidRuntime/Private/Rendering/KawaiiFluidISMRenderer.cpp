@@ -52,14 +52,6 @@ void UKawaiiFluidISMRenderer::ApplySettings(const FKawaiiFluidISMRendererSetting
 	ParticleMesh = Settings.ParticleMesh;
 	ParticleMaterial = Settings.ParticleMaterial;
 	ParticleScale = Settings.ParticleScale;
-	MaxRenderParticles = Settings.MaxRenderParticles;
-	CullDistance = Settings.CullDistance;
-	bCastShadow = Settings.bCastShadow;
-	bRotateByVelocity = Settings.bRotateByVelocity;
-	bColorByVelocity = Settings.bColorByVelocity;
-	MinVelocityColor = Settings.MinVelocityColor;
-	MaxVelocityColor = Settings.MaxVelocityColor;
-	MaxVelocityForColor = Settings.MaxVelocityForColor;
 
 	// If ISMComponent already exists, update it with new settings
 	if (ISMComponent)
@@ -74,20 +66,6 @@ void UKawaiiFluidISMRenderer::ApplySettings(const FKawaiiFluidISMRendererSetting
 		if (ParticleMaterial)
 		{
 			ISMComponent->SetMaterial(0, ParticleMaterial);
-		}
-
-		// Update rendering properties
-		ISMComponent->SetCastShadow(bCastShadow);
-		ISMComponent->SetCullDistances(0, CullDistance);
-
-		// Update custom data for color by velocity
-		if (bColorByVelocity)
-		{
-			ISMComponent->NumCustomDataFloats = 4;
-		}
-		else
-		{
-			ISMComponent->NumCustomDataFloats = 0;
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("ISMRenderer: Applied settings to existing ISMComponent (Mesh: %s, Material: %s)"),

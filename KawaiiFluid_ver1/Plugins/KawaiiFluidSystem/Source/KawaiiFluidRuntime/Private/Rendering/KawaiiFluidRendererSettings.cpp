@@ -6,14 +6,6 @@
 FKawaiiFluidISMRendererSettings::FKawaiiFluidISMRendererSettings()
 	: bEnabled(true)
 	, ParticleScale(1.0f)
-	, MaxRenderParticles(10000)
-	, CullDistance(10000.0f)
-	, bCastShadow(false)
-	, bRotateByVelocity(false)
-	, bColorByVelocity(false)
-	, MinVelocityColor(FLinearColor::Blue)
-	, MaxVelocityColor(FLinearColor::Red)
-	, MaxVelocityForColor(1000.0f)
 {
 	// Set default mesh
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMeshFinder(TEXT("/Engine/BasicShapes/Sphere"));
