@@ -3,7 +3,7 @@
 #include "Physics/ViscositySolver.h"
 #include "Physics/SPHKernels.h"
 
-namespace
+namespace ViscosityConstants
 {
 	constexpr float CM_TO_M = 0.01f;
 	constexpr float CM_TO_M_SQ = CM_TO_M * CM_TO_M;
@@ -66,7 +66,7 @@ void FViscositySolver::ApplyXSPH(TArray<FFluidParticle>& Particles, float Viscos
 			// W(r, h) = Poly6Coeff * (h² - r²)³
 			// 단위 변환: cm -> m (계수는 이미 m 단위로 계산됨)
 			const float h2_m = KernelCoeffs.h2;
-			const float r2_m = rSquared * CM_TO_M_SQ;
+			const float r2_m = rSquared * ViscosityConstants::CM_TO_M_SQ;
 			const float diff = h2_m - r2_m;
 			const float Weight = (diff > 0.0f) ? KernelCoeffs.Poly6Coeff * diff * diff * diff : 0.0f;
 
