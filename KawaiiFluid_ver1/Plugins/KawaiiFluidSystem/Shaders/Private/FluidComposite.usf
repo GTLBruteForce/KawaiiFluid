@@ -7,7 +7,8 @@
 Texture2D<float> FluidDepthTexture;
 Texture2D<float4> FluidNormalTexture;
 Texture2D<float> FluidThicknessTexture;
-Texture2D<float> SceneDepthTexture; 
+Texture2D<float> SceneDepthTexture;
+Texture2D<float4> SceneColorTexture;
 
 SamplerState InputSampler;
 
@@ -21,25 +22,26 @@ float RefractiveIndex;
 float AbsorptionCoefficient;
 float SpecularStrength;
 float SpecularRoughness;
+float4 EnvironmentLightColor;
 
 // -----------------------------------------------------------------------------
 // Vertex Shader
 // -----------------------------------------------------------------------------
 struct FCompositeVSToPS
 {
-    float4 Position : SV_POSITION;
-    float2 UV : TEXCOORD0; 
+	float4 Position : SV_POSITION;
+	float2 UV : TEXCOORD0;
 };
 
 void MainVS(
-    in uint VertexID : SV_VertexID,
-    out FCompositeVSToPS Output
+	in uint VertexID : SV_VertexID,
+	out FCompositeVSToPS Output
 )
 {
-    // Fullscreen Triangle
-    float2 UV = float2((VertexID << 1) & 2, VertexID & 2);
-    Output.UV = UV;
-    Output.Position = float4(UV * float2(2, -2) + float2(-1, 1), 0.5f, 1.0f);
+	// Fullscreen Triangle
+	float2 UV = float2((VertexID << 1) & 2, VertexID & 2);
+	Output.UV = UV;
+	Output.Position = float4(UV * float2(2, -2) + float2(-1, 1), 0.5f, 1.0f);
 }
 
 // -----------------------------------------------------------------------------
@@ -47,25 +49,25 @@ void MainVS(
 // -----------------------------------------------------------------------------
 
 // 배경 깊이 기준값 (너무 먼 곳은 유체 없음)
-#define BACKGROUND_DEPTH_THRESH 100000.0f 
+#define BACKGROUND_DEPTH_THRESH 100000.0f
 
 /**
  * Screen UV와 Linear Depth를 이용해 View Space Position 복원
  */
 float3 ReconstructViewPosition(float2 ScreenUV, float LinearDepth)
 {
-    // Clip Space 좌표 (Z는 0.5 등 임의값)
-    float4 ClipPosition = float4(ScreenUV * 2.0 - 1.0, 0.5, 1.0);
+	// Clip Space 좌표 (Z는 0.5 등 임의값)
+	float4 ClipPosition = float4(ScreenUV * 2.0 - 1.0, 0.5, 1.0);
 
-    // View Space로 역투영
-    float4 ViewPosition = mul(ClipPosition, InverseProjectionMatrix);
-    ViewPosition /= ViewPosition.w;
+	// View Space로 역투영
+	float4 ViewPosition = mul(ClipPosition, InverseProjectionMatrix);
+	ViewPosition /= ViewPosition.w;
 
-    // 카메라에서 픽셀 방향 벡터
-    float3 ViewRay = ViewPosition.xyz / ViewPosition.z;
+	// 카메라에서 픽셀 방향 벡터
+	float3 ViewRay = ViewPosition.xyz / ViewPosition.z;
 
-    // LinearDepth는 보통 양수(거리)이므로 음수(-Z)로 변환
-    return ViewRay * (-LinearDepth);
+	// LinearDepth는 보통 양수(거리)이므로 음수(-Z)로 변환
+	return ViewRay * (-LinearDepth);
 }
 
 // -----------------------------------------------------------------------------
@@ -73,97 +75,101 @@ float3 ReconstructViewPosition(float2 ScreenUV, float LinearDepth)
 // -----------------------------------------------------------------------------
 
 void MainPS(
-    FCompositeVSToPS Input,
-    out float4 OutColor : SV_Target0)
+	FCompositeVSToPS Input,
+	out float4 OutColor : SV_Target0)
 {
-    float2 UV = Input.UV;
+	float2 UV = Input.UV;
 
-    // 1. Fluid Depth 샘플링 (Linear Depth라고 가정)
-    float FluidDepth = FluidDepthTexture.Sample(InputSampler, UV);
+	// 1. Fluid Depth 샘플링 (Linear Depth라고 가정)
+	float FluidDepth = FluidDepthTexture.Sample(InputSampler, UV);
 
-    // 유체가 없는 곳(배경) 처리
-    // FluidDepth를 초기화할 때 아주 큰 값(예: 3.4e38)으로 했는지 확인 필요
-    if (FluidDepth > BACKGROUND_DEPTH_THRESH)
-    {
-        discard; // 혹은 return float4(0,0,0,0);
-        return;
-    }
+	// 유체가 없는 곳(배경) 처리
+	// FluidDepth를 초기화할 때 아주 큰 값(예: 3.4e38)으로 했는지 확인 필요
+	if (FluidDepth > BACKGROUND_DEPTH_THRESH)
+	{
+		discard; // 혹은 return float4(0,0,0,0);
+		return;
+	}
 
-    // 2. Scene Depth 가져오기 (DeviceZ -> Linear)
-    float SceneDeviceZ = SceneDepthTexture.SampleLevel(InputSampler, UV, 0).r;
-    float SceneLinearDepth = ConvertFromDeviceZ(SceneDeviceZ); // 언리얼 단위(cm)
+	// 2. Scene Depth 가져오기 (DeviceZ -> Linear)
+	float SceneDeviceZ = SceneDepthTexture.SampleLevel(InputSampler, UV, 0).r;
+	float SceneLinearDepth = ConvertFromDeviceZ(SceneDeviceZ);
 
-    // 3. Occlusion Test (가려짐 처리)
-    // FluidDepth와 SceneLinearDepth의 오차가 있을 수 있으므로 여유값(Bias)을 둠
-    if (FluidDepth > SceneLinearDepth + 2.0f)
-    {
-        discard;
-        return;
-    }
+	// 3. Occlusion Test (가려짐 처리)
+	// FluidDepth와 SceneLinearDepth의 오차가 있을 수 있으므로 여유값(Bias)을 둠
+	if (FluidDepth > SceneLinearDepth + 2.0f)
+	{
+		discard;
+		return;
+	}
 
-    // 4. Fluid 속성 샘플링
-    float3 Normal = FluidNormalTexture.Sample(InputSampler, UV).xyz;
-    float Thickness = FluidThicknessTexture.Sample(InputSampler, UV).r;
-    
-    // Normal이 (0,0,0)인 경우 방어 코드 (혹시 모를 에러 방지)
-    if (length(Normal) < 0.1f)
-    {
-        Normal = float3(0, 0, 1);
-    }
+	// 4. Fluid 속성 샘플링
+	float3 Normal = FluidNormalTexture.Sample(InputSampler, UV).xyz;
+	float Thickness = FluidThicknessTexture.Sample(InputSampler, UV).r;
 
-    // 5. 조명 계산 준비
-    float3 ViewPos = ReconstructViewPosition(UV, FluidDepth);
-    float3 ViewDir = normalize(-ViewPos); // 카메라를 향하는 벡터
+	// Normal이 (0,0,0)인 경우 방어 코드 (혹시 모를 에러 방지)
+	if (length(Normal) < 0.1f)
+	{
+		Normal = float3(0, 0, 1);
+	}
 
-    // A. Fresnel (반사율 - Schlick's approximation)
-    float NoV = saturate(dot(Normal, ViewDir));
-    float F0 = FresnelStrength;
-    float Fresnel = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);
+	// 5. 조명 계산 준비
+	float3 ViewPos = ReconstructViewPosition(UV, FluidDepth);
+	float3 ViewDir = normalize(-ViewPos); // 카메라를 향하는 벡터
 
-    // B. Specular (하이라이트) - 가상 조명
-    float3 LightDir = normalize(float3(0.5, 0.5, 1.0));
-    float3 HalfDir = normalize(LightDir + ViewDir);
-    float NoH = saturate(dot(Normal, HalfDir));
+	// A. Fresnel (반사율, Schlick's approximation 사용)
+	float NoV = saturate(dot(Normal, ViewDir));
+	float F0 = FresnelStrength;
+	float Fresnel = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);
 
-    // Roughness를 Shininess로 변환 (작은 roughness = 큰 shininess = 날카로운 하이라이트)
-    float Shininess = (1.0 - SpecularRoughness) * 128.0;
-    float Specular = pow(NoH, Shininess) * SpecularStrength;
+	// B. Specular (하이라이트) - 씬의 실제 Directional Light 사용
+	float3 LightDir = normalize(-View.DirectionalLightDirection);
+	float3 HalfDir = normalize(LightDir + ViewDir);
+	float NoH = saturate(dot(Normal, HalfDir));
 
-    // C. Beer's Law (올바른 물리 기반 투과율 계산)
-    // 색상별 흡수 계수: 유체 색상과 반대되는 색을 더 흡수
-    // 예: 파란 유체(0.2, 0.5, 0.8)는 빨간색(0.8)을 많이 흡수
-    float3 ColorAbsorption = (1.0 - FluidColor.rgb) * AbsorptionCoefficient;
+	// Roughness를 Shininess로 변환 (작은 roughness = 큰 shininess = 날카로운 하이라이트)
+	float Shininess = (1.0 - SpecularRoughness) * 128.0;
+	float Specular = pow(NoH, Shininess) * SpecularStrength;
 
-    // Transmittance: 두께가 클수록 빛이 덜 투과
-    // exp를 사용하여 지수적 감쇠 (Beer-Lambert Law)
-    float3 Transmittance = exp(-ColorAbsorption * Thickness * 0.1); // 0.1은 스케일 조정
+	// ========================================================================
+	// Color Compositing (Flex-style Simple Approach)
+	// ========================================================================
+	float3 FinalColor;
 
-    // D. 환경색 가정 (Scene Color가 없으므로 간단한 환경광 사용)
-    // 실제로는 Scene Color Texture를 샘플링해야 하지만, 없으므로 밝은 회색 가정
-    float3 EnvironmentColor = float3(0.8, 0.9, 1.0); // 하늘빛
-    float3 BackgroundColor = float3(0.5, 0.5, 0.5);  // 배경 (중간 회색)
+	// 1. Scene Color 샘플링 (배경색)
+	float3 SceneColor = SceneColorTexture.Sample(InputSampler, UV).rgb;
 
-    // E. 투과된 빛 (배경 + 유체 색상 흡수)
-    // 배경색이 유체를 통과하면서 유체 색상을 띔
-    float3 TransmittedLight = BackgroundColor * Transmittance;
+	// 2. 굴절된 배경색 샘플링
+	float2 RefractedUV = UV + Normal.xy * RefractiveIndex * 0.05;
+	RefractedUV = saturate(RefractedUV);
+	float3 RefractedBackground = SceneColorTexture.Sample(InputSampler, RefractedUV).rgb;
 
-    // 흡수된 빛이 유체 색상으로 보임
-    float3 AbsorbedLight = FluidColor.rgb * (1.0 - Transmittance) * 2.0; // 2.0은 색상 강도
+	// 3. Beer's Law: 두께에 따른 투과율 (단순 지수 감쇠)
+	// 얇은 부분 = 높은 투과율 (배경색 많이 보임 → 하늘색/흰색 계열)
+	// 두꺼운 부분 = 낮은 투과율 (유체색 많이 보임 → 진한 파란색)
+	float AbsorptionFactor = 1.0 - exp(-Thickness * AbsorptionCoefficient * 0.05);
 
-    // F. 반사된 빛 (Fresnel에 의한 환경 반사)
-    float3 ReflectedLight = EnvironmentColor * Fresnel;
+	// 4. 배경과 유체색 혼합
+	// AbsorptionFactor가 0 (얇음) → 배경색 그대로
+	// AbsorptionFactor가 1 (두꺼움) → 유체색
+	float3 BaseColor = lerp(RefractedBackground, FluidColor.rgb, AbsorptionFactor);
 
-    // 6. 최종 컬러 합성 (물리 기반)
-    // Fresnel에 따라 반사와 투과를 혼합
-    float3 BaseColor = lerp(TransmittedLight + AbsorbedLight, ReflectedLight, Fresnel);
-    float3 FinalColor = BaseColor + Specular; // Specular는 추가
+	// 5. Fresnel 반사 (환경광 반사)
+	// SceneColor 대신 별도의 밝은 Environment Light 사용
+	float3 ReflectedColor = EnvironmentLightColor.rgb * Fresnel;
 
-    // 7. Alpha 계산
-    // 두께가 있으면 불투명, 반사가 강하면 불투명
-    float Alpha = saturate(1.0 - exp(-Thickness * 0.005));
-    Alpha = max(Alpha, Fresnel * 0.8); 
+	// 6. 반사와 투과 혼합
+	BaseColor = lerp(BaseColor, ReflectedColor, Fresnel * 0.5);
 
-    // C++ BlendState: (SrcAlpha, InvSrcAlpha) 사용 중이므로
-    // RGB에 Alpha를 미리 곱하지 않고 내보냄
-    OutColor = float4(FinalColor, Alpha);
+	// 7. Specular 추가
+	FinalColor = BaseColor + Specular;
+
+	// 7. Alpha 계산
+	// 두께가 있으면 불투명, 반사가 강하면 불투명
+	float Alpha = saturate(1.0 - exp(-Thickness * 0.02));
+	Alpha = max(Alpha, Fresnel * 0.5);
+
+	// C++ BlendState: (SrcAlpha, InvSrcAlpha) 사용 중이므로
+	// RGB에 Alpha를 미리 곱하지 않고 내보냄
+	OutColor = float4(FinalColor, Alpha);
 }

@@ -97,9 +97,8 @@ void ReconstructNormalCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     // Normal 계산
     float3 Normal = normalize(cross(ddx, ddy));
 
-    // View Space에서 카메라를 향해야 하므로 Z > 0이어야 함
-    // 만약 Z < 0이면 방향 반전
-    if (Normal.z < 0.0)
+    // 올바른 방향으로 노멀 반전
+    if (Normal.z > 0.0)
     {
         Normal = -Normal;
     }

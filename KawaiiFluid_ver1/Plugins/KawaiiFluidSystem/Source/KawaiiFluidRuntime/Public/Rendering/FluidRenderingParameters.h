@@ -56,7 +56,7 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 
 	/** Fresnel 강도 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float FresnelStrength = 0.7f;
+	float FresnelStrength = 0.02f;
 
 	/** 굴절률 (IOR) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance", meta = (ClampMin = "1.0", ClampMax = "2.0"))
@@ -73,6 +73,10 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	/** 스펙큘러 거칠기 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance", meta = (ClampMin = "0.01", ClampMax = "1.0"))
 	float SpecularRoughness = 0.2f;
+
+	/** 환경광 색상 (Sky Light - 얇은 부분 반사색) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance")
+	FLinearColor EnvironmentLightColor = FLinearColor(0.8f, 0.9f, 1.0f, 1.0f);
 
 	/** Thickness 렌더링 스케일 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Thickness", meta = (ClampMin = "0.1", ClampMax = "10.0"))
@@ -95,6 +99,7 @@ FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
 	Hash = HashCombine(Hash, GetTypeHash(Params.AbsorptionCoefficient));
 	Hash = HashCombine(Hash, GetTypeHash(Params.SpecularStrength));
 	Hash = HashCombine(Hash, GetTypeHash(Params.SpecularRoughness));
+	Hash = HashCombine(Hash, GetTypeHash(Params.EnvironmentLightColor.ToString()));
 	Hash = HashCombine(Hash, GetTypeHash(Params.ParticleRenderRadius));
 	Hash = HashCombine(Hash, GetTypeHash(Params.SmoothingStrength));
 	Hash = HashCombine(Hash, GetTypeHash(Params.BilateralFilterRadius));
@@ -113,6 +118,7 @@ FORCEINLINE bool operator==(const FFluidRenderingParameters& A, const FFluidRend
 	       FMath::IsNearlyEqual(A.AbsorptionCoefficient, B.AbsorptionCoefficient, 0.001f) &&
 	       FMath::IsNearlyEqual(A.SpecularStrength, B.SpecularStrength, 0.001f) &&
 	       FMath::IsNearlyEqual(A.SpecularRoughness, B.SpecularRoughness, 0.001f) &&
+	       A.EnvironmentLightColor.Equals(B.EnvironmentLightColor, 0.001f) &&
 	       FMath::IsNearlyEqual(A.ParticleRenderRadius, B.ParticleRenderRadius, 0.001f) &&
 	       FMath::IsNearlyEqual(A.SmoothingStrength, B.SmoothingStrength, 0.001f) &&
 	       A.BilateralFilterRadius == B.BilateralFilterRadius &&

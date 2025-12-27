@@ -23,6 +23,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FFluidCompositeParameters, )
     // Scene Input
     // ------------------------------------------------------
     SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SceneDepthTexture)
+    SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SceneColorTexture)
     SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
 
     SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
@@ -43,6 +44,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FFluidCompositeParameters, )
     SHADER_PARAMETER(float, AbsorptionCoefficient)
     SHADER_PARAMETER(float, SpecularStrength)
     SHADER_PARAMETER(float, SpecularRoughness)
+    SHADER_PARAMETER(FLinearColor, EnvironmentLightColor)
 
     // ------------------------------------------------------
     // Render Targets (Output)

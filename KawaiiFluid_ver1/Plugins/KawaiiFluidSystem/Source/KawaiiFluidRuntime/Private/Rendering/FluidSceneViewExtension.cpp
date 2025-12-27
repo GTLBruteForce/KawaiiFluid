@@ -31,6 +31,7 @@ static void RenderFluidCompositePass_Internal(
 	FRDGTextureRef FluidNormalTexture,
 	FRDGTextureRef FluidThicknessTexture,
 	FRDGTextureRef SceneDepthTexture,
+	FRDGTextureRef SceneColorTexture,
 	FScreenPassRenderTarget Output
 )
 {
@@ -48,6 +49,7 @@ static void RenderFluidCompositePass_Internal(
 	PassParameters->FluidNormalTexture = FluidNormalTexture;
 	PassParameters->FluidThicknessTexture = FluidThicknessTexture;
 	PassParameters->SceneDepthTexture = SceneDepthTexture;
+	PassParameters->SceneColorTexture = SceneColorTexture;
 	PassParameters->View = View.ViewUniformBuffer;
 	PassParameters->InputSampler = TStaticSamplerState<
 		SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
@@ -64,6 +66,7 @@ static void RenderFluidCompositePass_Internal(
 	PassParameters->AbsorptionCoefficient = RenderParams.AbsorptionCoefficient;
 	PassParameters->SpecularStrength = RenderParams.SpecularStrength;
 	PassParameters->SpecularRoughness = RenderParams.SpecularRoughness;
+	PassParameters->EnvironmentLightColor = RenderParams.EnvironmentLightColor;
 
 	// 배경 위에 그리기
 	PassParameters->RenderTargets[0] = FRenderTargetBinding(
@@ -298,6 +301,7 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 									NormalTexture,
 									ThicknessTexture,
 									SceneDepthTexture,
+									SceneColorInput.Texture,
 									Output
 								);
 							}
@@ -368,6 +372,7 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 									BatchNormalTexture,
 									BatchThicknessTexture,
 									SceneDepthTexture,
+									SceneColorInput.Texture,
 									Output
 								);
 							}
