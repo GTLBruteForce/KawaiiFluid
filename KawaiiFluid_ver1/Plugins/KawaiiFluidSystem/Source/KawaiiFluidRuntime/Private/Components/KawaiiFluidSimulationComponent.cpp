@@ -248,7 +248,9 @@ bool UKawaiiFluidSimulationComponent::IsFluidRenderResourceValid() const
 
 float UKawaiiFluidSimulationComponent::GetParticleRadius() const
 {
-	return Preset ? Preset->ParticleRadius : 5.0f;
+	// Use SmoothingRadius for rendering (physics kernel radius, more appropriate for visual extent)
+	// This matches the SPH influence radius and provides physically accurate particle size
+	return Preset ? Preset->SmoothingRadius : 20.0f;
 }
 
 FString UKawaiiFluidSimulationComponent::GetDebugName() const

@@ -48,8 +48,7 @@ void UKawaiiFluidSSFRRenderer::Initialize(UWorld* InWorld, AActor* InOwner)
 		}
 	);
 
-	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Initialized GPU resources (FluidColor: %s, MaxParticles: %d)"),
-		*FluidColor.ToString(),
+	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Initialized GPU resources (MaxParticles: %d)"),
 		MaxRenderParticles);
 }
 
@@ -87,20 +86,30 @@ void UKawaiiFluidSSFRRenderer::Cleanup()
 void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSettings& Settings)
 {
 	bEnabled = Settings.bEnabled;
-	FluidColor = Settings.FluidColor;
-	Metallic = Settings.Metallic;
-	Roughness = Settings.Roughness;
-	RefractiveIndex = Settings.RefractiveIndex;
+	bUseSimulationRadius = Settings.bUseSimulationRadius;
+
+	// Map settings to LocalParameters
+	LocalParameters.bEnableRendering = Settings.bEnabled;
+	LocalParameters.FluidColor = Settings.FluidColor;
+	LocalParameters.FresnelStrength = Settings.FresnelStrength;
+	LocalParameters.RefractiveIndex = Settings.RefractiveIndex;
+	LocalParameters.AbsorptionCoefficient = Settings.AbsorptionCoefficient;
+	LocalParameters.SpecularStrength = Settings.SpecularStrength;
+	LocalParameters.SpecularRoughness = Settings.SpecularRoughness;
+	LocalParameters.ParticleRenderRadius = Settings.ParticleRenderRadius;
+	LocalParameters.SmoothingStrength = Settings.SmoothingStrength;
+	LocalParameters.BilateralFilterRadius = Settings.BilateralFilterRadius;
+	LocalParameters.RenderTargetScale = Settings.RenderTargetScale;
+	LocalParameters.ThicknessScale = Settings.ThicknessScale;
+
+	// MaxRenderParticles stays as member variable (not in LocalParameters)
 	MaxRenderParticles = Settings.MaxRenderParticles;
-	DepthBufferScale = Settings.DepthBufferScale;
-	bUseThicknessBuffer = Settings.bUseThicknessBuffer;
-	DepthSmoothingIterations = Settings.DepthSmoothingIterations;
-	FilterRadius = Settings.FilterRadius;
-	SurfaceTension = Settings.SurfaceTension;
-	FoamThreshold = Settings.FoamThreshold;
-	FoamColor = Settings.FoamColor;
-	bShowDebugVisualization = Settings.bShowDebugVisualization;
-	bShowRenderTargets = Settings.bShowRenderTargets;
+
+	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Applied settings (Enabled: %s, UseSimRadius: %s, Color: %s, MaxParticles: %d)"),
+		bEnabled ? TEXT("true") : TEXT("false"),
+		bUseSimulationRadius ? TEXT("true") : TEXT("false"),
+		*LocalParameters.FluidColor.ToString(),
+		MaxRenderParticles);
 }
 
 void UKawaiiFluidSSFRRenderer::UpdateRendering(const IKawaiiFluidDataProvider* DataProvider, float DeltaTime)
@@ -126,6 +135,12 @@ void UKawaiiFluidSSFRRenderer::UpdateRendering(const IKawaiiFluidDataProvider* D
 
 	// Get particle radius from simulation
 	float ParticleRadius = DataProvider->GetParticleRadius();
+
+	// Override with LocalParameters.ParticleRenderRadius if bUseSimulationRadius is false
+	if (bUseSimulationRadius)
+	{
+		LocalParameters.ParticleRenderRadius = ParticleRadius;
+	}
 
 	// Update GPU resources (ViewExtension will handle rendering automatically)
 	UpdateGPUResources(SimParticles, ParticleRadius);

@@ -26,7 +26,7 @@ static TRefCountPtr<IPooledRenderTarget> GFluidCompositeDebug_KeepAlive;
 static void RenderFluidCompositePass_Internal(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
-	UFluidRendererSubsystem* Subsystem,
+	const FFluidRenderingParameters& RenderParams,
 	FRDGTextureRef FluidDepthTexture,
 	FRDGTextureRef FluidNormalTexture,
 	FRDGTextureRef FluidThicknessTexture,
@@ -34,8 +34,7 @@ static void RenderFluidCompositePass_Internal(
 	FScreenPassRenderTarget Output
 )
 {
-	if (!Subsystem || !FluidDepthTexture || !FluidNormalTexture || !FluidThicknessTexture || !
-		SceneDepthTexture)
+	if (!FluidDepthTexture || !FluidNormalTexture || !FluidThicknessTexture || !SceneDepthTexture)
 	{
 		return;
 	}
@@ -58,7 +57,7 @@ static void RenderFluidCompositePass_Internal(
 	PassParameters->ProjectionMatrix = FMatrix44f(View.ViewMatrices.GetProjectionMatrix());
 	PassParameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetViewMatrix());
 
-	const FFluidRenderingParameters& RenderParams = Subsystem->RenderingParameters;
+	// Use RenderParams directly (passed from caller)
 	PassParameters->FluidColor = RenderParams.FluidColor;
 	PassParameters->FresnelStrength = RenderParams.FresnelStrength;
 	PassParameters->RefractiveIndex = RenderParams.RefractiveIndex;
@@ -155,38 +154,11 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 
 				RDG_EVENT_SCOPE(GraphBuilder, "KawaiiFluidRendering");
 
-				// Scene Depth 가져오기
-				FRDGTextureRef SceneDepthTexture = nullptr;
-				if (InInputs.SceneTextures.SceneTextures)
-				{
-					SceneDepthTexture = InInputs.SceneTextures.SceneTextures->GetContents()->SceneDepthTexture;
-				}
+				// ============================================
+				// Batch renderers by LocalParameters (New Architecture only)
+				// ============================================
+				TMap<FFluidRenderingParameters, TArray<UKawaiiFluidSSFRRenderer*>> Batches;
 
-				// Depth
-				FRDGTextureRef DepthTexture = nullptr;
-				RenderFluidDepthPass(GraphBuilder, View, SubsystemPtr, SceneDepthTexture, DepthTexture);
-				if (!DepthTexture) return InInputs.ReturnUntouchedSceneColorForPostProcessing(
-					GraphBuilder);
-
-				// Smoothing
-				FRDGTextureRef SmoothedDepthTexture = nullptr;
-				// Calculate DepthFalloff based on average ParticleRenderRadius
-				float AverageParticleRadius = 10.0f; // Default fallback
-				float TotalRadius = 0.0f;
-				int ValidCount = 0;
-
-				// Legacy: Collect from IKawaiiFluidRenderable
-				TArray<IKawaiiFluidRenderable*> Renderables = SubsystemPtr->GetAllRenderables();
-				for (IKawaiiFluidRenderable* Renderable : Renderables)
-				{
-					if (Renderable && Renderable->ShouldUseSSFR())
-					{
-						TotalRadius += Renderable->GetParticleRadius();
-						ValidCount++;
-					}
-				}
-
-				// New: Collect from RenderingModules
 				const TArray<UKawaiiFluidRenderingModule*>& Modules = SubsystemPtr->GetAllRenderingModules();
 				for (UKawaiiFluidRenderingModule* Module : Modules)
 				{
@@ -195,68 +167,42 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 					UKawaiiFluidSSFRRenderer* SSFRRenderer = Module->GetSSFRRenderer();
 					if (SSFRRenderer && SSFRRenderer->IsRenderingActive())
 					{
-						TotalRadius += SSFRRenderer->GetCachedParticleRadius();
-						ValidCount++;
+						const FFluidRenderingParameters& Params = SSFRRenderer->GetLocalParameters();
+						Batches.FindOrAdd(Params).Add(SSFRRenderer);
 					}
 				}
 
-				if (ValidCount > 0)
-				{
-					AverageParticleRadius = TotalRadius / ValidCount;
-				}
-
-				// SSFR 파라미터 (FluidSimulator에서 가져오기)
-				float BlurRadius = 40.0f;
-				float DepthFalloffMultiplier = 8.0f;
-				int32 NumIterations = 3;
-				float SmoothingStrength = 0.6f;
-
-				// Legacy: FluidSimulator가 있으면 파라미터 가져오기
-				for (IKawaiiFluidRenderable* Renderable : Renderables)
+				// Check if we have any renderers (Legacy or Batched)
+				TArray<IKawaiiFluidRenderable*> LegacyRenderables = SubsystemPtr->GetAllRenderables();
+				bool bHasLegacySSFR = false;
+				for (IKawaiiFluidRenderable* Renderable : LegacyRenderables)
 				{
 					if (Renderable && Renderable->ShouldUseSSFR())
 					{
-						// FluidSimulator로 캐스팅 시도
-						if (AFluidSimulator* Simulator = Cast<AFluidSimulator>(Renderable))
-						{
-							BlurRadius = Simulator->BlurRadiusPixels * Simulator->SmoothingStrength;
-							DepthFalloffMultiplier = Simulator->DepthFalloffMultiplier;
-							NumIterations = Simulator->SmoothingIterations;
-							SmoothingStrength = Simulator->SmoothingStrength;
-							break;  // 첫 번째 시뮬레이터 사용
-						}
+						bHasLegacySSFR = true;
+						break;
 					}
 				}
 
-				const float DepthFalloff = AverageParticleRadius * DepthFalloffMultiplier;
+				if (!bHasLegacySSFR && Batches.Num() == 0)
+				{
+					return InInputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
+				}
 
-				UE_LOG(LogTemp, Warning, TEXT("=== Smoothing Fix Params ==="));
-				UE_LOG(LogTemp, Warning, TEXT("ParticleRadius (World): %.1f"), AverageParticleRadius);
-				UE_LOG(LogTemp, Warning, TEXT("BlurRadius (Pixel): %.1f"), BlurRadius);
-				UE_LOG(LogTemp, Warning, TEXT("DepthFalloff (World): %.1f"), DepthFalloff);
+				// Scene Depth 가져오기
+				FRDGTextureRef SceneDepthTexture = nullptr;
+				if (InInputs.SceneTextures.SceneTextures)
+				{
+					SceneDepthTexture = InInputs.SceneTextures.SceneTextures->GetContents()->SceneDepthTexture;
+				}
 
-				RenderFluidSmoothingPass(GraphBuilder, View, DepthTexture, SmoothedDepthTexture,
-				                         BlurRadius, DepthFalloff, NumIterations);
-				if (!SmoothedDepthTexture) return InInputs.
-					ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
-
-				// Normal
-				FRDGTextureRef NormalTexture = nullptr;
-				RenderFluidNormalPass(GraphBuilder, View, SmoothedDepthTexture, NormalTexture);
-				if (!NormalTexture) return InInputs.ReturnUntouchedSceneColorForPostProcessing(
-					GraphBuilder);
-
-				// Thickness
-				FRDGTextureRef ThicknessTexture = nullptr;
-				RenderFluidThicknessPass(GraphBuilder, View, SubsystemPtr, ThicknessTexture);
-				if (!ThicknessTexture) return InInputs.ReturnUntouchedSceneColorForPostProcessing(
-					GraphBuilder);
-
-				// Composite Setup
+				// Composite Setup (공통)
 				FScreenPassTexture SceneColorInput = FScreenPassTexture(
 					InInputs.GetInput(EPostProcessMaterialInput::SceneColor));
-				if (!SceneColorInput.IsValid()) return InInputs.
-					ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
+				if (!SceneColorInput.IsValid())
+				{
+					return InInputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
+				}
 
 				// Output Target 결정
 				FScreenPassRenderTarget Output = InInputs.OverrideOutput;
@@ -273,20 +219,164 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 					AddDrawTexturePass(GraphBuilder, View, SceneColorInput, Output);
 				}
 
-				RenderFluidCompositePass_Internal(
-					GraphBuilder,
-					View,
-					SubsystemPtr,
-					SmoothedDepthTexture,
-					NormalTexture,
-					ThicknessTexture,
-					SceneDepthTexture,
-					Output
-				);
+				// ============================================
+				// LEGACY PATH: IKawaiiFluidRenderable (AFluidSimulator)
+				// ============================================
+				if (bHasLegacySSFR)
+				{
+					RDG_EVENT_SCOPE(GraphBuilder, "LegacyFluidRendering");
+
+					// Depth Pass
+					FRDGTextureRef DepthTexture = nullptr;
+					RenderFluidDepthPass(GraphBuilder, View, SubsystemPtr, SceneDepthTexture, DepthTexture);
+
+					if (DepthTexture)
+					{
+						// Calculate legacy parameters
+						float AverageParticleRadius = 10.0f;
+						float TotalRadius = 0.0f;
+						int ValidCount = 0;
+
+						for (IKawaiiFluidRenderable* Renderable : LegacyRenderables)
+						{
+							if (Renderable && Renderable->ShouldUseSSFR())
+							{
+								TotalRadius += Renderable->GetParticleRadius();
+								ValidCount++;
+							}
+						}
+
+						if (ValidCount > 0)
+						{
+							AverageParticleRadius = TotalRadius / ValidCount;
+						}
+
+						// SSFR 파라미터 (FluidSimulator에서 가져오기)
+						float BlurRadius = 40.0f;
+						float DepthFalloffMultiplier = 8.0f;
+						int32 NumIterations = 3;
+
+						for (IKawaiiFluidRenderable* Renderable : LegacyRenderables)
+						{
+							if (Renderable && Renderable->ShouldUseSSFR())
+							{
+								if (AFluidSimulator* Simulator = Cast<AFluidSimulator>(Renderable))
+								{
+									BlurRadius = Simulator->BlurRadiusPixels * Simulator->SmoothingStrength;
+									DepthFalloffMultiplier = Simulator->DepthFalloffMultiplier;
+									NumIterations = Simulator->SmoothingIterations;
+									break;
+								}
+							}
+						}
+
+						const float DepthFalloff = AverageParticleRadius * DepthFalloffMultiplier;
+
+						// Smoothing Pass
+						FRDGTextureRef SmoothedDepthTexture = nullptr;
+						RenderFluidSmoothingPass(GraphBuilder, View, DepthTexture, SmoothedDepthTexture,
+						                         BlurRadius, DepthFalloff, NumIterations);
+
+						if (SmoothedDepthTexture)
+						{
+							// Normal Pass
+							FRDGTextureRef NormalTexture = nullptr;
+							RenderFluidNormalPass(GraphBuilder, View, SmoothedDepthTexture, NormalTexture);
+
+							// Thickness Pass
+							FRDGTextureRef ThicknessTexture = nullptr;
+							RenderFluidThicknessPass(GraphBuilder, View, SubsystemPtr, ThicknessTexture);
+
+							if (NormalTexture && ThicknessTexture)
+							{
+								// Composite Pass (Legacy uses Subsystem->RenderingParameters)
+								RenderFluidCompositePass_Internal(
+									GraphBuilder,
+									View,
+									SubsystemPtr->RenderingParameters,
+									SmoothedDepthTexture,
+									NormalTexture,
+									ThicknessTexture,
+									SceneDepthTexture,
+									Output
+								);
+							}
+						}
+					}
+				}
+
+				// ============================================
+				// NEW PATH: Batched Rendering (per LocalParameters)
+				// ============================================
+				for (auto& Batch : Batches)
+				{
+					const FFluidRenderingParameters& BatchParams = Batch.Key;
+					const TArray<UKawaiiFluidSSFRRenderer*>& Renderers = Batch.Value;
+
+					RDG_EVENT_SCOPE(GraphBuilder, "FluidBatch");
+
+					// Calculate average particle radius for this batch
+					float AverageParticleRadius = 10.0f;
+					float TotalRadius = 0.0f;
+					int ValidCount = 0;
+
+					for (UKawaiiFluidSSFRRenderer* Renderer : Renderers)
+					{
+						TotalRadius += Renderer->GetCachedParticleRadius();
+						ValidCount++;
+					}
+
+					if (ValidCount > 0)
+					{
+						AverageParticleRadius = TotalRadius / ValidCount;
+					}
+
+					// Use BatchParams for rendering parameters
+					float BlurRadius = static_cast<float>(BatchParams.BilateralFilterRadius);
+					float DepthFalloff = AverageParticleRadius * 0.7f;  // Dynamic calculation
+					int32 NumIterations = 3;  // Hardcoded
+
+					// Depth Pass (batched - only render particles from this batch)
+					FRDGTextureRef BatchDepthTexture = nullptr;
+					RenderFluidDepthPass(GraphBuilder, View, Renderers, SceneDepthTexture, BatchDepthTexture);
+
+					if (BatchDepthTexture)
+					{
+						// Smoothing Pass
+						FRDGTextureRef BatchSmoothedDepthTexture = nullptr;
+						RenderFluidSmoothingPass(GraphBuilder, View, BatchDepthTexture, BatchSmoothedDepthTexture,
+						                         BlurRadius, DepthFalloff, NumIterations);
+
+						if (BatchSmoothedDepthTexture)
+						{
+							// Normal Pass
+							FRDGTextureRef BatchNormalTexture = nullptr;
+							RenderFluidNormalPass(GraphBuilder, View, BatchSmoothedDepthTexture, BatchNormalTexture);
+
+							// Thickness Pass (batched - only render particles from this batch)
+							FRDGTextureRef BatchThicknessTexture = nullptr;
+							RenderFluidThicknessPass(GraphBuilder, View, Renderers, BatchThicknessTexture);
+
+							if (BatchNormalTexture && BatchThicknessTexture)
+							{
+								// Composite Pass (use BatchParams for per-batch settings)
+								RenderFluidCompositePass_Internal(
+									GraphBuilder,
+									View,
+									BatchParams,  // Use batch-specific parameters
+									BatchSmoothedDepthTexture,
+									BatchNormalTexture,
+									BatchThicknessTexture,
+									SceneDepthTexture,
+									Output
+								);
+							}
+						}
+					}
+				}
 
 				// Debug Keep Alive
-				GraphBuilder.
-					QueueTextureExtraction(Output.Texture, &GFluidCompositeDebug_KeepAlive);
+				GraphBuilder.QueueTextureExtraction(Output.Texture, &GFluidCompositeDebug_KeepAlive);
 
 				return FScreenPassTexture(Output);
 			}

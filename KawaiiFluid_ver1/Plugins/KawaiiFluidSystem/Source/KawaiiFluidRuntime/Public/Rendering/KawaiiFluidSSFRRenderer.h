@@ -7,6 +7,7 @@
 #include "Core/FluidParticle.h"
 #include "Core/KawaiiRenderParticle.h"
 #include "Rendering/KawaiiFluidRendererSettings.h"
+#include "Rendering/FluidRenderingParameters.h"
 #include "KawaiiFluidSSFRRenderer.generated.h"
 
 class IKawaiiFluidDataProvider;
@@ -80,6 +81,9 @@ public:
 	/** Get cached particle radius (for ViewExtension access) */
 	float GetCachedParticleRadius() const { return CachedParticleRadius; }
 
+	/** Get local rendering parameters for batching */
+	const FFluidRenderingParameters& GetLocalParameters() const { return LocalParameters; }
+
 	//========================================
 	// Enable Control
 	//========================================
@@ -87,21 +91,11 @@ public:
 	/** Enable/disable this renderer */
 	bool bEnabled = true;
 
-	//========================================
-	// Appearance
-	//========================================
+	/** Use simulation particle radius for rendering */
+	bool bUseSimulationRadius = false;
 
-	/** Fluid color */
-	FLinearColor FluidColor = FLinearColor(0.2f, 0.4f, 0.8f, 1.0f);
-
-	/** Metallic (metalness) */
-	float Metallic = 0.0f;
-
-	/** Roughness */
-	float Roughness = 0.1f;
-
-	/** Refractive index (IOR) */
-	float RefractiveIndex = 1.33f; // Water IOR
+	/** Local rendering parameters (per-renderer settings) */
+	FFluidRenderingParameters LocalParameters;
 
 	//========================================
 	// Performance Options
@@ -109,45 +103,6 @@ public:
 
 	/** Maximum particles to render */
 	int32 MaxRenderParticles = 50000;
-
-	/** Depth buffer resolution scale (1.0 = screen resolution) */
-	float DepthBufferScale = 1.0f;
-
-	/** Use thickness buffer */
-	bool bUseThicknessBuffer = true;
-
-	//========================================
-	// Filtering Options
-	//========================================
-
-	/** Depth smoothing iterations */
-	int32 DepthSmoothingIterations = 3;
-
-	/** Bilateral filter radius */
-	float FilterRadius = 3.0f;
-
-	//========================================
-	// Advanced Options
-	//========================================
-
-	/** Surface tension */
-	float SurfaceTension = 0.5f;
-
-	/** Foam generation threshold */
-	float FoamThreshold = 5.0f;
-
-	/** Foam color */
-	FLinearColor FoamColor = FLinearColor::White;
-
-	//========================================
-	// Debug Options
-	//========================================
-
-	/** Debug visualization mode */
-	bool bShowDebugVisualization = false;
-
-	/** Show render targets (Depth, Thickness, Normal, etc.) */
-	bool bShowRenderTargets = false;
 
 	//========================================
 	// Runtime Info

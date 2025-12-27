@@ -84,3 +84,38 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 
 	FFluidRenderingParameters() = default;
 };
+
+// Hash function for batching (TMap key)
+FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
+{
+	uint32 Hash = GetTypeHash(Params.bEnableRendering);
+	Hash = HashCombine(Hash, GetTypeHash(Params.FluidColor.ToString()));
+	Hash = HashCombine(Hash, GetTypeHash(Params.FresnelStrength));
+	Hash = HashCombine(Hash, GetTypeHash(Params.RefractiveIndex));
+	Hash = HashCombine(Hash, GetTypeHash(Params.AbsorptionCoefficient));
+	Hash = HashCombine(Hash, GetTypeHash(Params.SpecularStrength));
+	Hash = HashCombine(Hash, GetTypeHash(Params.SpecularRoughness));
+	Hash = HashCombine(Hash, GetTypeHash(Params.ParticleRenderRadius));
+	Hash = HashCombine(Hash, GetTypeHash(Params.SmoothingStrength));
+	Hash = HashCombine(Hash, GetTypeHash(Params.BilateralFilterRadius));
+	Hash = HashCombine(Hash, GetTypeHash(Params.RenderTargetScale));
+	Hash = HashCombine(Hash, GetTypeHash(Params.ThicknessScale));
+	return Hash;
+}
+
+// Equality operator for TMap key usage
+FORCEINLINE bool operator==(const FFluidRenderingParameters& A, const FFluidRenderingParameters& B)
+{
+	return A.bEnableRendering == B.bEnableRendering &&
+	       A.FluidColor.Equals(B.FluidColor, 0.001f) &&
+	       FMath::IsNearlyEqual(A.FresnelStrength, B.FresnelStrength, 0.001f) &&
+	       FMath::IsNearlyEqual(A.RefractiveIndex, B.RefractiveIndex, 0.001f) &&
+	       FMath::IsNearlyEqual(A.AbsorptionCoefficient, B.AbsorptionCoefficient, 0.001f) &&
+	       FMath::IsNearlyEqual(A.SpecularStrength, B.SpecularStrength, 0.001f) &&
+	       FMath::IsNearlyEqual(A.SpecularRoughness, B.SpecularRoughness, 0.001f) &&
+	       FMath::IsNearlyEqual(A.ParticleRenderRadius, B.ParticleRenderRadius, 0.001f) &&
+	       FMath::IsNearlyEqual(A.SmoothingStrength, B.SmoothingStrength, 0.001f) &&
+	       A.BilateralFilterRadius == B.BilateralFilterRadius &&
+	       FMath::IsNearlyEqual(A.RenderTargetScale, B.RenderTargetScale, 0.001f) &&
+	       FMath::IsNearlyEqual(A.ThicknessScale, B.ThicknessScale, 0.001f);
+}

@@ -66,24 +66,56 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	bool bEnabled = false;
 
 	//========================================
-	// Appearance
+	// Visual Appearance
 	//========================================
 
 	/** Fluid color */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (EditCondition = "bEnabled"))
 	FLinearColor FluidColor = FLinearColor(0.2f, 0.4f, 0.8f, 1.0f);
 
-	/** Metallic (metalness) */
+	/** Fresnel strength */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (EditCondition = "bEnabled", ClampMin = "0.0", ClampMax = "1.0"))
-	float Metallic = 0.0f;
-
-	/** Roughness */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (EditCondition = "bEnabled", ClampMin = "0.0", ClampMax = "1.0"))
-	float Roughness = 0.1f;
+	float FresnelStrength = 0.7f;
 
 	/** Refractive index (IOR) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (EditCondition = "bEnabled", ClampMin = "1.0", ClampMax = "2.5"))
 	float RefractiveIndex = 1.33f;
+
+	/** Absorption coefficient */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (EditCondition = "bEnabled", ClampMin = "0.0", ClampMax = "10.0"))
+	float AbsorptionCoefficient = 2.0f;
+
+	/** Specular strength */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (EditCondition = "bEnabled", ClampMin = "0.0", ClampMax = "2.0"))
+	float SpecularStrength = 1.0f;
+
+	/** Specular roughness */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (EditCondition = "bEnabled", ClampMin = "0.01", ClampMax = "1.0"))
+	float SpecularRoughness = 0.2f;
+
+	//========================================
+	// Rendering
+	//========================================
+
+	/** Use simulation particle radius for rendering (if true, ignores ParticleRenderRadius) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled"))
+	bool bUseSimulationRadius = false;
+
+	/** Particle render radius (screen space, cm) - only used when bUseSimulationRadius is false */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled && !bUseSimulationRadius", ClampMin = "1.0", ClampMax = "100.0"))
+	float ParticleRenderRadius = 15.0f;
+
+	//========================================
+	// Smoothing
+	//========================================
+
+	/** Smoothing strength */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Smoothing", meta = (EditCondition = "bEnabled", ClampMin = "0.0", ClampMax = "1.0"))
+	float SmoothingStrength = 0.5f;
+
+	/** Bilateral filter radius */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Smoothing", meta = (EditCondition = "bEnabled", ClampMin = "1", ClampMax = "50"))
+	int32 BilateralFilterRadius = 20;
 
 	//========================================
 	// Performance
@@ -93,51 +125,11 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (EditCondition = "bEnabled", ClampMin = "1", ClampMax = "100000"))
 	int32 MaxRenderParticles = 50000;
 
-	/** Depth buffer resolution scale */
+	/** Render target resolution scale */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (EditCondition = "bEnabled", ClampMin = "0.25", ClampMax = "2.0"))
-	float DepthBufferScale = 1.0f;
+	float RenderTargetScale = 1.0f;
 
-	/** Use thickness buffer */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (EditCondition = "bEnabled"))
-	bool bUseThicknessBuffer = true;
-
-	//========================================
-	// Filtering
-	//========================================
-
-	/** Depth smoothing iterations */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering", meta = (EditCondition = "bEnabled", ClampMin = "0", ClampMax = "10"))
-	int32 DepthSmoothingIterations = 3;
-
-	/** Bilateral filter radius */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering", meta = (EditCondition = "bEnabled", ClampMin = "1.0", ClampMax = "10.0"))
-	float FilterRadius = 3.0f;
-
-	//========================================
-	// Advanced
-	//========================================
-
-	/** Surface tension */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Advanced", meta = (EditCondition = "bEnabled", ClampMin = "0.0", ClampMax = "1.0"))
-	float SurfaceTension = 0.5f;
-
-	/** Foam generation threshold */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Advanced", meta = (EditCondition = "bEnabled", ClampMin = "0.0", ClampMax = "10.0"))
-	float FoamThreshold = 5.0f;
-
-	/** Foam color */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Advanced", meta = (EditCondition = "bEnabled"))
-	FLinearColor FoamColor = FLinearColor::White;
-
-	//========================================
-	// Debug
-	//========================================
-
-	/** Debug visualization mode */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (EditCondition = "bEnabled"))
-	bool bShowDebugVisualization = false;
-
-	/** Show render targets */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (EditCondition = "bEnabled && bShowDebugVisualization"))
-	bool bShowRenderTargets = false;
+	/** Thickness scale */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (EditCondition = "bEnabled", ClampMin = "0.1", ClampMax = "10.0"))
+	float ThicknessScale = 1.0f;
 };
