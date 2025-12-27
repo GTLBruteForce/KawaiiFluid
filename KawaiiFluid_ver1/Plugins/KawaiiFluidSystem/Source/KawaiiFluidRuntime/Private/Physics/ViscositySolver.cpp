@@ -3,6 +3,12 @@
 #include "Physics/ViscositySolver.h"
 #include "Physics/SPHKernels.h"
 
+namespace
+{
+	constexpr float CM_TO_M = 0.01f;
+	constexpr float CM_TO_M_SQ = CM_TO_M * CM_TO_M;
+}
+
 FViscositySolver::FViscositySolver()
 	: SpringThreshold(0.8f)
 {
@@ -59,7 +65,6 @@ void FViscositySolver::ApplyXSPH(TArray<FFluidParticle>& Particles, float Viscos
 			// [개선 1] 캐싱된 계수로 Poly6 직접 계산
 			// W(r, h) = Poly6Coeff * (h² - r²)³
 			// 단위 변환: cm -> m (계수는 이미 m 단위로 계산됨)
-			constexpr float CM_TO_M_SQ = 0.0001f; // (0.01)²
 			const float h2_m = KernelCoeffs.h2;
 			const float r2_m = rSquared * CM_TO_M_SQ;
 			const float diff = h2_m - r2_m;
