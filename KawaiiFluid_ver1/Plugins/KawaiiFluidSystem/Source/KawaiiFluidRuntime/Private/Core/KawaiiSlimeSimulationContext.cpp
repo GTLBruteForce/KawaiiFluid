@@ -67,12 +67,11 @@ void UKawaiiSlimeSimulationContext::SimulateSubstep(
 	// 5. Apply nucleus attraction (cohesion - slime specific)
 	//ApplyNucleusAttraction(Particles, Params, SubstepDT);
 
-	// 6. Relax surface particles for uniform distribution (improves SSFR rendering)
-	{
-		SCOPE_CYCLE_COUNTER(STAT_SlimeRelaxSurfaceParticles);
-		TRACE_CPUPROFILER_EVENT_SCOPE(KawaiiSlimeContext_RelaxSurfaceParticles);
-		RelaxSurfaceParticles(Particles, Preset, SubstepDT);
-	}
+	// 6. Relax surface particles - DISABLED
+	// RelaxSurfaceParticles conflicts with ShapeMatching and causes oscillation
+	// Instead, use SpawnParticlesUniform() for initial uniform distribution
+	// ShapeMatching will maintain the uniform distribution automatically
+	//RelaxSurfaceParticles(Particles, Preset, SubstepDT);
 	//ApplySurfaceTension(Particles, Preset, Params);
 
 	// 7. Handle collisions with registered colliders
@@ -282,8 +281,8 @@ void UKawaiiSlimeSimulationContext::RelaxSurfaceParticles(
 	}
 
 	const float SmoothingRadius = Preset->SmoothingRadius;
-	const float IdealSpacing = SmoothingRadius * 0.8f;  // Target spacing between particles
-	const float RelaxStrength = 0.3f;  // How strongly to push/pull (0-1)
+	const float IdealSpacing = SmoothingRadius * 0.4f;  // Tighter spacing to fit more particles
+	const float RelaxStrength = 0.3f;  // Moderate relaxation to avoid oscillation
 
 	// Collect displacement for each particle (to avoid order-dependent artifacts)
 	TArray<FVector> Displacements;
@@ -302,7 +301,7 @@ void UKawaiiSlimeSimulationContext::RelaxSurfaceParticles(
 		FVector TotalDisplacement = FVector::ZeroVector;
 		int32 NeighborCount = 0;
 
-		// Check neighbors and compute relaxation displacement
+		// Check ALL neighbors (not just surface) for repulsion
 		for (int32 NeighborIdx : P.NeighborIndices)
 		{
 			if (NeighborIdx < 0 || NeighborIdx >= Particles.Num() || NeighborIdx == i)
@@ -311,12 +310,6 @@ void UKawaiiSlimeSimulationContext::RelaxSurfaceParticles(
 			}
 
 			const FFluidParticle& Neighbor = Particles[NeighborIdx];
-
-			// Only consider neighbors that are also on the surface
-			if (!Neighbor.bIsSurfaceParticle)
-			{
-				continue;
-			}
 
 			FVector ToNeighbor = Neighbor.PredictedPosition - P.PredictedPosition;
 			float Dist = ToNeighbor.Size();
@@ -328,13 +321,18 @@ void UKawaiiSlimeSimulationContext::RelaxSurfaceParticles(
 
 			FVector Direction = ToNeighbor / Dist;
 
-			// If too close, push apart; if too far, pull together
-			float DistError = Dist - IdealSpacing;
-
-			// Apply displacement proportional to error
-			// Positive error = too far apart = pull together (move toward neighbor)
-			// Negative error = too close = push apart (move away from neighbor)
-			TotalDisplacement += Direction * DistError * RelaxStrength;
+			if (Neighbor.bIsSurfaceParticle)
+			{
+				// Surface-to-surface: push/pull toward ideal spacing
+				float DistError = Dist - IdealSpacing;
+				TotalDisplacement += Direction * DistError * RelaxStrength;
+			}
+			else
+			{
+				// Surface-to-interior: repel from interior (push outward)
+				float RepulsionStrength = (SmoothingRadius - Dist) / SmoothingRadius;
+				TotalDisplacement -= Direction * RepulsionStrength * RelaxStrength * 0.5f;
+			}
 			NeighborCount++;
 		}
 
@@ -345,12 +343,12 @@ void UKawaiiSlimeSimulationContext::RelaxSurfaceParticles(
 		}
 	}
 
-	// Apply displacements (no re-projection - works with any shape)
+	// Apply displacements directly (not multiplied by DeltaTime for stronger effect)
 	for (int32 i = 0; i < Particles.Num(); ++i)
 	{
 		if (!Displacements[i].IsNearlyZero())
 		{
-			Particles[i].PredictedPosition += Displacements[i] * DeltaTime;
+			Particles[i].PredictedPosition += Displacements[i];
 		}
 	}
 }

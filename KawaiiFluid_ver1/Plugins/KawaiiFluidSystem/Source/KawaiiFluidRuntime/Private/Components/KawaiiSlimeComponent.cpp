@@ -82,10 +82,10 @@ void UKawaiiSlimeComponent::BeginPlay()
 	// Subsystem에 Module 등록
 	RegisterToSubsystem();
 
-	// 자동 스폰
+	// 자동 스폰 (균일 분포로 스폰하여 ShapeMatching이 유지할 수 있도록)
 	if (bSpawnOnBeginPlay && AutoSpawnCount > 0 && SlimeModule)
 	{
-		SlimeModule->SpawnParticles(GetOwner()->GetActorLocation(), AutoSpawnCount, AutoSpawnRadius);
+		SlimeModule->SpawnParticlesUniform(GetOwner()->GetActorLocation(), AutoSpawnCount, AutoSpawnRadius);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("UKawaiiSlimeComponent BeginPlay: %s (Module-based)"), *GetName());

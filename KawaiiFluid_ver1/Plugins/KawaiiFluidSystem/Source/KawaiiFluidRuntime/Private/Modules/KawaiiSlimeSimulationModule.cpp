@@ -101,6 +101,85 @@ void UKawaiiSlimeSimulationModule::TickSlime(float DeltaTime)
 }
 
 //========================================
+// Uniform Spawn (Fibonacci Sphere + Concentric Layers)
+//========================================
+
+void UKawaiiSlimeSimulationModule::SpawnParticlesUniform(FVector Location, int32 Count, float Radius)
+{
+	if (Count <= 0 || Radius <= 0.0f)
+	{
+		return;
+	}
+
+	// Calculate number of layers based on particle count
+	// More particles = more layers for better distribution
+	int32 NumLayers = FMath::Max(3, FMath::CeilToInt(FMath::Pow((float)Count, 1.0f / 3.0f)));
+
+	// Golden ratio for Fibonacci sphere
+	const float GoldenRatio = (1.0f + FMath::Sqrt(5.0f)) / 2.0f;
+	const float AngleIncrement = PI * 2.0f * GoldenRatio;
+
+	// Pre-calculate particles per layer based on surface area
+	// Outer layers (surface) get significantly more particles for dense coverage
+	TArray<int32> ParticlesPerLayer;
+	ParticlesPerLayer.SetNum(NumLayers);
+
+	float TotalWeight = 0.0f;
+	for (int32 Layer = 0; Layer < NumLayers; ++Layer)
+	{
+		float LayerRatio = (float)(Layer + 1) / (float)NumLayers;
+		// r^3 weighting - heavily favor outer layers for dense surface
+		float Weight = LayerRatio * LayerRatio * LayerRatio;
+		TotalWeight += Weight;
+	}
+
+	// Distribute Count particles proportionally
+	int32 Assigned = 0;
+	for (int32 Layer = 0; Layer < NumLayers; ++Layer)
+	{
+		float LayerRatio = (float)(Layer + 1) / (float)NumLayers;
+		float Weight = LayerRatio * LayerRatio * LayerRatio;
+		ParticlesPerLayer[Layer] = FMath::Max(1, FMath::RoundToInt((float)Count * Weight / TotalWeight));
+		Assigned += ParticlesPerLayer[Layer];
+	}
+
+	// Adjust last layer to ensure exact count
+	ParticlesPerLayer[NumLayers - 1] += (Count - Assigned);
+
+	int32 ParticlesSpawned = 0;
+
+	// Spawn particles in concentric layers (inside-out)
+	for (int32 Layer = 0; Layer < NumLayers; ++Layer)
+	{
+		float LayerRadius = Radius * (float)(Layer + 1) / (float)NumLayers;
+		int32 ParticlesInLayer = ParticlesPerLayer[Layer];
+
+		// Spawn particles on this layer using Fibonacci sphere
+		for (int32 i = 0; i < ParticlesInLayer; ++i)
+		{
+			// Fibonacci sphere distribution
+			float T = (float)i / (float)FMath::Max(1, ParticlesInLayer);
+			float Inclination = FMath::Acos(1.0f - 2.0f * T);
+			float Azimuth = AngleIncrement * i;
+
+			float X = FMath::Sin(Inclination) * FMath::Cos(Azimuth);
+			float Y = FMath::Sin(Inclination) * FMath::Sin(Azimuth);
+			float Z = FMath::Cos(Inclination);
+
+			FVector SpawnPos = Location + FVector(X, Y, Z) * LayerRadius;
+			SpawnParticle(SpawnPos);
+			ParticlesSpawned++;
+		}
+	}
+
+	// Reset rest shape flag so it will be recalculated
+	bRestShapeInitialized = false;
+
+	UE_LOG(LogTemp, Log, TEXT("SlimeModule: Spawned %d particles uniformly (Layers: %d, Radius: %.2f)"),
+		ParticlesSpawned, NumLayers, Radius);
+}
+
+//========================================
 // Shape Matching Initialization (Section 4.3)
 //========================================
 

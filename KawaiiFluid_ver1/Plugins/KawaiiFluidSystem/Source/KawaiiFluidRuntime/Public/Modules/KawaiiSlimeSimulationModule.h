@@ -199,6 +199,16 @@ public:
 	// Blueprint API
 	//========================================
 
+	//========================================
+	// Uniform Spawn (for stable surface)
+	//========================================
+
+	/** Spawn particles in uniform distribution (Fibonacci sphere + concentric layers)
+	 * This creates stable, evenly distributed particles that ShapeMatching can maintain
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Slime|Spawn")
+	void SpawnParticlesUniform(FVector Location, int32 Count, float Radius);
+
 	/** Apply movement input (call from Pawn) - Section 6.2/10.3 */
 	UFUNCTION(BlueprintCallable, Category = "Slime|Input")
 	void ApplyMovementInput(FVector Input);
