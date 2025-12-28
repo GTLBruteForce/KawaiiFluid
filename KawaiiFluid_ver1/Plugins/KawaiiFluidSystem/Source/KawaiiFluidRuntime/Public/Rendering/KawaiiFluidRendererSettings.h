@@ -78,6 +78,10 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled"))
 	bool bUseSimulationRadius = false;
 
+	/** Render only surface particles (for slime - reduces particle count while maintaining surface) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled"))
+	bool bRenderSurfaceOnly = false;
+
 	/** Particle render radius (screen space, cm) - only used when bUseSimulationRadius is false */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled && !bUseSimulationRadius", ClampMin = "1.0", ClampMax = "100.0"))
 	float ParticleRenderRadius = 15.0f;

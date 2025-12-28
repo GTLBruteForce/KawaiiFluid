@@ -91,6 +91,7 @@ void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSetti
 {
 	bEnabled = Settings.bEnabled;
 	bUseSimulationRadius = Settings.bUseSimulationRadius;
+	bRenderSurfaceOnly = Settings.bRenderSurfaceOnly;
 
 	// Map settings to LocalParameters
 	LocalParameters.bEnableRendering = Settings.bEnabled;
@@ -170,14 +171,15 @@ void UKawaiiFluidSSFRRenderer::UpdateRendering(const IKawaiiFluidDataProvider* D
 
 void UKawaiiFluidSSFRRenderer::UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius)
 {
-	// Filter: only render surface particles for efficient slime rendering
+	// Optionally filter to render only surface particles (for slime optimization)
 	RenderParticlesCache.Reset();
 	RenderParticlesCache.Reserve(FMath::Min(Particles.Num(), MaxRenderParticles));
 
 	for (int32 i = 0; i < Particles.Num() && RenderParticlesCache.Num() < MaxRenderParticles; ++i)
 	{
-		// Only add surface particles to render cache
-		if (Particles[i].bIsSurfaceParticle)
+		// If bRenderSurfaceOnly is false, render all particles (normal fluid)
+		// If bRenderSurfaceOnly is true, only render surface particles (slime optimization)
+		if (!bRenderSurfaceOnly || Particles[i].bIsSurfaceParticle)
 		{
 			FKawaiiRenderParticle& RenderP = RenderParticlesCache.AddDefaulted_GetRef();
 			RenderP.Position = FVector3f(Particles[i].Position);
@@ -187,8 +189,9 @@ void UKawaiiFluidSSFRRenderer::UpdateGPUResources(const TArray<FFluidParticle>& 
 		}
 	}
 
-	// Log surface particle count
-	UE_LOG(LogTemp, Log, TEXT("SSFR: Surface particles = %d / Total = %d"), RenderParticlesCache.Num(), Particles.Num());
+	// Log rendered particle count
+	UE_LOG(LogTemp, Log, TEXT("SSFR: Rendered particles = %d / Total = %d (SurfaceOnly: %s)"),
+		RenderParticlesCache.Num(), Particles.Num(), bRenderSurfaceOnly ? TEXT("true") : TEXT("false"));
 
 	// Upload to GPU (via RenderResource)
 	if (RenderResource.IsValid())

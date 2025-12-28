@@ -97,6 +97,9 @@ public:
 	/** Use simulation particle radius for rendering */
 	bool bUseSimulationRadius = false;
 
+	/** Render only surface particles (for slime) */
+	bool bRenderSurfaceOnly = false;
+
 	/** Local rendering parameters (per-renderer settings) */
 	FFluidRenderingParameters LocalParameters;
 
