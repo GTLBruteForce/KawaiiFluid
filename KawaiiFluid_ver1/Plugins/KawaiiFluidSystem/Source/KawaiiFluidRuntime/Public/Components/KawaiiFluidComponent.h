@@ -80,11 +80,11 @@ public:
 	bool bEnableRendering = true;
 
 	/** ISM Renderer Settings */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "ISM Settings", ShowOnlyInnerProperties))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "ISM Settings"))
 	FKawaiiFluidISMRendererSettings ISMSettings;
 
 	/** SSFR Renderer Settings */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "SSFR Settings", ShowOnlyInnerProperties))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "SSFR Settings"))
 	FKawaiiFluidSSFRRendererSettings SSFRSettings;
 
 	//========================================
@@ -130,14 +130,6 @@ public:
 	/** Initial velocity for spawned particles */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn", meta = (EditCondition = "bContinuousSpawn"))
 	FVector SpawnVelocity = FVector::ZeroVector;
-
-	//========================================
-	// Debug Rendering
-	//========================================
-
-	/** Particle render radius */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (ClampMin = "0.1", ClampMax = "50.0"))
-	float ParticleRenderRadius = 5.0f;
 
 	//========================================
 	// Events
