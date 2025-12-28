@@ -114,10 +114,6 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	// Smoothing
 	//========================================
 
-	/** Smoothing strength */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Smoothing", meta = (EditCondition = "bEnabled", ClampMin = "0.0", ClampMax = "1.0"))
-	float SmoothingStrength = 0.5f;
-
 	/** Bilateral filter radius */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Smoothing", meta = (EditCondition = "bEnabled", ClampMin = "1", ClampMax = "50"))
 	int32 BilateralFilterRadius = 20;

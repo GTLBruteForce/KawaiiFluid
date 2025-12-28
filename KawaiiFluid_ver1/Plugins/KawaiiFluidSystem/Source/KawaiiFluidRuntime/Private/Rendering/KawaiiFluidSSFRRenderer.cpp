@@ -102,7 +102,6 @@ void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSetti
 	LocalParameters.SpecularStrength = Settings.SpecularStrength;
 	LocalParameters.SpecularRoughness = Settings.SpecularRoughness;
 	LocalParameters.ParticleRenderRadius = Settings.ParticleRenderRadius;
-	LocalParameters.SmoothingStrength = Settings.SmoothingStrength;
 	LocalParameters.BilateralFilterRadius = Settings.BilateralFilterRadius;
 	LocalParameters.RenderTargetScale = Settings.RenderTargetScale;
 	LocalParameters.ThicknessScale = Settings.ThicknessScale;
