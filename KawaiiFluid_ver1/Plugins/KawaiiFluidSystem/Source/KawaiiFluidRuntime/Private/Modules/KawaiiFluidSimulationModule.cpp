@@ -187,6 +187,66 @@ void UKawaiiFluidSimulationModule::UpdateRuntimePreset()
 	bRuntimePresetDirty = false;
 }
 
+//========================================
+// Override Setters
+//========================================
+
+void UKawaiiFluidSimulationModule::SetOverride_ParticleRadius(bool bEnable, float Value)
+{
+	bOverride_ParticleRadius = bEnable;
+	Override_ParticleRadius = Value;
+	bRuntimePresetDirty = true;
+}
+
+void UKawaiiFluidSimulationModule::SetOverride_SmoothingRadius(bool bEnable, float Value)
+{
+	bOverride_SmoothingRadius = bEnable;
+	Override_SmoothingRadius = Value;
+	bRuntimePresetDirty = true;
+
+	// SpatialHash 재생성
+	if (SpatialHash.IsValid())
+	{
+		float CellSize = bEnable ? Value : (Preset ? Preset->SmoothingRadius : 20.0f);
+		SpatialHash = MakeShared<FSpatialHash>(CellSize);
+	}
+}
+
+void UKawaiiFluidSimulationModule::SetOverride_RestDensity(bool bEnable, float Value)
+{
+	bOverride_RestDensity = bEnable;
+	Override_RestDensity = Value;
+	bRuntimePresetDirty = true;
+}
+
+void UKawaiiFluidSimulationModule::SetOverride_Compliance(bool bEnable, float Value)
+{
+	bOverride_Compliance = bEnable;
+	Override_Compliance = Value;
+	bRuntimePresetDirty = true;
+}
+
+void UKawaiiFluidSimulationModule::SetOverride_ViscosityCoefficient(bool bEnable, float Value)
+{
+	bOverride_ViscosityCoefficient = bEnable;
+	Override_ViscosityCoefficient = Value;
+	bRuntimePresetDirty = true;
+}
+
+void UKawaiiFluidSimulationModule::SetOverride_Gravity(bool bEnable, FVector Value)
+{
+	bOverride_Gravity = bEnable;
+	Override_Gravity = Value;
+	bRuntimePresetDirty = true;
+}
+
+void UKawaiiFluidSimulationModule::SetOverride_AdhesionStrength(bool bEnable, float Value)
+{
+	bOverride_AdhesionStrength = bEnable;
+	Override_AdhesionStrength = Value;
+	bRuntimePresetDirty = true;
+}
+
 AActor* UKawaiiFluidSimulationModule::GetOwnerActor() const
 {
 	if (UActorComponent* OwnerComp = Cast<UActorComponent>(GetOuter()))

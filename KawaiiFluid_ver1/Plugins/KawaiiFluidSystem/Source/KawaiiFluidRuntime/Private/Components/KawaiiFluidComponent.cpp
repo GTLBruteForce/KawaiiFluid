@@ -141,18 +141,6 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 	}
 }
 
-#if WITH_EDITOR
-void UKawaiiFluidComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
-{
-	Super::PostEditChangeProperty(PropertyChangedEvent);
-
-	if (SimulationModule)
-	{
-		SimulationModule->MarkRuntimePresetDirty();
-	}
-}
-#endif
-
 //========================================
 // Continuous Spawn
 //========================================
