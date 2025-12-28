@@ -551,44 +551,27 @@ void UKawaiiSlimeSimulationModule::UpdateSurfaceParticles()
 {
 	TArray<FFluidParticle>& ParticleArray = GetParticlesMutable();
 
-	float SmoothingRadius = 20.0f;
-	if (UKawaiiFluidPresetDataAsset* PresetAsset = GetPreset())
-	{
-		SmoothingRadius = PresetAsset->SmoothingRadius;
-	}
+	// Neighbor count based surface detection
+	const int32 NeighborCountThreshold = SurfaceNeighborThreshold;
 
 	for (FFluidParticle& P : ParticleArray)
 	{
-		// Compute color field gradient (surface normal approximation) - Section 7.3
-		FVector Normal = FVector::ZeroVector;
+		int32 NeighborCount = P.NeighborIndices.Num();
 
-		for (int32 NeighborIdx : P.NeighborIndices)
-		{
-			if (NeighborIdx < 0 || NeighborIdx >= ParticleArray.Num())
-			{
-				continue;
-			}
-
-			const FFluidParticle& Neighbor = ParticleArray[NeighborIdx];
-			FVector Diff = P.Position - Neighbor.Position;
-			float Dist = Diff.Size();
-
-			if (Dist < KINDA_SMALL_NUMBER || Dist > SmoothingRadius)
-			{
-				continue;
-			}
-
-			// Gradient of SPH kernel (simplified)
-			float Weight = 1.0f - (Dist / SmoothingRadius);
-			Normal += Diff.GetSafeNormal() * Weight;
-		}
-
-		float NormalMagnitude = Normal.Size();
-
-		// If normal magnitude > threshold, this is a surface particle
-		if (NormalMagnitude > SurfaceThreshold)
+		if (NeighborCount < NeighborCountThreshold)
 		{
 			P.bIsSurfaceParticle = true;
+
+			// Compute surface normal (pointing away from neighbors)
+			FVector Normal = FVector::ZeroVector;
+			for (int32 NeighborIdx : P.NeighborIndices)
+			{
+				if (NeighborIdx >= 0 && NeighborIdx < ParticleArray.Num())
+				{
+					FVector ToNeighbor = ParticleArray[NeighborIdx].Position - P.Position;
+					Normal -= ToNeighbor.GetSafeNormal();
+				}
+			}
 			P.SurfaceNormal = Normal.GetSafeNormal();
 		}
 		else
@@ -790,6 +773,9 @@ FKawaiiFluidSimulationParams UKawaiiSlimeSimulationModule::BuildSimulationParams
 	Params.bEnableShapeMatching = bEnableShapeMatching && !bDecomposeMode;
 	Params.ShapeMatchingStiffness = ShapeMatchingStiffness;
 	Params.ShapeMatchingCoreMultiplier = CoreStiffnessMultiplier;
+
+	// Surface detection threshold
+	Params.SurfaceNeighborThreshold = SurfaceNeighborThreshold;
 
 	return Params;
 }

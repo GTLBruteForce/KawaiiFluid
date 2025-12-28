@@ -120,6 +120,13 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSimulationParams
 	/** Core density constraint reduction (0 = full density effect, 1 = no density effect for core) */
 	float CoreDensityConstraintReduction = 0.0f;
 
+	//========================================
+	// Surface Detection (Slime)
+	//========================================
+
+	/** Neighbor count threshold for surface detection (fewer neighbors = surface particle) */
+	int32 SurfaceNeighborThreshold = 25;
+
 	FKawaiiFluidSimulationParams() = default;
 };
 

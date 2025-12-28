@@ -143,9 +143,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Surface", meta = (ClampMin = "0.0"))
 	float SurfaceTensionCoefficient = 0.5f;
 
-	/** Surface detection threshold */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Surface", meta = (ClampMin = "0.1", ClampMax = "2.0"))
-	float SurfaceThreshold = 0.5f;
+	/** Surface detection threshold (neighbor count - lower = more surface particles) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slime|Surface", meta = (ClampMin = "1", ClampMax = "50"))
+	int32 SurfaceNeighborThreshold = 25;
 
 	//========================================
 	// Decompose Mode (Fluid-like behavior)

@@ -170,18 +170,25 @@ void UKawaiiFluidSSFRRenderer::UpdateRendering(const IKawaiiFluidDataProvider* D
 
 void UKawaiiFluidSSFRRenderer::UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius)
 {
-	// Limit particle count
-	int32 NumParticles = FMath::Min(Particles.Num(), MaxRenderParticles);
+	// Filter: only render surface particles for efficient slime rendering
+	RenderParticlesCache.Reset();
+	RenderParticlesCache.Reserve(FMath::Min(Particles.Num(), MaxRenderParticles));
 
-	// Convert FFluidParticle → FKawaiiRenderParticle
-	RenderParticlesCache.SetNum(NumParticles);
-	for (int32 i = 0; i < NumParticles; ++i)
+	for (int32 i = 0; i < Particles.Num() && RenderParticlesCache.Num() < MaxRenderParticles; ++i)
 	{
-		RenderParticlesCache[i].Position = FVector3f(Particles[i].Position);
-		RenderParticlesCache[i].Velocity = FVector3f(Particles[i].Velocity);
-		RenderParticlesCache[i].Radius = ParticleRadius;
-		RenderParticlesCache[i].Padding = 0.0f;
+		// Only add surface particles to render cache
+		if (Particles[i].bIsSurfaceParticle)
+		{
+			FKawaiiRenderParticle& RenderP = RenderParticlesCache.AddDefaulted_GetRef();
+			RenderP.Position = FVector3f(Particles[i].Position);
+			RenderP.Velocity = FVector3f(Particles[i].Velocity);
+			RenderP.Radius = ParticleRadius;
+			RenderP.Padding = 0.0f;
+		}
 	}
+
+	// Log surface particle count
+	UE_LOG(LogTemp, Log, TEXT("SSFR: Surface particles = %d / Total = %d"), RenderParticlesCache.Num(), Particles.Num());
 
 	// Upload to GPU (via RenderResource)
 	if (RenderResource.IsValid())
