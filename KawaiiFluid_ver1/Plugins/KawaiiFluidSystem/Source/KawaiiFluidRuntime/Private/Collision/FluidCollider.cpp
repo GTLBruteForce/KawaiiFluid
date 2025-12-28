@@ -1,6 +1,7 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 
 #include "Collision/FluidCollider.h"
+#include "Async/ParallelFor.h"
 
 UFluidCollider::UFluidCollider()
 {
@@ -24,11 +25,11 @@ void UFluidCollider::ResolveCollisions(TArray<FFluidParticle>& Particles)
 	{
 		return;
 	}
-	
-	for (FFluidParticle& Particle : Particles)
+
+	ParallelFor(Particles.Num(), [&](int32 i)
 	{
-		ResolveParticleCollision(Particle);
-	}
+		ResolveParticleCollision(Particles[i]);
+	});
 }
 
 bool UFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance) const
