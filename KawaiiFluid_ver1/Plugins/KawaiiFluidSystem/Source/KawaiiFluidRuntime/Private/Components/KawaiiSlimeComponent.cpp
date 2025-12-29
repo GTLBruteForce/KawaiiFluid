@@ -12,7 +12,7 @@
 UKawaiiSlimeComponent::UKawaiiSlimeComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
-	PrimaryComponentTick.TickGroup = TG_PrePhysics;
+	PrimaryComponentTick.TickGroup = TG_PostPhysics;  // Subsystem 시뮬레이션 이후 렌더링
 
 	// 슬라임 시뮬레이션 모듈 생성
 	SlimeModule = CreateDefaultSubobject<UKawaiiSlimeSimulationModule>(TEXT("SlimeSimulationModule"));
