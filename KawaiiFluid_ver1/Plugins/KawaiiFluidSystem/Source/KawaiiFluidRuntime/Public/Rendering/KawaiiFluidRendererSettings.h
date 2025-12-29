@@ -139,6 +139,40 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	float ThicknessScale = 1.0f;
 	
 	//========================================
+	// Ray Marching SDF Mode Parameters
+	//========================================
+
+	/** SDF smoothness for metaball blending (lower = smoother) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "1.0", ClampMax = "32.0"))
+	float SDFSmoothness = 12.0f;
+
+	/** Maximum ray marching steps */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "16", ClampMax = "256"))
+	int32 MaxRayMarchSteps = 64;
+
+	/** Ray march hit threshold (surface detection) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "0.0001", ClampMax = "1.0"))
+	float RayMarchHitThreshold = 0.01f;
+
+	/** Maximum ray march distance */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "100.0", ClampMax = "10000.0"))
+	float RayMarchMaxDistance = 2000.0f;
+
+	/** Subsurface scattering intensity (jelly effect) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "0.0", ClampMax = "2.0"))
+	float SSSIntensity = 1.0f;
+
+	/** Subsurface scattering color */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching"))
+	FLinearColor SSSColor = FLinearColor(1.0f, 0.5f, 0.3f, 1.0f);
+
+	//========================================
 	// G-Buffer Mode Parameters
 	//========================================
 

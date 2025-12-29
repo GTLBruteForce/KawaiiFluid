@@ -110,6 +110,14 @@ void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSetti
 	LocalParameters.Roughness = Settings.Roughness;
 	LocalParameters.SubsurfaceOpacity = Settings.SubsurfaceOpacity;
 
+	// Ray Marching SDF parameters
+	LocalParameters.SDFSmoothness = Settings.SDFSmoothness;
+	LocalParameters.MaxRayMarchSteps = Settings.MaxRayMarchSteps;
+	LocalParameters.RayMarchHitThreshold = Settings.RayMarchHitThreshold;
+	LocalParameters.RayMarchMaxDistance = Settings.RayMarchMaxDistance;
+	LocalParameters.SSSIntensity = Settings.SSSIntensity;
+	LocalParameters.SSSColor = Settings.SSSColor;
+
 	// MaxRenderParticles stays as member variable (not in LocalParameters)
 	MaxRenderParticles = Settings.MaxRenderParticles;
 

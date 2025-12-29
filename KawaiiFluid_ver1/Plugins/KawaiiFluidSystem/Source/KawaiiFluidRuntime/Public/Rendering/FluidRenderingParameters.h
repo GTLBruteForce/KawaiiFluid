@@ -21,6 +21,7 @@ enum class EFluidRenderingQuality : uint8
  * SSFR Rendering Mode
  * - Custom: Custom lighting (Blinn-Phong, manual Fresnel)
  * - GBuffer: Write to GBuffer for Unreal's Lumen/VSM (deferred rendering)
+ * - RayMarching: Ray Marching SDF for smooth metaball surfaces (best for slime)
  */
 UENUM(BlueprintType)
 enum class ESSFRRenderingMode : uint8
@@ -29,7 +30,10 @@ enum class ESSFRRenderingMode : uint8
 	Custom UMETA(DisplayName = "Custom"),
 
 	/** Write to GBuffer for Lumen/VSM integration */
-	GBuffer UMETA(DisplayName = "G-Buffer")
+	GBuffer UMETA(DisplayName = "G-Buffer"),
+
+	/** Ray Marching SDF - smooth metaball surfaces for slime-like fluids */
+	RayMarching UMETA(DisplayName = "Ray Marching SDF")
 };
 
 /**
@@ -106,6 +110,40 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	ESSFRRenderingMode SSFRMode = ESSFRRenderingMode::Custom;
 
 	//========================================
+	// Ray Marching SDF Mode Parameters
+	//========================================
+
+	/** SDF smoothness for metaball blending (lower = smoother) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "1.0", ClampMax = "32.0"))
+	float SDFSmoothness = 12.0f;
+
+	/** Maximum ray marching steps */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "16", ClampMax = "256"))
+	int32 MaxRayMarchSteps = 64;
+
+	/** Ray march hit threshold (surface detection) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "0.0001", ClampMax = "1.0"))
+	float RayMarchHitThreshold = 0.01f;
+
+	/** Maximum ray march distance */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "100.0", ClampMax = "10000.0"))
+	float RayMarchMaxDistance = 2000.0f;
+
+	/** Subsurface scattering intensity (jelly effect) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "0.0", ClampMax = "2.0"))
+	float SSSIntensity = 1.0f;
+
+	/** Subsurface scattering color */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching"))
+	FLinearColor SSSColor = FLinearColor(1.0f, 0.5f, 0.3f, 1.0f);
+
+	//========================================
 	// G-Buffer Mode Parameters (for future implementation)
 	//========================================
 
@@ -147,6 +185,13 @@ FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
 	Hash = HashCombine(Hash, GetTypeHash(Params.Metallic));
 	Hash = HashCombine(Hash, GetTypeHash(Params.Roughness));
 	Hash = HashCombine(Hash, GetTypeHash(Params.SubsurfaceOpacity));
+	// Ray Marching parameters
+	Hash = HashCombine(Hash, GetTypeHash(Params.SDFSmoothness));
+	Hash = HashCombine(Hash, GetTypeHash(Params.MaxRayMarchSteps));
+	Hash = HashCombine(Hash, GetTypeHash(Params.RayMarchHitThreshold));
+	Hash = HashCombine(Hash, GetTypeHash(Params.RayMarchMaxDistance));
+	Hash = HashCombine(Hash, GetTypeHash(Params.SSSIntensity));
+	Hash = HashCombine(Hash, GetTypeHash(Params.SSSColor.ToString()));
 	return Hash;
 }
 
@@ -169,5 +214,12 @@ FORCEINLINE bool operator==(const FFluidRenderingParameters& A, const FFluidRend
 	       FMath::IsNearlyEqual(A.ThicknessScale, B.ThicknessScale, 0.001f) &&
 	       FMath::IsNearlyEqual(A.Metallic, B.Metallic, 0.001f) &&
 	       FMath::IsNearlyEqual(A.Roughness, B.Roughness, 0.001f) &&
-	       FMath::IsNearlyEqual(A.SubsurfaceOpacity, B.SubsurfaceOpacity, 0.001f);
+	       FMath::IsNearlyEqual(A.SubsurfaceOpacity, B.SubsurfaceOpacity, 0.001f) &&
+	       // Ray Marching parameters
+	       FMath::IsNearlyEqual(A.SDFSmoothness, B.SDFSmoothness, 0.001f) &&
+	       A.MaxRayMarchSteps == B.MaxRayMarchSteps &&
+	       FMath::IsNearlyEqual(A.RayMarchHitThreshold, B.RayMarchHitThreshold, 0.0001f) &&
+	       FMath::IsNearlyEqual(A.RayMarchMaxDistance, B.RayMarchMaxDistance, 0.001f) &&
+	       FMath::IsNearlyEqual(A.SSSIntensity, B.SSSIntensity, 0.001f) &&
+	       A.SSSColor.Equals(B.SSSColor, 0.001f);
 }

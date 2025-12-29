@@ -15,7 +15,9 @@
 #include "PostProcess/PostProcessMaterialInputs.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
 #include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/KawaiiFluidRenderResource.h"
 #include "Rendering/Composite/IFluidCompositePass.h"
+#include "Rendering/Composite/FluidRayMarchComposite.h"
 
 static TRefCountPtr<IPooledRenderTarget> GFluidCompositeDebug_KeepAlive;
 
@@ -233,6 +235,7 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 				// ============================================
 				TMap<FFluidRenderingParameters, TArray<UKawaiiFluidSSFRRenderer*>> CustomBatches;
 				TMap<FFluidRenderingParameters, TArray<UKawaiiFluidSSFRRenderer*>> GBufferBatches;
+				TMap<FFluidRenderingParameters, TArray<UKawaiiFluidSSFRRenderer*>> RayMarchingBatches;
 
 				const TArray<UKawaiiFluidRenderingModule*>& Modules = SubsystemPtr->GetAllRenderingModules();
 				for (UKawaiiFluidRenderingModule* Module : Modules)
@@ -253,11 +256,15 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 						{
 							GBufferBatches.FindOrAdd(Params).Add(SSFRRenderer);
 						}
+						else if (Params.SSFRMode == ESSFRRenderingMode::RayMarching)
+						{
+							RayMarchingBatches.FindOrAdd(Params).Add(SSFRRenderer);
+						}
 					}
 				}
 
 				// Check if we have any renderers
-				if (CustomBatches.Num() == 0 && GBufferBatches.Num() == 0)
+				if (CustomBatches.Num() == 0 && GBufferBatches.Num() == 0 && RayMarchingBatches.Num() == 0)
 				{
 					return InInputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
 				}
@@ -367,6 +374,102 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 								}
 							}
 						}
+					}
+				}
+
+				// ============================================
+				// Ray Marching SDF Mode Rendering
+				// ============================================
+				UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: RayMarchingBatches count = %d"), RayMarchingBatches.Num());
+
+				for (auto& Batch : RayMarchingBatches)
+				{
+					const FFluidRenderingParameters& BatchParams = Batch.Key;
+					const TArray<UKawaiiFluidSSFRRenderer*>& Renderers = Batch.Value;
+
+					RDG_EVENT_SCOPE(GraphBuilder, "FluidRayMarchBatch");
+
+					UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: RayMarching batch - Renderers count = %d"), Renderers.Num());
+
+					// Collect all particle positions from batch
+					TArray<FVector3f> AllParticlePositions;
+					float AverageParticleRadius = 10.0f;
+					float TotalRadius = 0.0f;
+					int32 ValidCount = 0;
+
+					for (UKawaiiFluidSSFRRenderer* Renderer : Renderers)
+					{
+						FKawaiiFluidRenderResource* RenderResource = Renderer->GetFluidRenderResource();
+						UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: RenderResource = %p, IsValid = %s"),
+							RenderResource,
+							RenderResource ? (RenderResource->IsValid() ? TEXT("true") : TEXT("false")) : TEXT("N/A"));
+
+						if (RenderResource && RenderResource->IsValid())
+						{
+							const TArray<FKawaiiRenderParticle>& CachedParticles = RenderResource->GetCachedParticles();
+							UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: CachedParticles count = %d"), CachedParticles.Num());
+							for (const FKawaiiRenderParticle& Particle : CachedParticles)
+							{
+								AllParticlePositions.Add(Particle.Position);
+							}
+						}
+						TotalRadius += Renderer->GetCachedParticleRadius();
+						ValidCount++;
+					}
+
+					if (ValidCount > 0)
+					{
+						AverageParticleRadius = TotalRadius / ValidCount;
+					}
+
+					UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: AllParticlePositions = %d, AverageRadius = %.2f"),
+						AllParticlePositions.Num(), AverageParticleRadius);
+
+					if (AllParticlePositions.Num() == 0)
+					{
+						UE_LOG(LogTemp, Warning, TEXT("KawaiiFluid: No particles for RayMarching - skipping"));
+						continue;
+					}
+
+					// Create RDG buffer for particle positions
+					const uint32 BufferSize = AllParticlePositions.Num() * sizeof(FVector3f);
+					FRDGBufferRef ParticleBuffer = GraphBuilder.CreateBuffer(
+						FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), AllParticlePositions.Num()),
+						TEXT("RayMarchParticlePositions"));
+
+					GraphBuilder.QueueBufferUpload(
+						ParticleBuffer,
+						AllParticlePositions.GetData(),
+						BufferSize,
+						ERDGInitialDataFlags::NoCopy);
+
+					FRDGBufferSRVRef ParticleBufferSRV = GraphBuilder.CreateSRV(ParticleBuffer);
+
+					// Get RayMarch composite pass from first renderer
+					if (Renderers.Num() > 0 && Renderers[0]->GetCompositePass())
+					{
+						FFluidRayMarchComposite* RayMarchComposite =
+							static_cast<FFluidRayMarchComposite*>(Renderers[0]->GetCompositePass().Get());
+
+						// Set particle data
+						RayMarchComposite->SetParticleData(
+							ParticleBufferSRV,
+							AllParticlePositions.Num(),
+							AverageParticleRadius);
+
+						// Render (no intermediate textures needed for ray marching)
+						FFluidIntermediateTextures DummyIntermediateTextures;
+
+						RayMarchComposite->RenderComposite(
+							GraphBuilder,
+							View,
+							BatchParams,
+							DummyIntermediateTextures,
+							SceneDepthTexture,
+							SceneColorInput.Texture,
+							Output);
+
+						UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: Ray Marching rendered %d particles"), AllParticlePositions.Num());
 					}
 				}
 
