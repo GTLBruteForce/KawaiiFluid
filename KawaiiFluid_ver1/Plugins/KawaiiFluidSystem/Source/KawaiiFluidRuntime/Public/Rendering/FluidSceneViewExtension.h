@@ -23,14 +23,25 @@ public:
 	virtual void BeginRenderViewFamily(FSceneViewFamily& InViewFamily) override {}
 
 	/**
-	 * PostProcessing Pass 구독 
-	 * Tonemap 전에 Fluid 렌더링을 주입
+	 * PostProcessing Pass 구독
+	 * Tonemap: Custom mode (post-lighting)
 	 */
 	virtual void SubscribeToPostProcessingPass(
 		EPostProcessingPass Pass,
 		const FSceneView& InView,
 		FPostProcessingPassDelegateArray& InOutPassCallbacks,
 		bool bIsPassEnabled) override;
+
+	/**
+	 * GBuffer mode rendering - called right after BasePass, before Lighting
+	 * This is the correct injection point for GBuffer write
+	 */
+	virtual void PostRenderBasePassDeferred_RenderThread(
+		FRDGBuilder& GraphBuilder,
+		FSceneView& InView,
+		const FRenderTargetBindingSlots& RenderTargets,
+		TRDGUniformBufferRef<FSceneTextureUniformParameters> SceneTextures) override;
+
 	// End of ISceneViewExtension interface
 
 private:
