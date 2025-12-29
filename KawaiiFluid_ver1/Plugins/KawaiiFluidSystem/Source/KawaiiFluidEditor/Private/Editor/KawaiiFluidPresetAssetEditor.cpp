@@ -7,6 +7,7 @@
 #include "Viewport/SFluidPresetEditorViewport.h"
 #include "Widgets/SFluidPreviewPlaybackControls.h"
 #include "Style/FluidEditorStyle.h"
+#include "Components/InstancedStaticMeshComponent.h"
 
 #include "Widgets/Docking/SDockTab.h"
 #include "PropertyEditorModule.h"
@@ -232,6 +233,9 @@ TSharedRef<SDockTab> FKawaiiFluidPresetAssetEditor::SpawnTab_PreviewSettings(con
 		PreviewSettingsView->SetObject(PreviewScene->GetPreviewSettingsObject());
 	}
 
+	// Bind property change notification for preview settings
+	PreviewSettingsView->OnFinishedChangingProperties().AddSP(this, &FKawaiiFluidPresetAssetEditor::OnPreviewSettingsPropertyChanged);
+
 	return SNew(SDockTab)
 		.Label(LOCTEXT("PreviewSettingsTabLabel", "Preview Settings"))
 		[
@@ -329,6 +333,33 @@ void FKawaiiFluidPresetAssetEditor::SetSimulationSpeed(float Speed)
 void FKawaiiFluidPresetAssetEditor::OnPresetPropertyChanged(const FPropertyChangedEvent& PropertyChangedEvent)
 {
 	RefreshPreview();
+}
+
+void FKawaiiFluidPresetAssetEditor::OnPreviewSettingsPropertyChanged(const FPropertyChangedEvent& PropertyChangedEvent)
+{
+	if (!PreviewScene.IsValid())
+	{
+		return;
+	}
+
+	const FFluidPreviewSettings& Settings = PreviewScene->GetPreviewSettings();
+
+	// Check if render mode changed
+	FName PropertyName = (PropertyChangedEvent.Property != nullptr) ? PropertyChangedEvent.Property->GetFName() : NAME_None;
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(FFluidPreviewSettings, RenderMode))
+	{
+		// Apply render mode change
+		PreviewScene->SetRenderMode(Settings.RenderMode);
+	}
+
+	// Apply other preview settings (environment, etc.)
+	PreviewScene->ApplyPreviewSettings();
+
+	if (ViewportWidget.IsValid())
+	{
+		ViewportWidget->RefreshViewport();
+	}
 }
 
 void FKawaiiFluidPresetAssetEditor::RefreshPreview()

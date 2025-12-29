@@ -7,7 +7,10 @@
 #include "Core/KawaiiFluidSimulationContext.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
-#include "Components/InstancedStaticMeshComponent.h"
+#include "Modules/KawaiiFluidRenderingModule.h"
+#include "Rendering/KawaiiFluidISMRenderer.h"
+#include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/FluidRendererSubsystem.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -21,8 +24,9 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 	, SimulationContext(nullptr)
 	, SpawnAccumulator(0.0f)
 	, bSimulationActive(false)
+	, RenderingModule(nullptr)
+	, CurrentRenderMode(EFluidPreviewRenderMode::SSFR)
 	, PreviewActor(nullptr)
-	, ParticleMeshComponent(nullptr)
 	, FloorMeshComponent(nullptr)
 	, CachedParticleRadius(5.0f)
 {
@@ -35,8 +39,43 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 	// Create simulation context (physics solver)
 	SimulationContext = NewObject<UKawaiiFluidSimulationContext>(GetTransientPackage(), NAME_None, RF_Transient);
 
-	// Create visualization components
+	// Create visualization components (including PreviewActor)
 	CreateVisualizationComponents();
+
+	// Create rendering module (same as runtime!)
+	RenderingModule = NewObject<UKawaiiFluidRenderingModule>(GetTransientPackage(), NAME_None, RF_Transient);
+	if (RenderingModule && PreviewActor)
+	{
+		// Initialize with this as DataProvider (IKawaiiFluidDataProvider)
+		RenderingModule->Initialize(GetWorld(), PreviewActor, this);
+
+		// Apply default settings to renderers (same as runtime!)
+		if (UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer())
+		{
+			FKawaiiFluidISMRendererSettings ISMSettings;
+			ISMSettings.bEnabled = true;
+			ISMRenderer->ApplySettings(ISMSettings);
+		}
+
+		if (UKawaiiFluidSSFRRenderer* SSFRRenderer = RenderingModule->GetSSFRRenderer())
+		{
+			FKawaiiFluidSSFRRendererSettings SSFRSettings;
+			SSFRSettings.bEnabled = true;
+			SSFRRenderer->ApplySettings(SSFRSettings);
+		}
+
+		// Register to FluidRendererSubsystem (required for SSFR ViewExtension!)
+		if (UWorld* World = GetWorld())
+		{
+			if (UFluidRendererSubsystem* RendererSubsystem = World->GetSubsystem<UFluidRendererSubsystem>())
+			{
+				RendererSubsystem->RegisterRenderingModule(RenderingModule);
+			}
+		}
+	}
+
+	// Set default render mode
+	SetRenderMode(EFluidPreviewRenderMode::SSFR);
 
 	// Setup environment
 	SetupFloor();
@@ -44,6 +83,19 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 
 FFluidPreviewScene::~FFluidPreviewScene()
 {
+	// Unregister from FluidRendererSubsystem first
+	if (RenderingModule)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			if (UFluidRendererSubsystem* RendererSubsystem = World->GetSubsystem<UFluidRendererSubsystem>())
+			{
+				RendererSubsystem->UnregisterRenderingModule(RenderingModule);
+			}
+		}
+		RenderingModule->Cleanup();
+	}
+
 	// Clean up simulation module
 	if (SimulationModule)
 	{
@@ -65,8 +117,8 @@ void FFluidPreviewScene::AddReferencedObjects(FReferenceCollector& Collector)
 	Collector.AddReferencedObject(PreviewSettingsObject);
 	Collector.AddReferencedObject(SimulationModule);
 	Collector.AddReferencedObject(SimulationContext);
+	Collector.AddReferencedObject(RenderingModule);
 	Collector.AddReferencedObject(PreviewActor);
-	Collector.AddReferencedObject(ParticleMeshComponent);
 	Collector.AddReferencedObject(FloorMeshComponent);
 	Collector.AddReferencedObjects(WallMeshComponents);
 }
@@ -89,31 +141,8 @@ void FFluidPreviewScene::CreateVisualizationComponents()
 	PreviewActor->SetRootComponent(RootComp);
 	RootComp->RegisterComponent();
 
-	// Create particle ISM component
-	ParticleMeshComponent = NewObject<UInstancedStaticMeshComponent>(PreviewActor, TEXT("ParticleMesh"));
-	ParticleMeshComponent->SetupAttachment(RootComp);
-
-	// Use engine sphere mesh
-	UStaticMesh* SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	if (SphereMesh)
-	{
-		ParticleMeshComponent->SetStaticMesh(SphereMesh);
-	}
-
-	// Create dynamic material for particles
-	UMaterial* BaseMaterial = LoadObject<UMaterial>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	if (BaseMaterial)
-	{
-		UMaterialInstanceDynamic* ParticleMaterial = UMaterialInstanceDynamic::Create(BaseMaterial, ParticleMeshComponent);
-		ParticleMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.2f, 0.5f, 1.0f, 0.8f));
-		ParticleMeshComponent->SetMaterial(0, ParticleMaterial);
-	}
-
-	ParticleMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	ParticleMeshComponent->SetCastShadow(false);
-	ParticleMeshComponent->RegisterComponent();
-
 	// Create floor mesh component
+	UMaterial* BaseMaterial = LoadObject<UMaterial>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	FloorMeshComponent = NewObject<UStaticMeshComponent>(PreviewActor, TEXT("FloorMesh"));
 	FloorMeshComponent->SetupAttachment(RootComp);
 
@@ -134,7 +163,6 @@ void FFluidPreviewScene::CreateVisualizationComponents()
 	FloorMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	FloorMeshComponent->RegisterComponent();
 
-	AddComponent(ParticleMeshComponent, FTransform::Identity);
 	AddComponent(FloorMeshComponent, FTransform::Identity);
 }
 
@@ -144,16 +172,6 @@ void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 
 	if (CurrentPreset)
 	{
-		// Update particle visuals (color)
-		if (ParticleMeshComponent)
-		{
-			UMaterialInstanceDynamic* ParticleMaterial = Cast<UMaterialInstanceDynamic>(ParticleMeshComponent->GetMaterial(0));
-			if (ParticleMaterial)
-			{
-				ParticleMaterial->SetVectorParameterValue(TEXT("Color"), CurrentPreset->Color);
-			}
-		}
-
 		// Initialize simulation module with preset
 		if (SimulationModule)
 		{
@@ -167,6 +185,20 @@ void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 		}
 
 		CachedParticleRadius = CurrentPreset->ParticleRadius;
+
+		// Update rendering module with preset settings
+		if (RenderingModule)
+		{
+			if (UKawaiiFluidISMRenderer* ISM = RenderingModule->GetISMRenderer())
+			{
+				ISM->ParticleScale = CachedParticleRadius / 5.0f;
+				ISM->SetFluidColor(CurrentPreset->Color);
+			}
+			if (UKawaiiFluidSSFRRenderer* SSFR = RenderingModule->GetSSFRRenderer())
+			{
+				SSFR->LocalParameters.FluidColor = CurrentPreset->Color;
+			}
+		}
 	}
 
 	// Reset simulation
@@ -180,16 +212,6 @@ void FFluidPreviewScene::RefreshFromPreset()
 		return;
 	}
 
-	// Update particle color
-	if (ParticleMeshComponent)
-	{
-		UMaterialInstanceDynamic* ParticleMaterial = Cast<UMaterialInstanceDynamic>(ParticleMeshComponent->GetMaterial(0));
-		if (ParticleMaterial)
-		{
-			ParticleMaterial->SetVectorParameterValue(TEXT("Color"), CurrentPreset->Color);
-		}
-	}
-
 	// Update simulation module preset (handles SpatialHash internally)
 	if (SimulationModule)
 	{
@@ -198,8 +220,19 @@ void FFluidPreviewScene::RefreshFromPreset()
 
 	CachedParticleRadius = CurrentPreset->ParticleRadius;
 
-	// Update particle visualization scale
-	UpdateParticleVisuals();
+	// Update rendering module with preset settings
+	if (RenderingModule)
+	{
+		if (UKawaiiFluidISMRenderer* ISM = RenderingModule->GetISMRenderer())
+		{
+			ISM->ParticleScale = CachedParticleRadius / 5.0f;
+			ISM->SetFluidColor(CurrentPreset->Color);
+		}
+		if (UKawaiiFluidSSFRRenderer* SSFR = RenderingModule->GetSSFRRenderer())
+		{
+			SSFR->LocalParameters.FluidColor = CurrentPreset->Color;
+		}
+	}
 }
 
 void FFluidPreviewScene::StartSimulation()
@@ -221,9 +254,6 @@ void FFluidPreviewScene::ResetSimulation()
 		SimulationModule->SetAccumulatedTime(0.0f);
 	}
 	SpawnAccumulator = 0.0f;
-
-	// Update visuals
-	UpdateParticleVisuals();
 }
 
 void FFluidPreviewScene::ContinuousSpawn(float DeltaTime)
@@ -316,31 +346,28 @@ void FFluidPreviewScene::TickSimulation(float DeltaTime)
 	// Handle floor collision manually
 	HandleFloorCollision();
 
-	// Handle wall collision if enabled
-	if (PreviewSettingsObject->Settings.bShowWalls)
+	// Update rendering module (SSFR or ISM based on mode)
+	if (RenderingModule)
 	{
-		HandleWallCollision();
+		RenderingModule->UpdateRenderers();
 	}
-
-	// Update visuals
-	UpdateParticleVisuals();
 }
 
 void FFluidPreviewScene::HandleFloorCollision()
 {
-	if (!PreviewSettingsObject->Settings.bShowFloor || !SimulationModule)
+	if (!SimulationModule)
 	{
 		return;
 	}
 
-	const float FloorY = PreviewSettingsObject->Settings.FloorHeight;
+	constexpr float FloorZ = 0.0f;
 	const float ParticleRadius = CurrentPreset ? CurrentPreset->ParticleRadius : 5.0f;
 	const float Restitution = CurrentPreset ? CurrentPreset->Restitution : 0.0f;
 	const float Friction = CurrentPreset ? CurrentPreset->Friction : 0.5f;
 
 	for (FFluidParticle& Particle : SimulationModule->GetParticlesMutable())
 	{
-		const float MinZ = FloorY + ParticleRadius;
+		const float MinZ = FloorZ + ParticleRadius;
 
 		if (Particle.Position.Z < MinZ)
 		{
@@ -362,50 +389,6 @@ void FFluidPreviewScene::HandleFloorCollision()
 	}
 }
 
-void FFluidPreviewScene::HandleWallCollision()
-{
-	if (!SimulationModule)
-	{
-		return;
-	}
-
-	const FFluidPreviewSettings& Settings = PreviewSettingsObject->Settings;
-	const float HalfSize = Settings.FloorSize.X * 0.5f;
-	const float ParticleRadius = CurrentPreset ? CurrentPreset->ParticleRadius : 5.0f;
-	const float Restitution = CurrentPreset ? CurrentPreset->Restitution : 0.0f;
-
-	for (FFluidParticle& Particle : SimulationModule->GetParticlesMutable())
-	{
-		// X boundaries
-		if (Particle.Position.X < -HalfSize + ParticleRadius)
-		{
-			Particle.Position.X = -HalfSize + ParticleRadius;
-			Particle.PredictedPosition.X = Particle.Position.X;
-			Particle.Velocity.X *= -Restitution;
-		}
-		else if (Particle.Position.X > HalfSize - ParticleRadius)
-		{
-			Particle.Position.X = HalfSize - ParticleRadius;
-			Particle.PredictedPosition.X = Particle.Position.X;
-			Particle.Velocity.X *= -Restitution;
-		}
-
-		// Y boundaries
-		if (Particle.Position.Y < -HalfSize + ParticleRadius)
-		{
-			Particle.Position.Y = -HalfSize + ParticleRadius;
-			Particle.PredictedPosition.Y = Particle.Position.Y;
-			Particle.Velocity.Y *= -Restitution;
-		}
-		else if (Particle.Position.Y > HalfSize - ParticleRadius)
-		{
-			Particle.Position.Y = HalfSize - ParticleRadius;
-			Particle.PredictedPosition.Y = Particle.Position.Y;
-			Particle.Velocity.Y *= -Restitution;
-		}
-	}
-}
-
 FFluidPreviewSettings& FFluidPreviewScene::GetPreviewSettings()
 {
 	return PreviewSettingsObject->Settings;
@@ -421,12 +404,6 @@ void FFluidPreviewScene::SetupFloor()
 	UpdateEnvironment();
 }
 
-void FFluidPreviewScene::SetupWalls()
-{
-	// Wall setup is handled in UpdateEnvironment
-	UpdateEnvironment();
-}
-
 void FFluidPreviewScene::UpdateEnvironment()
 {
 	if (!FloorMeshComponent)
@@ -434,78 +411,19 @@ void FFluidPreviewScene::UpdateEnvironment()
 		return;
 	}
 
-	const FFluidPreviewSettings& Settings = PreviewSettingsObject->Settings;
+	// Floor always visible with fixed size
+	const FVector FloorSize(500.0f, 500.0f, 10.0f);
+	const float FloorHeight = 0.0f;
 
-	// Update floor visibility and transform
-	FloorMeshComponent->SetVisibility(Settings.bShowFloor);
-
-	if (Settings.bShowFloor)
-	{
-		FVector FloorScale = Settings.FloorSize / 100.0f; // Cube is 100 units
-		FloorMeshComponent->SetWorldLocation(FVector(0.0f, 0.0f, Settings.FloorHeight - Settings.FloorSize.Z * 0.5f));
-		FloorMeshComponent->SetWorldScale3D(FloorScale);
-	}
-
-	// TODO: Update wall meshes if needed
-}
-
-void FFluidPreviewScene::UpdateParticleVisuals()
-{
-	if (!ParticleMeshComponent || !SimulationModule)
-	{
-		return;
-	}
-
-	const TArray<FFluidParticle>& Particles = SimulationModule->GetParticles();
-	const int32 NumParticles = Particles.Num();
-
-	// Adjust instance count
-	const int32 CurrentInstanceCount = ParticleMeshComponent->GetInstanceCount();
-	if (CurrentInstanceCount != NumParticles)
-	{
-		ParticleMeshComponent->ClearInstances();
-
-		TArray<FTransform> Transforms;
-		Transforms.SetNum(NumParticles);
-
-		for (int32 i = 0; i < NumParticles; ++i)
-		{
-			Transforms[i] = FTransform::Identity;
-		}
-
-		ParticleMeshComponent->AddInstances(Transforms, false);
-	}
-
-	// Update instance transforms
-	const float ParticleScale = CachedParticleRadius / 50.0f; // Sphere is 100 units diameter
-
-	for (int32 i = 0; i < NumParticles; ++i)
-	{
-		const FFluidParticle& Particle = Particles[i];
-		FTransform InstanceTransform(
-			FRotator::ZeroRotator,
-			Particle.Position,
-			FVector(ParticleScale)
-		);
-		ParticleMeshComponent->UpdateInstanceTransform(i, InstanceTransform, false, false, true);
-	}
-
-	ParticleMeshComponent->MarkRenderStateDirty();
+	FloorMeshComponent->SetVisibility(true);
+	FVector FloorScale = FloorSize / 100.0f; // Cube is 100 units
+	FloorMeshComponent->SetWorldLocation(FVector(0.0f, 0.0f, FloorHeight - FloorSize.Z * 0.5f));
+	FloorMeshComponent->SetWorldScale3D(FloorScale);
 }
 
 //========================================
-// Particle Access (via SimulationModule)
+// IKawaiiFluidDataProvider Interface
 //========================================
-
-TArray<FFluidParticle>& FFluidPreviewScene::GetParticles()
-{
-	static TArray<FFluidParticle> EmptyArray;
-	if (SimulationModule)
-	{
-		return SimulationModule->GetParticlesMutable();
-	}
-	return EmptyArray;
-}
 
 const TArray<FFluidParticle>& FFluidPreviewScene::GetParticles() const
 {
@@ -520,6 +438,53 @@ const TArray<FFluidParticle>& FFluidPreviewScene::GetParticles() const
 int32 FFluidPreviewScene::GetParticleCount() const
 {
 	return SimulationModule ? SimulationModule->GetParticleCount() : 0;
+}
+
+float FFluidPreviewScene::GetParticleRadius() const
+{
+	return CachedParticleRadius;
+}
+
+bool FFluidPreviewScene::IsDataValid() const
+{
+	return SimulationModule != nullptr && SimulationModule->GetParticleCount() > 0;
+}
+
+//========================================
+// Render Mode Control
+//========================================
+
+void FFluidPreviewScene::SetRenderMode(EFluidPreviewRenderMode NewMode)
+{
+	CurrentRenderMode = NewMode;
+
+	// Update rendering module mode
+	if (RenderingModule)
+	{
+		const bool bUseSSFR = (NewMode == EFluidPreviewRenderMode::SSFR);
+		if (UKawaiiFluidISMRenderer* ISM = RenderingModule->GetISMRenderer())
+		{
+			ISM->SetEnabled(!bUseSSFR);
+		}
+		if (UKawaiiFluidSSFRRenderer* SSFR = RenderingModule->GetSSFRRenderer())
+		{
+			SSFR->SetEnabled(bUseSSFR);
+		}
+	}
+}
+
+//========================================
+// Particle Access (via SimulationModule)
+//========================================
+
+TArray<FFluidParticle>& FFluidPreviewScene::GetParticlesMutable()
+{
+	static TArray<FFluidParticle> EmptyArray;
+	if (SimulationModule)
+	{
+		return SimulationModule->GetParticlesMutable();
+	}
+	return EmptyArray;
 }
 
 float FFluidPreviewScene::GetSimulationTime() const

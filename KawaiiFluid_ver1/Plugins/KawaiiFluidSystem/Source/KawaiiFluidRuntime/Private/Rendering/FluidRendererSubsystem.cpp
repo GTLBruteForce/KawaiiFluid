@@ -4,6 +4,25 @@
 #include "Rendering/FluidSceneViewExtension.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
 
+bool UFluidRendererSubsystem::ShouldCreateSubsystem(UObject* Outer) const
+{
+	if (!Super::ShouldCreateSubsystem(Outer))
+	{
+		return false;
+	}
+
+	UWorld* World = CastChecked<UWorld>(Outer);
+	const EWorldType::Type WorldType = World->WorldType;
+
+	// Support all world types that might need fluid rendering
+	// Including EditorPreview for Preset Editor viewport
+	return WorldType == EWorldType::Game ||
+	       WorldType == EWorldType::Editor ||
+	       WorldType == EWorldType::PIE ||
+	       WorldType == EWorldType::EditorPreview ||
+	       WorldType == EWorldType::GamePreview;
+}
+
 void UFluidRendererSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);

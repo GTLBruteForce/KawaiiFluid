@@ -3,6 +3,7 @@
 #include "Rendering/KawaiiFluidISMRenderer.h"
 #include "Interfaces/IKawaiiFluidDataProvider.h"
 #include "Core/FluidParticle.h"
+#include "Materials/MaterialInstanceDynamic.h"
 
 UKawaiiFluidISMRenderer::UKawaiiFluidISMRenderer()
 {
@@ -44,6 +45,17 @@ void UKawaiiFluidISMRenderer::Cleanup()
 	CachedWorld = nullptr;
 	CachedOwner = nullptr;
 	bEnabled = false;
+}
+
+void UKawaiiFluidISMRenderer::SetEnabled(bool bInEnabled)
+{
+	bEnabled = bInEnabled;
+
+	// Clear instances when disabled
+	if (!bEnabled && ISMComponent)
+	{
+		ISMComponent->ClearInstances();
+	}
 }
 
 void UKawaiiFluidISMRenderer::ApplySettings(const FKawaiiFluidISMRendererSettings& Settings)
@@ -242,4 +254,41 @@ UMaterialInterface* UKawaiiFluidISMRenderer::GetDefaultParticleMaterial()
 	}
 
 	return DefaultMaterial;
+}
+
+void UKawaiiFluidISMRenderer::SetFluidColor(FLinearColor Color)
+{
+	if (!ISMComponent)
+	{
+		return;
+	}
+
+	// Get or create dynamic material instance
+	UMaterialInstanceDynamic* DynMaterial = Cast<UMaterialInstanceDynamic>(ISMComponent->GetMaterial(0));
+
+	if (!DynMaterial)
+	{
+		// Create dynamic material from current material
+		UMaterialInterface* BaseMaterial = ISMComponent->GetMaterial(0);
+		if (!BaseMaterial)
+		{
+			BaseMaterial = GetDefaultParticleMaterial();
+		}
+
+		if (BaseMaterial)
+		{
+			DynMaterial = UMaterialInstanceDynamic::Create(BaseMaterial, ISMComponent);
+			ISMComponent->SetMaterial(0, DynMaterial);
+		}
+	}
+
+	if (DynMaterial)
+	{
+		// BasicShapeMaterial uses "Color" parameter
+		DynMaterial->SetVectorParameterValue(TEXT("Color"), Color);
+	}
+
+	// Also update velocity colors for consistency
+	MinVelocityColor = Color;
+	MaxVelocityColor = Color;
 }

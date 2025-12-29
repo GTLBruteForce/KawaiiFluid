@@ -62,7 +62,11 @@ public:
 	bool IsEnabled() const { return bEnabled; }
 
 	/** Enable or disable rendering */
-	void SetEnabled(bool bInEnabled) { bEnabled = bInEnabled; }
+	void SetEnabled(bool bInEnabled);
+
+
+	/** Set fluid color (creates dynamic material instance if needed) */
+	void SetFluidColor(FLinearColor Color);
 
 	//========================================
 	// Configuration

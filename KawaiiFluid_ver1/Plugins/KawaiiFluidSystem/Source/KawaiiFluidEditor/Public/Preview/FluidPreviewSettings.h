@@ -7,12 +7,41 @@
 #include "FluidPreviewSettings.generated.h"
 
 /**
+ * Render mode for fluid preview
+ */
+UENUM(BlueprintType)
+enum class EFluidPreviewRenderMode : uint8
+{
+	/** Fast preview using instanced meshes (spheres) */
+	ISM   UMETA(DisplayName = "Instanced Mesh (Fast)"),
+
+	/** Realistic preview using Screen Space Fluid Rendering - same as runtime */
+	SSFR  UMETA(DisplayName = "Screen Space Fluid (Realistic)")
+};
+
+/**
  * Preview environment settings exposed to Details Panel
  */
 USTRUCT(BlueprintType)
 struct FFluidPreviewSettings
 {
 	GENERATED_BODY()
+
+	//========================================
+	// Rendering Settings
+	//========================================
+
+	/** Render mode - ISM for fast preview, SSFR for realistic (same as runtime) */
+	UPROPERTY(EditAnywhere, Category = "Rendering")
+	EFluidPreviewRenderMode RenderMode = EFluidPreviewRenderMode::SSFR;
+
+	/** [SSFR] Smoothing filter iterations for surface smoothness */
+	UPROPERTY(EditAnywhere, Category = "Rendering|SSFR", meta = (EditCondition = "RenderMode == EFluidPreviewRenderMode::SSFR", ClampMin = "0", ClampMax = "5"))
+	int32 SmoothingIterations = 2;
+
+	/** [SSFR] Fluid thickness scale for refraction effect */
+	UPROPERTY(EditAnywhere, Category = "Rendering|SSFR", meta = (EditCondition = "RenderMode == EFluidPreviewRenderMode::SSFR", ClampMin = "0.1", ClampMax = "5.0"))
+	float ThicknessScale = 1.0f;
 
 	//========================================
 	// Continuous Spawn Settings
@@ -38,49 +67,6 @@ struct FFluidPreviewSettings
 	UPROPERTY(EditAnywhere, Category = "Spawn", meta = (ClampMin = "1.0", ClampMax = "100.0"))
 	float SpawnRadius = 15.0f;
 
-	//========================================
-	// Environment Settings
-	//========================================
-
-	/** Show floor plane */
-	UPROPERTY(EditAnywhere, Category = "Environment")
-	bool bShowFloor = true;
-
-	/** Floor height (Z position) */
-	UPROPERTY(EditAnywhere, Category = "Environment", meta = (EditCondition = "bShowFloor"))
-	float FloorHeight = 0.0f;
-
-	/** Floor size */
-	UPROPERTY(EditAnywhere, Category = "Environment", meta = (EditCondition = "bShowFloor"))
-	FVector FloorSize = FVector(500.0f, 500.0f, 10.0f);
-
-	/** Show boundary walls */
-	UPROPERTY(EditAnywhere, Category = "Environment")
-	bool bShowWalls = false;
-
-	/** Wall height */
-	UPROPERTY(EditAnywhere, Category = "Environment", meta = (EditCondition = "bShowWalls"))
-	float WallHeight = 300.0f;
-
-	//========================================
-	// Debug Visualization
-	//========================================
-
-	/** Show velocity vectors for each particle */
-	UPROPERTY(EditAnywhere, Category = "Debug")
-	bool bShowVelocityVectors = false;
-
-	/** Show neighbor connections */
-	UPROPERTY(EditAnywhere, Category = "Debug")
-	bool bShowNeighborConnections = false;
-
-	/** Show spatial hash grid */
-	UPROPERTY(EditAnywhere, Category = "Debug")
-	bool bShowSpatialHashGrid = false;
-
-	/** Show particle density as color */
-	UPROPERTY(EditAnywhere, Category = "Debug")
-	bool bShowDensityColors = false;
 };
 
 /**

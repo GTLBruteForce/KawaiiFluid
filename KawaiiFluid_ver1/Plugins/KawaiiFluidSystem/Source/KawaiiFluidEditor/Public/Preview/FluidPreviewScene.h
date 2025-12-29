@@ -5,18 +5,24 @@
 #include "CoreMinimal.h"
 #include "AdvancedPreviewScene.h"
 #include "Preview/FluidPreviewSettings.h"
+#include "Interfaces/IKawaiiFluidDataProvider.h"
 
 class UKawaiiFluidPresetDataAsset;
 class UKawaiiFluidSimulationContext;
 class UKawaiiFluidSimulationModule;
+class UKawaiiFluidRenderingModule;
 class FSpatialHash;
 struct FFluidParticle;
 
 /**
  * Preview scene for fluid simulation in asset editor
  * Contains preview world, simulation logic, and visualization
+ *
+ * Implements IKawaiiFluidDataProvider to share data with RenderingModule
+ * (same architecture as runtime for consistent preview)
  */
-class KAWAIIFLUIDEDITOR_API FFluidPreviewScene : public FAdvancedPreviewScene
+class KAWAIIFLUIDEDITOR_API FFluidPreviewScene : public FAdvancedPreviewScene,
+                                                  public IKawaiiFluidDataProvider
 {
 public:
 	FFluidPreviewScene(FPreviewScene::ConstructionValues CVS);
@@ -24,6 +30,29 @@ public:
 
 	/** GC 방지 */
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+
+	//========================================
+	// IKawaiiFluidDataProvider Interface
+	//========================================
+
+	virtual const TArray<FFluidParticle>& GetParticles() const override;
+	virtual int32 GetParticleCount() const override;
+	virtual float GetParticleRadius() const override;
+	virtual bool IsDataValid() const override;
+	virtual FString GetDebugName() const override { return TEXT("FluidPreviewScene"); }
+
+	//========================================
+	// Render Mode Control
+	//========================================
+
+	/** Set render mode (ISM or SSFR) */
+	void SetRenderMode(EFluidPreviewRenderMode NewMode);
+
+	/** Get current render mode */
+	EFluidPreviewRenderMode GetRenderMode() const { return CurrentRenderMode; }
+
+	/** Get rendering module */
+	UKawaiiFluidRenderingModule* GetRenderingModule() const { return RenderingModule; }
 
 	//========================================
 	// Preset Management
@@ -77,9 +106,6 @@ public:
 	/** Setup floor mesh */
 	void SetupFloor();
 
-	/** Setup boundary walls */
-	void SetupWalls();
-
 	/** Update environment from settings */
 	void UpdateEnvironment();
 
@@ -87,12 +113,8 @@ public:
 	// Particle Access (via SimulationModule)
 	//========================================
 
-	/** Get particles array */
-	TArray<FFluidParticle>& GetParticles();
-	const TArray<FFluidParticle>& GetParticles() const;
-
-	/** Get current particle count */
-	int32 GetParticleCount() const;
+	/** Get mutable particles array (for simulation) */
+	TArray<FFluidParticle>& GetParticlesMutable();
 
 	/** Get average density */
 	float GetAverageDensity() const;
@@ -102,16 +124,6 @@ public:
 
 	/** Get simulation module */
 	UKawaiiFluidSimulationModule* GetSimulationModule() const { return SimulationModule; }
-
-	//========================================
-	// Visualization
-	//========================================
-
-	/** Update particle mesh instances */
-	void UpdateParticleVisuals();
-
-	/** Get particle mesh component for debug drawing */
-	UInstancedStaticMeshComponent* GetParticleMeshComponent() const { return ParticleMeshComponent; }
 
 private:
 	/** Continuous spawn particles */
@@ -125,9 +137,6 @@ private:
 
 	/** Simple floor collision */
 	void HandleFloorCollision();
-
-	/** Simple wall collision */
-	void HandleWallCollision();
 
 private:
 	//========================================
@@ -157,14 +166,21 @@ private:
 	bool bSimulationActive;
 
 	//========================================
+	// Rendering (same as runtime)
+	//========================================
+
+	/** Rendering module - same as runtime! (ISM + SSFR) */
+	TObjectPtr<UKawaiiFluidRenderingModule> RenderingModule;
+
+	/** Current render mode */
+	EFluidPreviewRenderMode CurrentRenderMode;
+
+	//========================================
 	// Visualization Components
 	//========================================
 
 	/** Preview actor to hold components */
 	TObjectPtr<AActor> PreviewActor;
-
-	/** Instanced mesh for particles */
-	TObjectPtr<UInstancedStaticMeshComponent> ParticleMeshComponent;
 
 	/** Floor mesh */
 	TObjectPtr<UStaticMeshComponent> FloorMeshComponent;

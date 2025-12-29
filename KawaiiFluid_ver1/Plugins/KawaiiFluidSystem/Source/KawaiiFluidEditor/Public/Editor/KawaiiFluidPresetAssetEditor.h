@@ -94,6 +94,9 @@ public:
 	/** Called when preset property changes */
 	void OnPresetPropertyChanged(const FPropertyChangedEvent& PropertyChangedEvent);
 
+	/** Called when preview settings property changes */
+	void OnPreviewSettingsPropertyChanged(const FPropertyChangedEvent& PropertyChangedEvent);
+
 private:
 	//========================================
 	// Tab Spawners

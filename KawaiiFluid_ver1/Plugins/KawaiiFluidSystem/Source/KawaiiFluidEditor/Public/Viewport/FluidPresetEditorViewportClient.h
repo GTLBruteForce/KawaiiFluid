@@ -43,19 +43,6 @@ public:
 	/** Get preview scene */
 	TSharedPtr<FFluidPreviewScene> GetPreviewScene() const { return PreviewScene; }
 
-protected:
-	/** Draw debug info */
-	void DrawDebugInfo(FPrimitiveDrawInterface* PDI);
-
-	/** Draw velocity vectors */
-	void DrawVelocityVectors(FPrimitiveDrawInterface* PDI);
-
-	/** Draw neighbor connections */
-	void DrawNeighborConnections(FPrimitiveDrawInterface* PDI);
-
-	/** Draw spatial hash grid */
-	void DrawSpatialHashGrid(FPrimitiveDrawInterface* PDI);
-
 private:
 	/** Preview scene */
 	TSharedPtr<FFluidPreviewScene> PreviewScene;

@@ -3,9 +3,6 @@
 #include "Viewport/FluidPresetEditorViewportClient.h"
 #include "Viewport/SFluidPresetEditorViewport.h"
 #include "Preview/FluidPreviewScene.h"
-#include "Preview/FluidPreviewSettings.h"
-#include "Core/FluidParticle.h"
-#include "Core/SpatialHash.h"
 #include "AdvancedPreviewScene.h"
 
 FFluidPresetEditorViewportClient::FFluidPresetEditorViewportClient(
@@ -52,9 +49,6 @@ void FFluidPresetEditorViewportClient::Tick(float DeltaSeconds)
 void FFluidPresetEditorViewportClient::Draw(const FSceneView* View, FPrimitiveDrawInterface* PDI)
 {
 	FEditorViewportClient::Draw(View, PDI);
-
-	// Draw debug info if enabled
-	DrawDebugInfo(PDI);
 }
 
 bool FFluidPresetEditorViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
@@ -77,7 +71,7 @@ bool FFluidPresetEditorViewportClient::InputKey(const FInputKeyEventArgs& EventA
 		else if (EventArgs.Key == EKeys::H)
 		{
 			// Reset camera to home position
-			SetInitialCameraPosition();
+			SetInitialCameraPosition(); 
 			bHandled = true;
 		}
 	}
@@ -119,92 +113,3 @@ void FFluidPresetEditorViewportClient::FocusOnBounds(const FBoxSphereBounds& Bou
 	SetLookAtLocation(Bounds.Origin);
 }
 
-void FFluidPresetEditorViewportClient::DrawDebugInfo(FPrimitiveDrawInterface* PDI)
-{
-	if (!PreviewScene.IsValid())
-	{
-		return;
-	}
-
-	const FFluidPreviewSettings& Settings = PreviewScene->GetPreviewSettings();
-
-	if (Settings.bShowVelocityVectors)
-	{
-		DrawVelocityVectors(PDI);
-	}
-
-	if (Settings.bShowNeighborConnections)
-	{
-		DrawNeighborConnections(PDI);
-	}
-
-	if (Settings.bShowSpatialHashGrid)
-	{
-		DrawSpatialHashGrid(PDI);
-	}
-}
-
-void FFluidPresetEditorViewportClient::DrawVelocityVectors(FPrimitiveDrawInterface* PDI)
-{
-	const TArray<FFluidParticle>& Particles = PreviewScene->GetParticles();
-
-	for (const FFluidParticle& Particle : Particles)
-	{
-		if (Particle.Velocity.SizeSquared() > 1.0f)
-		{
-			FVector End = Particle.Position + Particle.Velocity * 0.1f;
-			PDI->DrawLine(Particle.Position, End, FLinearColor::Yellow, SDPG_World, 1.0f);
-		}
-	}
-}
-
-void FFluidPresetEditorViewportClient::DrawNeighborConnections(FPrimitiveDrawInterface* PDI)
-{
-	const TArray<FFluidParticle>& Particles = PreviewScene->GetParticles();
-
-	for (int32 i = 0; i < Particles.Num(); ++i)
-	{
-		const FFluidParticle& Particle = Particles[i];
-
-		for (int32 NeighborIdx : Particle.NeighborIndices)
-		{
-			if (NeighborIdx > i && NeighborIdx < Particles.Num())
-			{
-				const FFluidParticle& Neighbor = Particles[NeighborIdx];
-				PDI->DrawLine(Particle.Position, Neighbor.Position, FLinearColor(0.2f, 0.6f, 0.2f, 0.5f), SDPG_World, 0.5f);
-			}
-		}
-	}
-}
-
-void FFluidPresetEditorViewportClient::DrawSpatialHashGrid(FPrimitiveDrawInterface* PDI)
-{
-	// Draw bounds of spatial hash
-	const FFluidPreviewSettings& Settings = PreviewScene->GetPreviewSettings();
-	const float HalfSize = Settings.FloorSize.X * 0.5f;
-	const float Height = Settings.WallHeight;
-
-	FVector Min(-HalfSize, -HalfSize, Settings.FloorHeight);
-	FVector Max(HalfSize, HalfSize, Settings.FloorHeight + Height);
-
-	// Draw box edges
-	FLinearColor GridColor(0.3f, 0.3f, 0.5f, 0.5f);
-
-	// Bottom
-	PDI->DrawLine(FVector(Min.X, Min.Y, Min.Z), FVector(Max.X, Min.Y, Min.Z), GridColor, SDPG_World);
-	PDI->DrawLine(FVector(Max.X, Min.Y, Min.Z), FVector(Max.X, Max.Y, Min.Z), GridColor, SDPG_World);
-	PDI->DrawLine(FVector(Max.X, Max.Y, Min.Z), FVector(Min.X, Max.Y, Min.Z), GridColor, SDPG_World);
-	PDI->DrawLine(FVector(Min.X, Max.Y, Min.Z), FVector(Min.X, Min.Y, Min.Z), GridColor, SDPG_World);
-
-	// Top
-	PDI->DrawLine(FVector(Min.X, Min.Y, Max.Z), FVector(Max.X, Min.Y, Max.Z), GridColor, SDPG_World);
-	PDI->DrawLine(FVector(Max.X, Min.Y, Max.Z), FVector(Max.X, Max.Y, Max.Z), GridColor, SDPG_World);
-	PDI->DrawLine(FVector(Max.X, Max.Y, Max.Z), FVector(Min.X, Max.Y, Max.Z), GridColor, SDPG_World);
-	PDI->DrawLine(FVector(Min.X, Max.Y, Max.Z), FVector(Min.X, Min.Y, Max.Z), GridColor, SDPG_World);
-
-	// Verticals
-	PDI->DrawLine(FVector(Min.X, Min.Y, Min.Z), FVector(Min.X, Min.Y, Max.Z), GridColor, SDPG_World);
-	PDI->DrawLine(FVector(Max.X, Min.Y, Min.Z), FVector(Max.X, Min.Y, Max.Z), GridColor, SDPG_World);
-	PDI->DrawLine(FVector(Max.X, Max.Y, Min.Z), FVector(Max.X, Max.Y, Max.Z), GridColor, SDPG_World);
-	PDI->DrawLine(FVector(Min.X, Max.Y, Min.Z), FVector(Min.X, Max.Y, Max.Z), GridColor, SDPG_World);
-}

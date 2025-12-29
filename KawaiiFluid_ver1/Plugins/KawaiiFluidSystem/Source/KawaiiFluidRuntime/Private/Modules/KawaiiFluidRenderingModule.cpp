@@ -18,7 +18,22 @@ void UKawaiiFluidRenderingModule::Initialize(UWorld* InWorld, AActor* InOwner, I
 	CachedOwner = InOwner;
 	DataProviderPtr = InDataProvider;
 
-	// Initialize renderers (already created in constructor)
+	// CreateDefaultSubobject only works in CDO context.
+	// If created via NewObject (e.g., editor preview), renderers will be nullptr.
+	// Create them here if missing.
+	if (!ISMRenderer)
+	{
+		ISMRenderer = NewObject<UKawaiiFluidISMRenderer>(this, TEXT("ISMRenderer"));
+		UE_LOG(LogTemp, Log, TEXT("RenderingModule: Created ISMRenderer via NewObject (non-CDO context)"));
+	}
+
+	if (!SSFRRenderer)
+	{
+		SSFRRenderer = NewObject<UKawaiiFluidSSFRRenderer>(this, TEXT("SSFRRenderer"));
+		UE_LOG(LogTemp, Log, TEXT("RenderingModule: Created SSFRRenderer via NewObject (non-CDO context)"));
+	}
+
+	// Initialize renderers
 	if (ISMRenderer)
 	{
 		ISMRenderer->Initialize(InWorld, InOwner);
