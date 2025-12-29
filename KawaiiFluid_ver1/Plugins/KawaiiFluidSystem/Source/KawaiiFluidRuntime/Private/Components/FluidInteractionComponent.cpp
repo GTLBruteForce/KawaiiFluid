@@ -2,6 +2,7 @@
 
 #include "Components/FluidInteractionComponent.h"
 #include "Core/KawaiiFluidSimulatorSubsystem.h"
+#include "Core/SpatialHash.h"
 #include "Collision/MeshFluidCollider.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
 
@@ -249,34 +250,71 @@ void UFluidInteractionComponent::DetectCollidingParticles()
 		return;
 	}
 
+	// 캐시 갱신
+	AutoCollider->CacheCollisionShapes();
+	if (!AutoCollider->IsCacheValid())
+	{
+		CollidingParticleCount = 0;
+		return;
+	}
+
 	AActor* Owner = GetOwner();
 	int32 Count = 0;
-
-	auto CountColliding = [this, Owner, &Count](const TArray<FFluidParticle>& Particles)
-	{
-		for (const FFluidParticle& Particle : Particles)
-		{
-			// 1. 이미 붙어있으면 충돌 중
-			if (Particle.bIsAttached && Particle.AttachedActor.Get() == Owner)
-			{
-				++Count;
-				continue;
-			}
-
-			// 2. Collider 안에 있는지 체크 (물리 기반, 정확!)
-			if (AutoCollider->IsPointInside(Particle.Position))
-			{
-				++Count;
-			}
-		}
-	};
+	FBox ColliderBounds = AutoCollider->GetCachedBounds();
 
 	if (TargetSubsystem)
 	{
-		for (auto Module : TargetSubsystem->GetAllModules())
+		TArray<int32> CandidateIndices;
+
+		for (auto* Module : TargetSubsystem->GetAllModules())
 		{
 			if (!Module) continue;
-			CountColliding(Module->GetParticles());
+
+			FSpatialHash* SpatialHash = Module->GetSpatialHash();
+			const TArray<FFluidParticle>& Particles = Module->GetParticles();
+
+			if (SpatialHash)
+			{
+				// SpatialHash로 바운딩 박스 내 파티클만 쿼리
+				SpatialHash->QueryBox(ColliderBounds, CandidateIndices);
+
+				for (int32 Idx : CandidateIndices)
+				{
+					if (Idx < 0 || Idx >= Particles.Num()) continue;
+
+					const FFluidParticle& Particle = Particles[Idx];
+
+					// 1. 이미 붙어있으면 충돌 중
+					if (Particle.bIsAttached && Particle.AttachedActor.Get() == Owner)
+					{
+						++Count;
+						continue;
+					}
+
+					// 2. 정밀 체크 (후보만)
+					if (AutoCollider->IsPointInside(Particle.Position))
+					{
+						++Count;
+					}
+				}
+			}
+			else
+			{
+				// SpatialHash 없으면 기존 방식 (폴백)
+				for (const FFluidParticle& Particle : Particles)
+				{
+					if (Particle.bIsAttached && Particle.AttachedActor.Get() == Owner)
+					{
+						++Count;
+						continue;
+					}
+
+					if (AutoCollider->IsPointInside(Particle.Position))
+					{
+						++Count;
+					}
+				}
+			}
 		}
 	}
 

@@ -26,6 +26,9 @@ public:
 	/** 특정 위치 주변의 이웃 입자 인덱스 반환 */
 	void GetNeighbors(const FVector& Position, float Radius, TArray<int32>& OutNeighbors) const;
 
+	/** 박스 영역 내 파티클 인덱스 반환 (AABB 쿼리) */
+	void QueryBox(const FBox& Box, TArray<int32>& OutIndices) const;
+
 	/** 모든 입자를 한 번에 삽입 (벌크 연산) */
 	void BuildFromPositions(const TArray<FVector>& Positions);
 

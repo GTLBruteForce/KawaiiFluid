@@ -93,6 +93,30 @@ void FSpatialHash::GetNeighbors(const FVector& Position, float Radius, TArray<in
 	}
 }
 
+void FSpatialHash::QueryBox(const FBox& Box, TArray<int32>& OutIndices) const
+{
+	OutIndices.Reset();
+
+	// 박스를 셀 좌표로 변환
+	FIntVector MinCell = GetCellCoord(Box.Min);
+	FIntVector MaxCell = GetCellCoord(Box.Max);
+
+	// 해당 범위 셀들만 순회
+	for (int32 x = MinCell.X; x <= MaxCell.X; ++x)
+	{
+		for (int32 y = MinCell.Y; y <= MaxCell.Y; ++y)
+		{
+			for (int32 z = MinCell.Z; z <= MaxCell.Z; ++z)
+			{
+				if (const TArray<int32>* Cell = Grid.Find(FIntVector(x, y, z)))
+				{
+					OutIndices.Append(*Cell);
+				}
+			}
+		}
+	}
+}
+
 void FSpatialHash::BuildFromPositions(const TArray<FVector>& Positions)
 {
 	Clear();

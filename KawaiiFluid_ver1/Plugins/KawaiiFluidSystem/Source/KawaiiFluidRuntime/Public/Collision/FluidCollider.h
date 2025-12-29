@@ -48,6 +48,12 @@ public:
 	/** 충돌 형상 캐싱 (프레임당 한 번 호출) */
 	virtual void CacheCollisionShapes() {}
 
+	/** 캐시된 바운딩 박스 반환 */
+	virtual FBox GetCachedBounds() const { return FBox(ForceInit); }
+
+	/** 캐시가 유효한지 */
+	virtual bool IsCacheValid() const { return false; }
+
 	UFUNCTION(BlueprintCallable, Category = "Fluid Collider")
 	virtual bool GetClosestPoint(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance) const;
 

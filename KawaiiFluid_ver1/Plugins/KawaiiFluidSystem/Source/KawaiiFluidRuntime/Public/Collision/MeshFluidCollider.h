@@ -64,6 +64,12 @@ public:
 	virtual bool IsPointInside(const FVector& Point) const override;
 	virtual void CacheCollisionShapes() override;
 
+	/** 캐시된 바운딩 박스 반환 */
+	virtual FBox GetCachedBounds() const override { return CachedBounds; }
+
+	/** 캐시가 유효한지 */
+	virtual bool IsCacheValid() const override { return bCacheValid; }
+
 protected:
 	virtual void BeginPlay() override;
 
