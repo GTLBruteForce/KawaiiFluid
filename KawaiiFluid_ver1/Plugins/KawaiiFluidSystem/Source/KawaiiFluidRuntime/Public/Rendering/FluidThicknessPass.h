@@ -18,4 +18,5 @@ void RenderFluidThicknessPass(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
 	const TArray<UKawaiiFluidSSFRRenderer*>& Renderers,
+	FRDGTextureRef SceneDepthTexture,
 	FRDGTextureRef& OutThicknessTexture);

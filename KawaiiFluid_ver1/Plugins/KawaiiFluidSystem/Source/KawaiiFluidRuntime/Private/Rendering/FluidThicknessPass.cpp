@@ -8,6 +8,7 @@
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "SceneView.h"
+#include "ScenePrivate.h"
 #include "GlobalShader.h"
 #include "ShaderParameterStruct.h"
 #include "PipelineStateCache.h"
@@ -22,6 +23,7 @@ void RenderFluidThicknessPass(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
 	const TArray<UKawaiiFluidSSFRRenderer*>& Renderers,
+	FRDGTextureRef SceneDepthTexture,
 	FRDGTextureRef& OutThicknessTexture)
 {
 	RDG_EVENT_SCOPE(GraphBuilder, "FluidThicknessPass_Batched");
@@ -96,6 +98,20 @@ void RenderFluidThicknessPass(
 		PassParameters->ViewMatrix = FMatrix44f(ViewMatrix);
 		PassParameters->ProjectionMatrix = FMatrix44f(ProjectionMatrix);
 		PassParameters->ThicknessScale = ThicknessScale; // Use from LocalParameters
+
+		// Occlusion test를 위한 SceneDepth 파라미터
+		PassParameters->SceneDepthTexture = SceneDepthTexture;
+		PassParameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+
+		// SceneDepth UV 변환을 위한 ViewRect와 텍스처 크기
+		const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
+		PassParameters->SceneViewRect = FVector2f(
+			ViewInfo.ViewRect.Width(),
+			ViewInfo.ViewRect.Height());
+		PassParameters->SceneTextureSize = FVector2f(
+			SceneDepthTexture->Desc.Extent.X,
+			SceneDepthTexture->Desc.Extent.Y);
+
 		PassParameters->RenderTargets[0] = FRenderTargetBinding(
 			OutThicknessTexture, ERenderTargetLoadAction::ELoad);
 

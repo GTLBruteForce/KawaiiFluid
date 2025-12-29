@@ -19,6 +19,14 @@ float4x4 ProjectionMatrix;
 // 두께 스케일
 float ThicknessScale;
 
+// Occlusion test용 Scene Depth
+Texture2D SceneDepthTexture;
+SamplerState SceneDepthSampler;
+
+// SceneDepth UV 변환용 파라미터
+float2 SceneViewRect;    // SceneDepth 유효 영역 크기 (Screen Percentage 적용됨)
+float2 SceneTextureSize; // SceneDepth 텍스처 전체 크기
+
 //-----------------------------------------------------------------------------
 // 버텍스 셰이더 (Vertex Shader)
 //-----------------------------------------------------------------------------
@@ -36,6 +44,7 @@ struct FVertexOutput
 	float3 ViewSpacePosition : TEXCOORD1;
 	float3 ParticleViewCenter : TEXCOORD2;
 	float ParticleRadius : TEXCOORD3;
+	float4 ScreenPosition : TEXCOORD4; // Occlusion test를 위한 Screen space position
 };
 
 // 빌보드 쿼드 정점
@@ -79,6 +88,7 @@ FVertexOutput MainVS(FVertexInput Input)
 	Output.ViewSpacePosition = ViewSpacePosition;
 	Output.ParticleViewCenter = ParticleViewPosition.xyz;
 	Output.ParticleRadius = ParticleRadius;
+	Output.ScreenPosition = Output.Position; // Occlusion test를 위한 Screen position
 
 	return Output;
 }
@@ -89,10 +99,36 @@ FVertexOutput MainVS(FVertexInput Input)
 
 float MainPS(FVertexOutput Input) : SV_Target0
 {
+	// =========================================================================
+	// Occlusion Test: 씬 지오메트리에 가려진 파티클 제거
+	// =========================================================================
+
+	// Screen UV 계산
+	float2 ScreenUV = Input.ScreenPosition.xy / Input.ScreenPosition.w;
+	ScreenUV = ScreenUV * 0.5 + 0.5;
+	ScreenUV.y = 1.0 - ScreenUV.y;
+
+	// SceneDepth UV 변환: ScreenUV를 SceneDepth의 유효 영역에 매핑
+	float2 SceneUV = ScreenUV * (SceneViewRect / SceneTextureSize);
+
+	// Scene Depth 샘플링 및 Occlusion test
+	float SceneDeviceDepth = SceneDepthTexture.Sample(SceneDepthSampler, SceneUV).r;
+
+	// Reversed-Z: 0.0 = far, 1.0 = near
+	// 빌보드 쿼드가 씬 지오메트리 뒤에 있으면 제거
+	if (Input.Position.z < SceneDeviceDepth)
+	{
+		discard;
+	}
+
+	// =========================================================================
+	// Thickness 계산
+	// =========================================================================
+
 	// 빌보드 내의 단위 위치 (UV에서 -1 ~ 1 범위로 변환)
 	float2 UnitPosition = Input.UV * 2.0 - 1.0;
 	float DistanceSquared = dot(UnitPosition, UnitPosition);
-	
+
 	// 구 형태를 벗어나면 제거
 	if (DistanceSquared > 1.0)
 	{
@@ -102,9 +138,9 @@ float MainPS(FVertexOutput Input) : SV_Target0
 	// 구의 두께 계산 (2 * sqrt(r^2 - dist^2))
 	// 정규화 계산한 뒤 반경 연산 처리
 	float NormalizedThickness = 2.0 * sqrt(1.0 - DistanceSquared);
-	
+
 	// 실제 월드 단위 두께 = 정규화 두께 * 파티클 반지름 * 스케일
 	float Thickness = NormalizedThickness * Input.ParticleRadius * ThicknessScale;
 
-    return Thickness; 
+    return Thickness;
 }

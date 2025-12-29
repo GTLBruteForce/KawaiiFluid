@@ -121,7 +121,7 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 
 				// Thickness Pass
 				FRDGTextureRef BatchThicknessTexture = nullptr;
-				RenderFluidThicknessPass(GraphBuilder, InView, Renderers, BatchThicknessTexture);
+				RenderFluidThicknessPass(GraphBuilder, InView, Renderers, SceneDepthTexture, BatchThicknessTexture);
 
 				if (BatchNormalTexture && BatchThicknessTexture)
 				{
@@ -304,9 +304,9 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 							FRDGTextureRef BatchNormalTexture = nullptr;
 							RenderFluidNormalPass(GraphBuilder, View, BatchSmoothedDepthTexture, BatchNormalTexture);
 
-							// Thickness Pass (batched - only render particles from this batch)
+							// Thickness Pass
 							FRDGTextureRef BatchThicknessTexture = nullptr;
-							RenderFluidThicknessPass(GraphBuilder, View, Renderers, BatchThicknessTexture);
+							RenderFluidThicknessPass(GraphBuilder, View, Renderers, SceneDepthTexture, BatchThicknessTexture);
 
 							if (BatchNormalTexture && BatchThicknessTexture)
 							{
