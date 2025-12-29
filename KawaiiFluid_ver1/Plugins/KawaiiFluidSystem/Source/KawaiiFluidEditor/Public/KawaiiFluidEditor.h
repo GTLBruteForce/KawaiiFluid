@@ -44,5 +44,5 @@ private:
 	TArray<TSharedPtr<IAssetTypeActions>> RegisteredAssetTypeActions;
 
 	/** Custom asset type category for fluid assets */
-	EAssetTypeCategories::Type FluidAssetCategory;
+	EAssetTypeCategories::Type FluidAssetCategory {};
 };

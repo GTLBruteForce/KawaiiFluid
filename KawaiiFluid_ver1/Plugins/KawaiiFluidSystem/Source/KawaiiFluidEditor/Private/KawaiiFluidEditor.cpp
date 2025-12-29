@@ -3,10 +3,14 @@
 #include "KawaiiFluidEditor.h"
 #include "Style/FluidEditorStyle.h"
 #include "AssetTypeActions/AssetTypeActions_FluidPreset.h"
+#include "Brush/FluidBrushEditorMode.h"
+#include "Details/FluidComponentDetails.h"
+#include "Components/KawaiiFluidComponent.h"
 
 #include "IAssetTools.h"
 #include "AssetToolsModule.h"
 #include "PropertyEditorModule.h"
+#include "EditorModeRegistry.h"
 
 #define LOCTEXT_NAMESPACE "FKawaiiFluidEditorModule"
 
@@ -26,10 +30,21 @@ void FKawaiiFluidEditorModule::StartupModule()
 
 	// Register property customizations
 	RegisterPropertyCustomizations();
+
+	// Register Fluid Brush Editor Mode
+	FEditorModeRegistry::Get().RegisterMode<FFluidBrushEditorMode>(
+		FFluidBrushEditorMode::EM_FluidBrush,
+		LOCTEXT("FluidBrushModeName", "Fluid Brush"),
+		FSlateIcon(),
+		false  // 툴바에 표시 안함
+	);
 }
 
 void FKawaiiFluidEditorModule::ShutdownModule()
 {
+	// Unregister Fluid Brush Editor Mode
+	FEditorModeRegistry::Get().UnregisterMode(FFluidBrushEditorMode::EM_FluidBrush);
+
 	// Unregister property customizations
 	UnregisterPropertyCustomizations();
 
@@ -75,19 +90,22 @@ void FKawaiiFluidEditorModule::UnregisterAssetTypeActions()
 
 void FKawaiiFluidEditorModule::RegisterPropertyCustomizations()
 {
-	// Register custom property editors here if needed
-	// FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
-	// PropertyModule.RegisterCustomPropertyTypeLayout(...);
+	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
+
+	// Register KawaiiFluidComponent detail customization
+	PropertyModule.RegisterCustomClassLayout(
+		UKawaiiFluidComponent::StaticClass()->GetFName(),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FFluidComponentDetails::MakeInstance)
+	);
 }
 
 void FKawaiiFluidEditorModule::UnregisterPropertyCustomizations()
 {
-	// Unregister custom property editors here if needed
-	// if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
-	// {
-	//     FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
-	//     PropertyModule.UnregisterCustomPropertyTypeLayout(...);
-	// }
+	if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
+	{
+		FPropertyEditorModule& PropertyModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
+		PropertyModule.UnregisterCustomClassLayout(UKawaiiFluidComponent::StaticClass()->GetFName());
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

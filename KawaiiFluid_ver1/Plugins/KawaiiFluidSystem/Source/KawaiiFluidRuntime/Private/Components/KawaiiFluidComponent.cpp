@@ -243,7 +243,54 @@ void UKawaiiFluidComponent::UnregisterFromSubsystem()
 			// Module 등록 해제
 			Subsystem->UnregisterModule(SimulationModule);
 		}
-		
+
 		// RenderSubSystem , ...
 	}
+}
+
+//========================================
+// Brush API
+//========================================
+
+void UKawaiiFluidComponent::AddParticlesInRadius(const FVector& WorldCenter, float Radius,
+                                                  int32 Count, const FVector& Velocity, float Randomness)
+{
+	if (!SimulationModule)
+	{
+		return;
+	}
+
+	for (int32 i = 0; i < Count; ++i)
+	{
+		// 구 내부 균일 분포
+		FVector RandomOffset = FMath::VRand() * FMath::FRand() * Radius * Randomness;
+		FVector SpawnPos = WorldCenter + RandomOffset;
+		FVector SpawnVel = Velocity + FMath::VRand() * 20.0f * Randomness;
+
+		SimulationModule->SpawnParticle(SpawnPos, SpawnVel);
+	}
+}
+
+int32 UKawaiiFluidComponent::RemoveParticlesInRadius(const FVector& WorldCenter, float Radius)
+{
+	if (!SimulationModule)
+	{
+		return 0;
+	}
+
+	float RadiusSq = Radius * Radius;
+
+	TArray<FFluidParticle>& Particles = SimulationModule->GetParticlesMutable();
+	int32 RemovedCount = 0;
+
+	for (int32 i = Particles.Num() - 1; i >= 0; --i)
+	{
+		if (FVector::DistSquared(Particles[i].Position, WorldCenter) <= RadiusSq)
+		{
+			Particles.RemoveAtSwap(i);
+			++RemovedCount;
+		}
+	}
+
+	return RemovedCount;
 }

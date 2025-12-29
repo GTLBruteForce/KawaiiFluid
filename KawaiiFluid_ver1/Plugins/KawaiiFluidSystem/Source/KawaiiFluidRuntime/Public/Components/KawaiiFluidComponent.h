@@ -12,6 +12,40 @@
 class UKawaiiFluidRenderingModule;
 
 /**
+ * 브러시 모드 타입
+ */
+UENUM(BlueprintType)
+enum class EFluidBrushMode : uint8
+{
+	Add       UMETA(DisplayName = "Add Particles"),
+	Remove    UMETA(DisplayName = "Remove Particles")
+};
+
+/**
+ * 브러시 설정 구조체
+ */
+USTRUCT(BlueprintType)
+struct FFluidBrushSettings
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Category = "Brush")
+	EFluidBrushMode Mode = EFluidBrushMode::Add;
+
+	UPROPERTY(EditAnywhere, Category = "Brush", meta = (ClampMin = "10.0", ClampMax = "500.0"))
+	float Radius = 50.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Brush", meta = (ClampMin = "1", ClampMax = "100"))
+	int32 ParticlesPerStroke = 15;
+
+	UPROPERTY(EditAnywhere, Category = "Brush")
+	FVector InitialVelocity = FVector(0, 0, 0);
+
+	UPROPERTY(EditAnywhere, Category = "Brush", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float Randomness = 0.8f;
+};
+
+/**
  * Particle hit event delegate
  * Called when a particle collides with an actor
  */
@@ -134,6 +168,32 @@ public:
 	/** Particle hit event (Blueprint bindable) */
 	UPROPERTY(BlueprintAssignable, Category = "Fluid|Events")
 	FOnFluidParticleHitComponent OnParticleHit;
+
+	//========================================
+	// Editor Brush (에디터 전용)
+	//========================================
+
+#if WITH_EDITORONLY_DATA
+	/** 브러시 설정 */
+	UPROPERTY(EditAnywhere, Category = "Brush")
+	FFluidBrushSettings BrushSettings;
+
+	/** 브러시 모드 활성화 여부 (에디터 모드에서 설정) */
+	bool bBrushModeActive = false;
+#endif
+
+	//========================================
+	// Brush API (에디터/런타임 공용)
+	//========================================
+
+	/** 반경 내에 파티클 추가 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid|Brush")
+	void AddParticlesInRadius(const FVector& WorldCenter, float Radius, int32 Count,
+	                          const FVector& Velocity, float Randomness = 0.8f);
+
+	/** 반경 내 파티클 제거 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid|Brush")
+	int32 RemoveParticlesInRadius(const FVector& WorldCenter, float Radius);
 
 private:
 	//========================================
