@@ -59,10 +59,11 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolume(
 		FMath::DivideAndRoundUp(VolumeResolution.Y, ThreadGroupSize),
 		FMath::DivideAndRoundUp(VolumeResolution.Z, ThreadGroupSize));
 
-	// Add compute pass
+	// Add compute pass (Async Compute for parallel execution with graphics)
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
-		RDG_EVENT_NAME("SDFBake(%dx%dx%d)", VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z),
+		RDG_EVENT_NAME("SDFBake_Async(%dx%dx%d)", VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z),
+		ERDGPassFlags::AsyncCompute | ERDGPassFlags::NeverCull,
 		ComputeShader,
 		PassParameters,
 		GroupCount);
