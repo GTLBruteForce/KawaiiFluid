@@ -8,6 +8,7 @@
 #include "GlobalShader.h"
 #include "RenderGraphUtils.h"
 #include "RHIStaticStates.h"
+#include "ScenePrivate.h"
 
 void FFluidGBufferComposite::RenderComposite(
 	FRDGBuilder& GraphBuilder,
@@ -84,9 +85,10 @@ void FFluidGBufferComposite::RenderComposite(
 	TShaderMapRef<FFluidGBufferWriteVS> VertexShader(GlobalShaderMap);
 	TShaderMapRef<FFluidGBufferWritePS> PixelShader(GlobalShaderMap);
 
-	// Use Output.ViewRect instead of View.UnscaledViewRect
-	// This ensures consistency with the output target during Slate layout changes
-	FIntRect ViewRect = Output.ViewRect;
+	// GBuffer 모드에서는 Output이 DummyOutput (빈 FScreenPassRenderTarget)이므로
+	// ViewInfo.ViewRect를 사용하여 SceneDepth 유효 영역과 일치시킴
+	const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
+	FIntRect ViewRect = ViewInfo.ViewRect;
 
 	GraphBuilder.AddPass(
 		RDG_EVENT_NAME("FluidGBufferWriteDraw"),
