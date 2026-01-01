@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AssetTypeActions/AssetTypeActions_FluidPreset.h"
+#include "KawaiiFluidEditor.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Editor/KawaiiFluidPresetAssetEditor.h"
 
@@ -23,7 +24,7 @@ FColor FAssetTypeActions_FluidPreset::GetTypeColor() const
 
 uint32 FAssetTypeActions_FluidPreset::GetCategories()
 {
-	return EAssetTypeCategories::Physics;
+	return FKawaiiFluidEditorModule::Get().GetAssetCategory();
 }
 
 void FAssetTypeActions_FluidPreset::OpenAssetEditor(const TArray<UObject*>& InObjects, TSharedPtr<IToolkitHost> EditWithinLevelEditor)
