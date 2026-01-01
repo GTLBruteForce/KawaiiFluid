@@ -1,23 +1,23 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 
-#include "Rendering/Shading/KawaiiGBufferShading.h"
-#include "Rendering/Shaders/FluidGBufferWriteShaders.h"
+#include "Rendering/Shading/KawaiiScreenSpaceShadingImpl.h"
 #include "Rendering/FluidRenderingParameters.h"
+#include "Rendering/MetaballRenderingData.h"
+#include "Rendering/FluidCompositeShaders.h"
+#include "Rendering/Shaders/FluidGBufferWriteShaders.h"
 #include "RenderGraphBuilder.h"
-#include "ScreenPass.h"
-#include "GlobalShader.h"
-#include "RenderGraphUtils.h"
-#include "RHIStaticStates.h"
+#include "RenderGraphEvent.h"
+#include "SceneView.h"
 #include "ScenePrivate.h"
+#include "GlobalShader.h"
+#include "RHIStaticStates.h"
 
-void FKawaiiGBufferShading::RenderForScreenSpacePipeline(
+void KawaiiScreenSpaceShading::RenderGBufferShading(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
 	const FFluidRenderingParameters& RenderParams,
 	const FMetaballIntermediateTextures& IntermediateTextures,
-	FRDGTextureRef SceneDepthTexture,
-	FRDGTextureRef SceneColorTexture,
-	FScreenPassRenderTarget Output)
+	FRDGTextureRef SceneDepthTexture)
 {
 	// Validate input textures
 	if (!IntermediateTextures.SmoothedDepthTexture ||
@@ -25,7 +25,7 @@ void FKawaiiGBufferShading::RenderForScreenSpacePipeline(
 		!IntermediateTextures.ThicknessTexture ||
 		!SceneDepthTexture)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("FKawaiiGBufferShading: Missing input textures"));
+		UE_LOG(LogTemp, Warning, TEXT("KawaiiScreenSpaceShading::RenderGBufferShading: Missing input textures"));
 		return;
 	}
 
@@ -35,11 +35,11 @@ void FKawaiiGBufferShading::RenderForScreenSpacePipeline(
 		!IntermediateTextures.GBufferCTexture ||
 		!IntermediateTextures.GBufferDTexture)
 	{
-		UE_LOG(LogTemp, Error, TEXT("FKawaiiGBufferShading: Missing GBuffer textures!"));
+		UE_LOG(LogTemp, Error, TEXT("KawaiiScreenSpaceShading::RenderGBufferShading: Missing GBuffer textures!"));
 		return;
 	}
 
-	RDG_EVENT_SCOPE(GraphBuilder, "MetaballShading_ScreenSpace_GBuffer");
+	RDG_EVENT_SCOPE(GraphBuilder, "MetaballShading_GBuffer_ScreenSpace");
 
 	auto* PassParameters = GraphBuilder.AllocParameters<FFluidGBufferWriteParameters>();
 
@@ -125,20 +125,102 @@ void FKawaiiGBufferShading::RenderForScreenSpacePipeline(
 			RHICmdList.DrawPrimitive(0, 1, 1);
 		});
 
-	UE_LOG(LogTemp, Log, TEXT("FKawaiiGBufferShading: GBuffer write executed successfully"));
+	UE_LOG(LogTemp, Log, TEXT("KawaiiScreenSpaceShading: GBuffer write executed successfully"));
 }
 
-void FKawaiiGBufferShading::RenderForRayMarchingPipeline(
+void KawaiiScreenSpaceShading::RenderPostProcessShading(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
 	const FFluidRenderingParameters& RenderParams,
-	FRDGBufferSRVRef ParticleBufferSRV,
-	int32 ParticleCount,
-	float ParticleRadius,
+	const FMetaballIntermediateTextures& IntermediateTextures,
 	FRDGTextureRef SceneDepthTexture,
 	FRDGTextureRef SceneColorTexture,
 	FScreenPassRenderTarget Output)
 {
-	// Skeleton: RayMarching + GBuffer not implemented yet
-	UE_LOG(LogTemp, Warning, TEXT("FKawaiiGBufferShading::RenderForRayMarchingPipeline - Not implemented (skeleton)"));
+	// Validate input textures
+	if (!IntermediateTextures.SmoothedDepthTexture ||
+		!IntermediateTextures.NormalTexture ||
+		!IntermediateTextures.ThicknessTexture ||
+		!SceneDepthTexture)
+	{
+		return;
+	}
+
+	RDG_EVENT_SCOPE(GraphBuilder, "MetaballShading_PostProcess_ScreenSpace");
+
+	auto* PassParameters = GraphBuilder.AllocParameters<FFluidCompositePS::FParameters>();
+
+	// Texture bindings
+	PassParameters->FluidDepthTexture = IntermediateTextures.SmoothedDepthTexture;
+	PassParameters->FluidNormalTexture = IntermediateTextures.NormalTexture;
+	PassParameters->FluidThicknessTexture = IntermediateTextures.ThicknessTexture;
+	PassParameters->SceneDepthTexture = SceneDepthTexture;
+	PassParameters->SceneColorTexture = SceneColorTexture;
+	PassParameters->View = View.ViewUniformBuffer;
+	PassParameters->InputSampler = TStaticSamplerState<
+		SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+
+	// View matrices
+	PassParameters->InverseProjectionMatrix =
+		FMatrix44f(View.ViewMatrices.GetInvProjectionMatrix());
+	PassParameters->ProjectionMatrix = FMatrix44f(View.ViewMatrices.GetProjectionNoAAMatrix());
+	PassParameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetViewMatrix());
+
+	// Rendering parameters
+	PassParameters->FluidColor = RenderParams.FluidColor;
+	PassParameters->FresnelStrength = RenderParams.FresnelStrength;
+	PassParameters->RefractiveIndex = RenderParams.RefractiveIndex;
+	PassParameters->AbsorptionCoefficient = RenderParams.AbsorptionCoefficient;
+	PassParameters->SpecularStrength = RenderParams.SpecularStrength;
+	PassParameters->SpecularRoughness = RenderParams.SpecularRoughness;
+	PassParameters->EnvironmentLightColor = RenderParams.EnvironmentLightColor;
+
+	// Render target (blend over existing scene)
+	PassParameters->RenderTargets[0] = FRenderTargetBinding(
+		Output.Texture, ERenderTargetLoadAction::ELoad);
+
+	// Get shaders
+	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(View.GetFeatureLevel());
+	TShaderMapRef<FFluidCompositeVS> VertexShader(GlobalShaderMap);
+	TShaderMapRef<FFluidCompositePS> PixelShader(GlobalShaderMap);
+
+	// Use Output.ViewRect instead of View.UnscaledViewRect
+	FIntRect ViewRect = Output.ViewRect;
+
+	GraphBuilder.AddPass(
+		RDG_EVENT_NAME("MetaballPostProcess_ScreenSpace"),
+		PassParameters,
+		ERDGPassFlags::Raster,
+		[VertexShader, PixelShader, PassParameters, ViewRect](FRHICommandList& RHICmdList)
+		{
+			RHICmdList.SetViewport(ViewRect.Min.X, ViewRect.Min.Y, 0.0f, ViewRect.Max.X,
+			                       ViewRect.Max.Y, 1.0f);
+			RHICmdList.SetScissorRect(true, ViewRect.Min.X, ViewRect.Min.Y, ViewRect.Max.X,
+			                          ViewRect.Max.Y);
+
+			FGraphicsPipelineStateInitializer GraphicsPSOInit;
+			GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GEmptyVertexDeclaration.
+				VertexDeclarationRHI;
+			GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
+			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
+			GraphicsPSOInit.PrimitiveType = PT_TriangleList;
+
+			// Alpha blending
+			GraphicsPSOInit.BlendState = TStaticBlendState<
+				CW_RGBA,
+				BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha,
+				BO_Add, BF_Zero, BF_One
+			>::GetRHI();
+			GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
+			GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<
+				false, CF_Always>::GetRHI();
+
+			RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
+			SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
+			SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(),
+			                    *PassParameters);
+
+			// Draw fullscreen triangle
+			RHICmdList.DrawPrimitive(0, 1, 1);
+		});
 }

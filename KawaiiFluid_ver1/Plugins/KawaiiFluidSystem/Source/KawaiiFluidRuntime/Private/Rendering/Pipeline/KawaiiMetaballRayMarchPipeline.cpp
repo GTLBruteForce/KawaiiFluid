@@ -3,33 +3,23 @@
 #include "Rendering/Pipeline/KawaiiMetaballRayMarchPipeline.h"
 #include "Rendering/KawaiiFluidMetaballRenderer.h"
 #include "Rendering/KawaiiFluidRenderResource.h"
+
+// Separated shading implementation
+#include "Rendering/Shading/KawaiiRayMarchShadingImpl.h"
+
 #include "RenderGraphBuilder.h"
 #include "RenderGraphEvent.h"
+#include "RenderGraphUtils.h"
 #include "SceneView.h"
+#include "ScenePrivate.h"
+#include "SceneTextures.h"
 
-void FKawaiiMetaballRayMarchPipeline::Execute(
+bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 	FRDGBuilder& GraphBuilder,
-	const FSceneView& View,
 	const FFluidRenderingParameters& RenderParams,
-	const TArray<UKawaiiFluidMetaballRenderer*>& Renderers,
-	FRDGTextureRef SceneDepthTexture,
-	FRDGTextureRef SceneColorTexture,
-	FScreenPassRenderTarget Output)
+	const TArray<UKawaiiFluidMetaballRenderer*>& Renderers)
 {
-	if (Renderers.Num() == 0)
-	{
-		return;
-	}
-
-	if (!ShadingPass)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("FKawaiiMetaballRayMarchPipeline: No ShadingPass set"));
-		return;
-	}
-
-	RDG_EVENT_SCOPE(GraphBuilder, "MetaballPipeline_RayMarching");
-
-	// 1. Collect all particle positions from batch
+	// Collect all particle positions from batch
 	TArray<FVector3f> AllParticlePositions;
 	float AverageParticleRadius = 10.0f;
 	float TotalRadius = 0.0f;
@@ -58,10 +48,10 @@ void FKawaiiMetaballRayMarchPipeline::Execute(
 	if (AllParticlePositions.Num() == 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("FKawaiiMetaballRayMarchPipeline: No particles - skipping"));
-		return;
+		return false;
 	}
 
-	// 2. Create RDG buffer for particle positions
+	// Create RDG buffer for particle positions
 	const uint32 BufferSize = AllParticlePositions.Num() * sizeof(FVector3f);
 	FRDGBufferRef ParticleBuffer = GraphBuilder.CreateBuffer(
 		FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), AllParticlePositions.Num()),
@@ -75,14 +65,16 @@ void FKawaiiMetaballRayMarchPipeline::Execute(
 
 	FRDGBufferSRVRef ParticleBufferSRV = GraphBuilder.CreateSRV(ParticleBuffer);
 
-	// 3. Check if SDF Volume optimization is enabled
+	// Build pipeline data
+	CachedPipelineData.ParticleBufferSRV = ParticleBufferSRV;
+	CachedPipelineData.ParticleCount = AllParticlePositions.Num();
+	CachedPipelineData.ParticleRadius = AverageParticleRadius;
+
+	// Check if SDF Volume optimization is enabled
 	const bool bUseSDFVolume = RenderParams.bUseSDFVolumeOptimization;
 
 	if (bUseSDFVolume)
 	{
-		// ============================================
-		// Optimized Path: Bake SDF to 3D Volume Texture
-		// ============================================
 		RDG_EVENT_SCOPE(GraphBuilder, "SDFVolumeBake");
 
 		// Set volume resolution from parameters
@@ -94,10 +86,6 @@ void FKawaiiMetaballRayMarchPipeline::Execute(
 		float Margin = AverageParticleRadius * 2.0f;
 		CalculateParticleBoundingBox(AllParticlePositions, AverageParticleRadius, Margin, VolumeMin, VolumeMax);
 
-		UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: SDF Volume Bake - Min:(%.1f,%.1f,%.1f) Max:(%.1f,%.1f,%.1f)"),
-			VolumeMin.X, VolumeMin.Y, VolumeMin.Z,
-			VolumeMax.X, VolumeMax.Y, VolumeMax.Z);
-
 		// Bake SDF volume using compute shader
 		FRDGTextureSRVRef SDFVolumeSRV = SDFVolumeManager.BakeSDFVolume(
 			GraphBuilder,
@@ -108,43 +96,173 @@ void FKawaiiMetaballRayMarchPipeline::Execute(
 			VolumeMin,
 			VolumeMax);
 
-		// Set volume data for shading pass
-		FSDFVolumeData SDFVolumeData;
-		SDFVolumeData.SDFVolumeTextureSRV = SDFVolumeSRV;
-		SDFVolumeData.VolumeMin = VolumeMin;
-		SDFVolumeData.VolumeMax = VolumeMax;
-		SDFVolumeData.VolumeResolution = SDFVolumeManager.GetVolumeResolution();
-		SDFVolumeData.bUseSDFVolume = true;
-		ShadingPass->SetSDFVolumeData(SDFVolumeData);
+		// Store SDF volume data
+		CachedPipelineData.SDFVolumeData.SDFVolumeTextureSRV = SDFVolumeSRV;
+		CachedPipelineData.SDFVolumeData.VolumeMin = VolumeMin;
+		CachedPipelineData.SDFVolumeData.VolumeMax = VolumeMax;
+		CachedPipelineData.SDFVolumeData.VolumeResolution = SDFVolumeManager.GetVolumeResolution();
+		CachedPipelineData.SDFVolumeData.bUseSDFVolume = true;
 
-		UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: Using SDF Volume optimization (%dx%dx%d)"),
-			SDFVolumeManager.GetVolumeResolution().X,
-			SDFVolumeManager.GetVolumeResolution().Y,
-			SDFVolumeManager.GetVolumeResolution().Z);
+		UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: Using SDF Volume optimization (%dx%dx%d)"),
+			Resolution, Resolution, Resolution);
 	}
 	else
 	{
-		// ============================================
-		// Legacy Path: Direct particle iteration
-		// ============================================
-		FSDFVolumeData SDFVolumeData;
-		SDFVolumeData.bUseSDFVolume = false;
-		ShadingPass->SetSDFVolumeData(SDFVolumeData);
-
-		UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: Using direct particle iteration (legacy)"));
+		CachedPipelineData.SDFVolumeData.bUseSDFVolume = false;
+		UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: Using direct particle iteration (legacy)"));
 	}
 
-	// 4. Delegate to ShadingPass for ray marching
-	ShadingPass->RenderForRayMarchingPipeline(
-		GraphBuilder,
-		View,
-		RenderParams,
-		ParticleBufferSRV,
-		AllParticlePositions.Num(),
-		AverageParticleRadius,
-		SceneDepthTexture,
-		SceneColorTexture,
-		Output);
+	return true;
+}
 
-	UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: Ray Marching rendered %d particles"), AllParticlePositions.Num());
+void FKawaiiMetaballRayMarchPipeline::ExecutePostBasePass(
+	FRDGBuilder& GraphBuilder,
+	const FSceneView& View,
+	const FFluidRenderingParameters& RenderParams,
+	const TArray<UKawaiiFluidMetaballRenderer*>& Renderers,
+	FRDGTextureRef SceneDepthTexture,
+	FScreenPassRenderTarget Output)
+{
+	if (Renderers.Num() == 0)
+	{
+		return;
+	}
+
+	// PostProcess mode uses PrepareForTonemap + ExecuteTonemap at Tonemap timing
+	if (RenderParams.ShadingMode == EMetaballShadingMode::PostProcess)
+	{
+		// Nothing to do here - PostProcess mode preparation happens in PrepareForTonemap
+		return;
+	}
+
+	RDG_EVENT_SCOPE(GraphBuilder, "MetaballPipeline_RayMarching_PostBasePass");
+
+	// Prepare particle buffer for GBuffer/Translucent modes
+	if (!PrepareParticleBuffer(GraphBuilder, RenderParams, Renderers))
+	{
+		return;
+	}
+
+	// ShadingMode-specific processing at PostBasePass timing
+	// Delegate to separated shading implementation
+	switch (RenderParams.ShadingMode)
+	{
+	case EMetaballShadingMode::GBuffer:
+	case EMetaballShadingMode::Opaque:
+		KawaiiRayMarchShading::RenderGBufferShading(
+			GraphBuilder, View, RenderParams, CachedPipelineData, SceneDepthTexture);
+		break;
+
+	case EMetaballShadingMode::Translucent:
+		KawaiiRayMarchShading::RenderTranslucentGBufferWrite(
+			GraphBuilder, View, RenderParams, CachedPipelineData, SceneDepthTexture);
+		break;
+
+	default:
+		break;
+	}
+
+	UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: RayMarching PostBasePass completed (%d particles, ShadingMode=%d)"),
+		CachedPipelineData.ParticleCount, static_cast<int32>(RenderParams.ShadingMode));
+}
+
+void FKawaiiMetaballRayMarchPipeline::PrepareForTonemap(
+	FRDGBuilder& GraphBuilder,
+	const FSceneView& View,
+	const FFluidRenderingParameters& RenderParams,
+	const TArray<UKawaiiFluidMetaballRenderer*>& Renderers,
+	FRDGTextureRef SceneDepthTexture)
+{
+	if (Renderers.Num() == 0)
+	{
+		return;
+	}
+
+	RDG_EVENT_SCOPE(GraphBuilder, "MetaballPipeline_RayMarching_PrepareForTonemap");
+
+	// Prepare particle buffer and optional SDF volume for PostProcess shading
+	if (!PrepareParticleBuffer(GraphBuilder, RenderParams, Renderers))
+	{
+		return;
+	}
+
+	UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: RayMarching PrepareForTonemap completed (%d particles)"),
+		CachedPipelineData.ParticleCount);
+}
+
+void FKawaiiMetaballRayMarchPipeline::ExecutePrePostProcess(
+	FRDGBuilder& GraphBuilder,
+	const FSceneView& View,
+	const FFluidRenderingParameters& RenderParams,
+	const TArray<UKawaiiFluidMetaballRenderer*>& Renderers,
+	FRDGTextureRef SceneDepthTexture,
+	FRDGTextureRef SceneColorTexture,
+	FScreenPassRenderTarget Output,
+	FRDGTextureRef GBufferATexture,
+	FRDGTextureRef GBufferDTexture)
+{
+	if (Renderers.Num() == 0)
+	{
+		return;
+	}
+
+	// Only Translucent mode uses PrePostProcess timing
+	if (RenderParams.ShadingMode != EMetaballShadingMode::Translucent)
+	{
+		return;
+	}
+
+	// Validate cached pipeline data
+	if (!CachedPipelineData.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FKawaiiMetaballRayMarchPipeline: Missing cached pipeline data for PrePostProcess"));
+		return;
+	}
+
+	RDG_EVENT_SCOPE(GraphBuilder, "MetaballPipeline_RayMarching_PrePostProcess");
+
+	// Delegate to separated shading implementation
+	KawaiiRayMarchShading::RenderTranslucentTransparency(
+		GraphBuilder, View, RenderParams,
+		SceneDepthTexture, SceneColorTexture, Output,
+		GBufferATexture, GBufferDTexture);
+
+	UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: RayMarching PrePostProcess executed"));
+}
+
+void FKawaiiMetaballRayMarchPipeline::ExecuteTonemap(
+	FRDGBuilder& GraphBuilder,
+	const FSceneView& View,
+	const FFluidRenderingParameters& RenderParams,
+	const TArray<UKawaiiFluidMetaballRenderer*>& Renderers,
+	FRDGTextureRef SceneDepthTexture,
+	FRDGTextureRef SceneColorTexture,
+	FScreenPassRenderTarget Output)
+{
+	if (Renderers.Num() == 0)
+	{
+		return;
+	}
+
+	// Only PostProcess mode uses Tonemap timing
+	if (RenderParams.ShadingMode != EMetaballShadingMode::PostProcess)
+	{
+		return;
+	}
+
+	// Validate cached pipeline data
+	if (!CachedPipelineData.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FKawaiiMetaballRayMarchPipeline: Missing cached pipeline data for Tonemap"));
+		return;
+	}
+
+	RDG_EVENT_SCOPE(GraphBuilder, "MetaballPipeline_RayMarching_Tonemap");
+
+	// Delegate to separated shading implementation
+	KawaiiRayMarchShading::RenderPostProcessShading(
+		GraphBuilder, View, RenderParams, CachedPipelineData,
+		SceneDepthTexture, SceneColorTexture, Output);
+
+	UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: RayMarching Tonemap executed"));
 }

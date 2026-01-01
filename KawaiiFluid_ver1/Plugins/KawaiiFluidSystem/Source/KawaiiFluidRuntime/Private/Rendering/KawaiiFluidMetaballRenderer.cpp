@@ -6,15 +6,10 @@
 #include "Rendering/KawaiiFluidRenderResource.h"
 #include "Core/KawaiiRenderParticle.h"
 
-// Pipeline + Shading architecture
+// Pipeline architecture (Pipeline handles ShadingMode internally)
 #include "Rendering/Pipeline/IKawaiiMetaballRenderingPipeline.h"
 #include "Rendering/Pipeline/KawaiiMetaballScreenSpacePipeline.h"
 #include "Rendering/Pipeline/KawaiiMetaballRayMarchPipeline.h"
-#include "Rendering/Shading/IKawaiiMetaballShadingPass.h"
-#include "Rendering/Shading/KawaiiPostProcessShading.h"
-#include "Rendering/Shading/KawaiiGBufferShading.h"
-#include "Rendering/Shading/KawaiiOpaqueShading.h"
-#include "Rendering/Shading/KawaiiTranslucentShading.h"
 
 UKawaiiFluidMetaballRenderer::UKawaiiFluidMetaballRenderer()
 {
@@ -58,8 +53,8 @@ void UKawaiiFluidMetaballRenderer::Initialize(UWorld* InWorld, USceneComponent* 
 		}
 	);
 
-	// Create initial Pipeline and ShadingPass
-	UpdatePipelineAndShading();
+	// Create initial Pipeline
+	UpdatePipeline();
 
 	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Initialized GPU resources (MaxParticles: %d)"),
 		MaxRenderParticles);
@@ -144,8 +139,8 @@ void UKawaiiFluidMetaballRenderer::ApplySettings(const FKawaiiFluidMetaballRende
 	// MaxRenderParticles stays as member variable (not in LocalParameters)
 	MaxRenderParticles = Settings.MaxRenderParticles;
 
-	// Update Pipeline and ShadingPass
-	UpdatePipelineAndShading();
+	// Update Pipeline (ShadingMode is handled internally by Pipeline)
+	UpdatePipeline();
 
 	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Applied settings (Enabled: %s, UseSimRadius: %s, Color: %s, MaxParticles: %d)"),
 		bEnabled ? TEXT("true") : TEXT("false"),
@@ -261,20 +256,13 @@ bool UKawaiiFluidMetaballRenderer::IsRenderingActive() const
 	return bIsRenderingActive && RenderResource.IsValid();
 }
 
-void UKawaiiFluidMetaballRenderer::UpdatePipelineAndShading()
+void UKawaiiFluidMetaballRenderer::UpdatePipeline()
 {
 	// Check if Pipeline needs to be recreated
 	bool bPipelineChanged = !Pipeline || CachedPipelineType != LocalParameters.PipelineType;
 
-	// IMPORTANT: ShadingPass must be recreated if:
-	// 1. ShadingPass doesn't exist
-	// 2. ShadingMode changed
-	// 3. PipelineType changed (because same shading mode may have different implementation per pipeline)
-	bool bShadingChanged = !ShadingPass ||
-	                       CachedShadingMode != LocalParameters.ShadingMode ||
-	                       CachedPipelineType != LocalParameters.PipelineType;
-
 	// Create/recreate Pipeline if needed
+	// Note: Pipeline now handles ShadingMode internally via switch statements
 	if (bPipelineChanged)
 	{
 		switch (LocalParameters.PipelineType)
@@ -291,41 +279,6 @@ void UKawaiiFluidMetaballRenderer::UpdatePipelineAndShading()
 		}
 
 		CachedPipelineType = LocalParameters.PipelineType;
-	}
-
-	// Create/recreate ShadingPass if needed
-	if (bShadingChanged)
-	{
-		switch (LocalParameters.ShadingMode)
-		{
-		case EMetaballShadingMode::PostProcess:
-			ShadingPass = MakeShared<FKawaiiPostProcessShading>();
-			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created PostProcess Shading"));
-			break;
-
-		case EMetaballShadingMode::GBuffer:
-			ShadingPass = MakeShared<FKawaiiGBufferShading>();
-			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created GBuffer Shading"));
-			break;
-
-		case EMetaballShadingMode::Opaque:
-			ShadingPass = MakeShared<FKawaiiOpaqueShading>();
-			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created Opaque Shading (experimental)"));
-			break;
-
-		case EMetaballShadingMode::Translucent:
-			ShadingPass = MakeShared<FKawaiiTranslucentShading>();
-			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created Translucent Shading (experimental)"));
-			break;
-		}
-
-		// Connect ShadingPass to Pipeline
-		if (Pipeline)
-		{
-			Pipeline->SetShadingPass(ShadingPass);
-		}
-
-		CachedShadingMode = LocalParameters.ShadingMode;
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Pipeline=%s, Shading=%s"),

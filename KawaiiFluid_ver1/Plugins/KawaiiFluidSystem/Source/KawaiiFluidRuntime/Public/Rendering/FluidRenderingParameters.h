@@ -52,6 +52,28 @@ enum class EMetaballShadingMode : uint8
 };
 
 /**
+ * Shading Pass Timing
+ * Defines when the shading pass is executed in the rendering pipeline.
+ * Each timing corresponds to a specific UE render callback.
+ * Used as bitmask flags.
+ */
+UENUM(BlueprintType, Meta = (Bitflags, UseEnumValuesAsMaskValuesInEditor = "true"))
+enum class EShadingPassTiming : uint8
+{
+	None = 0 UMETA(Hidden),
+
+	/** PostBasePass: PostRenderBasePassDeferred_RenderThread - GBuffer write, Stencil marking */
+	PostBasePass = 1 << 0 UMETA(DisplayName = "Post Base Pass"),
+
+	/** PrePostProcess: PrePostProcessPass_RenderThread - Transparency compositing (Translucent) */
+	PrePostProcess = 1 << 1 UMETA(DisplayName = "Pre Post Process"),
+
+	/** Tonemap: SubscribeToPostProcessingPass(Tonemap) - PostProcess shading */
+	Tonemap = 1 << 2 UMETA(DisplayName = "Tonemap")
+};
+ENUM_CLASS_FLAGS(EShadingPassTiming)
+
+/**
  * SSFR Rendering Mode (DEPRECATED - use EMetaballPipelineType + EMetaballShadingMode)
  * Kept for backwards compatibility during migration.
  */

@@ -2,11 +2,7 @@
 
 #include "Rendering/FluidSceneViewExtension.h"
 
-#include "FluidDepthPass.h"
-#include "FluidNormalPass.h"
 #include "FluidRendererSubsystem.h"
-#include "FluidSmoothingPass.h"
-#include "FluidThicknessPass.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphEvent.h"
 #include "SceneRendering.h"
@@ -17,12 +13,9 @@
 #include "PostProcess/PostProcessing.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
 #include "Rendering/KawaiiFluidMetaballRenderer.h"
-#include "Rendering/KawaiiFluidRenderResource.h"
-#include "Rendering/SDFVolumeManager.h"
 
-// New Pipeline + Shading architecture
+// New Pipeline architecture (ShadingPass removed - Pipeline handles ShadingMode internally)
 #include "Rendering/Pipeline/IKawaiiMetaballRenderingPipeline.h"
-#include "Rendering/Shading/IKawaiiMetaballShadingPass.h"
 
 static TRefCountPtr<IPooledRenderTarget> GFluidCompositeDebug_KeepAlive;
 
@@ -82,9 +75,12 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 		return;
 	}
 
-	RDG_EVENT_SCOPE(GraphBuilder, "KawaiiFluidGBuffer_PostBasePass");
+	RDG_EVENT_SCOPE(GraphBuilder, "KawaiiFluid_PostBasePass");
 
-	// Collect GBuffer and Translucent mode renderers (separate batches)
+	// Collect GBuffer/Translucent renderers only
+	// PostProcess mode is handled entirely in SubscribeToPostProcessingPass
+	// - GBuffer: writes to GBuffer
+	// - Translucent: writes to GBuffer + Stencil marking
 	TMap<FFluidRenderingParameters, TArray<UKawaiiFluidMetaballRenderer*>> GBufferBatches;
 	TMap<FFluidRenderingParameters, TArray<UKawaiiFluidMetaballRenderer*>> TranslucentBatches;
 
@@ -97,14 +93,19 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 		if (MetaballRenderer && MetaballRenderer->IsRenderingActive())
 		{
 			const FFluidRenderingParameters& Params = MetaballRenderer->GetLocalParameters();
-			// Route based on ShadingMode - GBuffer and Translucent handled separately
-			if (Params.ShadingMode == EMetaballShadingMode::GBuffer)
+			// Route based on ShadingMode (PostProcess is handled in SubscribeToPostProcessingPass)
+			switch (Params.ShadingMode)
 			{
+			case EMetaballShadingMode::GBuffer:
+			case EMetaballShadingMode::Opaque:
 				GBufferBatches.FindOrAdd(Params).Add(MetaballRenderer);
-			}
-			else if (Params.ShadingMode == EMetaballShadingMode::Translucent)
-			{
+				break;
+			case EMetaballShadingMode::Translucent:
 				TranslucentBatches.FindOrAdd(Params).Add(MetaballRenderer);
+				break;
+			case EMetaballShadingMode::PostProcess:
+				// Handled in SubscribeToPostProcessingPass
+				break;
 			}
 		}
 	}
@@ -114,7 +115,7 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 		return;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: PostRenderBasePassDeferred - Processing %d GBuffer batches, %d Translucent batches"),
+	UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: PostRenderBasePassDeferred - Processing %d GBuffer, %d Translucent batches"),
 		GBufferBatches.Num(), TranslucentBatches.Num());
 
 	// Get SceneDepth from RenderTargets
@@ -133,17 +134,16 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 		{
 			TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline = Renderers[0]->GetPipeline();
 
-			// Execute Pipeline - handles all passes internally
+			// Execute PostBasePass - handles GBuffer write internally based on ShadingMode
 			// Note: For GBuffer mode, Output is not used (writes directly to GBuffer textures)
 			FScreenPassRenderTarget DummyOutput;
 
-			Pipeline->Execute(
+			Pipeline->ExecutePostBasePass(
 				GraphBuilder,
 				InView,
 				BatchParams,
 				Renderers,
 				SceneDepthTexture,
-				nullptr,  // SceneColorTexture not available in PostBasePass
 				DummyOutput);
 
 			UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: GBuffer Pipeline rendered %d renderers at PostBasePass timing"), Renderers.Num());
@@ -154,7 +154,7 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 		}
 	}
 
-	// Process Translucent batches - same Pipeline->Execute as GBuffer
+	// Process Translucent batches - ExecutePostBasePass for GBuffer write with Stencil marking
 	// This writes to GBuffer with Stencil=0x01 marking for TransparencyComposite
 	for (auto& Batch : TranslucentBatches)
 	{
@@ -168,18 +168,17 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 		{
 			TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline = Renderers[0]->GetPipeline();
 
-			// Execute Pipeline - handles GBuffer write with Stencil marking
+			// Execute PostBasePass - handles GBuffer write with Stencil marking internally
 			// Note: For Translucent mode, Output is not used (writes to GBuffer + Stencil)
-			// Transparency pass runs later in Tonemap callback
+			// Transparency pass runs later in PrePostProcessPass_RenderThread via ExecutePrePostProcess
 			FScreenPassRenderTarget DummyOutput;
 
-			Pipeline->Execute(
+			Pipeline->ExecutePostBasePass(
 				GraphBuilder,
 				InView,
 				BatchParams,
 				Renderers,
 				SceneDepthTexture,
-				nullptr,  // SceneColorTexture not available in PostBasePass
 				DummyOutput);
 
 			UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: Translucent GBuffer write - %d renderers (Stencil marked)"), Renderers.Num());
@@ -300,7 +299,10 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 				}
 
 				// ============================================
-				// ScreenSpace Pipeline Rendering (new Pipeline architecture)
+				// ScreenSpace Pipeline Rendering
+				// PostProcess mode is fully handled here:
+				// 1. PrepareForTonemap: Generate intermediate textures (depth, normal, thickness)
+				// 2. ExecuteTonemap: Apply PostProcess shading using cached textures
 				// ============================================
 				for (auto& Batch : ScreenSpaceBatches)
 				{
@@ -314,8 +316,16 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 					{
 						TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline = Renderers[0]->GetPipeline();
 
-						// Execute Pipeline - handles all passes internally
-						Pipeline->Execute(
+						// 1. PrepareForTonemap - generate and cache intermediate textures
+						Pipeline->PrepareForTonemap(
+							GraphBuilder,
+							View,
+							BatchParams,
+							Renderers,
+							SceneDepthTexture);
+
+						// 2. ExecuteTonemap - apply PostProcess shading
+						Pipeline->ExecuteTonemap(
 							GraphBuilder,
 							View,
 							BatchParams,
@@ -333,7 +343,10 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 				}
 
 				// ============================================
-				// RayMarching Pipeline Rendering (new Pipeline architecture)
+				// RayMarching Pipeline Rendering
+				// PostProcess mode is fully handled here:
+				// 1. PrepareForTonemap: Prepare particle buffer and optional SDF volume
+				// 2. ExecuteTonemap: Apply PostProcess ray march shading
 				// ============================================
 				for (auto& Batch : RayMarchingBatches)
 				{
@@ -347,8 +360,16 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 					{
 						TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline = Renderers[0]->GetPipeline();
 
-						// Execute Pipeline - handles particle collection, SDF baking, and shading internally
-						Pipeline->Execute(
+						// 1. PrepareForTonemap - prepare particle buffer and SDF
+						Pipeline->PrepareForTonemap(
+							GraphBuilder,
+							View,
+							BatchParams,
+							Renderers,
+							SceneDepthTexture);
+
+						// 2. ExecuteTonemap - apply PostProcess ray march shading
+						Pipeline->ExecuteTonemap(
 							GraphBuilder,
 							View,
 							BatchParams,
@@ -472,27 +493,27 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 	// Copy SceneColor
 	AddCopyTexturePass(GraphBuilder, SceneColorTexture, LitSceneColorCopy);
 
-	// Apply TransparencyPass for each Translucent batch
+	// Apply TransparencyPass for each Translucent batch using Pipeline
 	for (auto& Batch : TranslucentBatches)
 	{
 		const FFluidRenderingParameters& BatchParams = Batch.Key;
 		const TArray<UKawaiiFluidMetaballRenderer*>& Renderers = Batch.Value;
 
-		if (Renderers.Num() > 0 && Renderers[0]->GetShadingPass())
+		if (Renderers.Num() > 0 && Renderers[0]->GetPipeline())
 		{
-			TSharedPtr<IKawaiiMetaballShadingPass> ShadingPass = Renderers[0]->GetShadingPass();
-			if (ShadingPass->RequiresPostLightingPass())
-			{
-				ShadingPass->RenderPostLightingPass(
-					GraphBuilder,
-					View,
-					BatchParams,
-					SceneDepthTexture,     // Has Stencil=0x01 marking from GBuffer write
-					LitSceneColorCopy,     // Lit scene color (after Lumen/VSM)
-					GBufferATexture,       // Normals for refraction direction
-					GBufferDTexture,       // Thickness for Beer's Law absorption
-					Output);
-			}
+			TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline = Renderers[0]->GetPipeline();
+
+			// Execute PrePostProcess with GBuffer textures for transparency compositing
+			Pipeline->ExecutePrePostProcess(
+				GraphBuilder,
+				View,
+				BatchParams,
+				Renderers,
+				SceneDepthTexture,     // Has Stencil=0x01 marking from GBuffer write
+				LitSceneColorCopy,     // Lit scene color (after Lumen/VSM)
+				Output,
+				GBufferATexture,       // Normals for refraction direction
+				GBufferDTexture);      // Thickness for Beer's Law absorption
 		}
 	}
 

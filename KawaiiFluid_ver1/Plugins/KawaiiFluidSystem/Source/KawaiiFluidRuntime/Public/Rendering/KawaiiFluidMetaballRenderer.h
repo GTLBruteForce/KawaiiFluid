@@ -14,7 +14,6 @@ class IKawaiiFluidDataProvider;
 class UFluidRendererSubsystem;
 class FKawaiiFluidRenderResource;
 class IKawaiiMetaballRenderingPipeline;
-class IKawaiiMetaballShadingPass;
 
 /**
  * Metaball Renderer (UObject-based)
@@ -86,11 +85,8 @@ public:
 	/** Get local rendering parameters for batching */
 	const FFluidRenderingParameters& GetLocalParameters() const { return LocalParameters; }
 
-	/** Get rendering pipeline (Pipeline + Shading architecture) */
+	/** Get rendering pipeline (handles ShadingMode internally) */
 	TSharedPtr<IKawaiiMetaballRenderingPipeline> GetPipeline() const { return Pipeline; }
-
-	/** Get shading pass (for debugging) */
-	TSharedPtr<IKawaiiMetaballShadingPass> GetShadingPass() const { return ShadingPass; }
 
 	//========================================
 	// Enable Control
@@ -145,8 +141,8 @@ protected:
 	/** Update GPU render resources */
 	void UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius);
 
-	/** Update Pipeline and ShadingPass based on LocalParameters */
-	void UpdatePipelineAndShading();
+	/** Update Pipeline based on LocalParameters (Pipeline handles ShadingMode internally) */
+	void UpdatePipeline();
 
 private:
 	/** Cached particle positions */
@@ -170,20 +166,14 @@ private:
 	TArray<FKawaiiRenderParticle> RenderParticlesCache;
 
 	//========================================
-	// Pipeline + Shading Architecture
+	// Pipeline Architecture
 	//========================================
 
-	/** Rendering pipeline (ScreenSpace or RayMarching) */
+	/** Rendering pipeline (ScreenSpace or RayMarching) - handles ShadingMode internally */
 	TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline;
-
-	/** Shading pass (PostProcess, GBuffer, etc.) */
-	TSharedPtr<IKawaiiMetaballShadingPass> ShadingPass;
 
 	/** Cached pipeline type (to detect changes) */
 	EMetaballPipelineType CachedPipelineType = EMetaballPipelineType::ScreenSpace;
-
-	/** Cached shading mode (to detect changes) */
-	EMetaballShadingMode CachedShadingMode = EMetaballShadingMode::PostProcess;
 };
 
 // Backwards compatibility alias
