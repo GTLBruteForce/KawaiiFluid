@@ -4,7 +4,7 @@
 #include "Modules/KawaiiFluidRenderingModule.h"
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/KawaiiFluidISMRenderer.h"
-#include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/KawaiiFluidMetaballRenderer.h"
 #include "Engine/World.h"
 
 UKawaiiFluidTestDataComponent::UKawaiiFluidTestDataComponent()
@@ -36,9 +36,9 @@ void UKawaiiFluidTestDataComponent::BeginPlay()
 			ISMRenderer->ApplySettings(ISMSettings);
 		}
 
-		if (UKawaiiFluidSSFRRenderer* SSFRRenderer = RenderingModule->GetSSFRRenderer())
+		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
 		{
-			SSFRRenderer->ApplySettings(SSFRSettings);
+			MetaballRenderer->ApplySettings(MetaballSettings);
 		}
 
 		// Register with subsystem
@@ -50,10 +50,10 @@ void UKawaiiFluidTestDataComponent::BeginPlay()
 			}
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("KawaiiFluidTestDataComponent: Initialized with %d particles and RenderingModule (ISM: %s, SSFR: %s)"),
+		UE_LOG(LogTemp, Log, TEXT("KawaiiFluidTestDataComponent: Initialized with %d particles and RenderingModule (ISM: %s, Metaball: %s)"),
 			TestParticles.Num(),
 			ISMSettings.bEnabled ? TEXT("Enabled") : TEXT("Disabled"),
-			SSFRSettings.bEnabled ? TEXT("Enabled") : TEXT("Disabled"));
+			MetaballSettings.bEnabled ? TEXT("Enabled") : TEXT("Disabled"));
 	}
 	else
 	{

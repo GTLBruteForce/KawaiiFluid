@@ -61,7 +61,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (DisplayName = "ISM Settings"))
 	FKawaiiFluidISMRendererSettings ISMSettings;
 
-	/** SSFR Renderer Settings */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (DisplayName = "SSFR Settings"))
-	FKawaiiFluidSSFRRendererSettings SSFRSettings;
+	/** Metaball Renderer Settings */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (DisplayName = "Metaball Settings"))
+	FKawaiiFluidMetaballRendererSettings MetaballSettings;
 };

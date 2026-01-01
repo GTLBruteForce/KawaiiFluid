@@ -126,9 +126,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Test Data|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "ISM Settings"))
 	FKawaiiFluidISMRendererSettings ISMSettings;
 
-	/** SSFR Renderer Settings */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Test Data|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "SSFR Settings"))
-	FKawaiiFluidSSFRRendererSettings SSFRSettings;
+	/** Metaball Renderer Settings */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Test Data|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "Metaball Settings"))
+	FKawaiiFluidMetaballRendererSettings MetaballSettings;
 
 	//========================================
 	// IKawaiiFluidDataProvider 인터페이스 구현

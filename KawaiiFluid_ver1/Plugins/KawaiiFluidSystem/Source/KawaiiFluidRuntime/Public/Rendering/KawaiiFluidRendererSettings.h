@@ -48,13 +48,13 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidISMRendererSettings
 };
 
 /**
- * SSFR Renderer Settings (Editor Configuration)
+ * Metaball Renderer Settings (Editor Configuration)
  *
- * Lightweight struct for configuring SSFR renderer in Details panel.
- * These settings are copied to UKawaiiFluidSSFRRenderer at initialization.
+ * Lightweight struct for configuring Metaball renderer in Details panel.
+ * These settings are copied to UKawaiiFluidMetaballRenderer at initialization.
  */
 USTRUCT(BlueprintType)
-struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
+struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidMetaballRendererSettings
 {
 	GENERATED_BODY()
 
@@ -62,17 +62,23 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	// Enable Control
 	//========================================
 
-	/** Enable/disable SSFR renderer */
+	/** Enable/disable Metaball renderer */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control")
 	bool bEnabled = false;
-	
+
 	//========================================
 	// Rendering
 	//========================================
 
-	/** SSFR rendering mode selection */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled", DisplayName = "SSFR Mode"))
-	ESSFRRenderingMode SSFRMode = ESSFRRenderingMode::Custom;
+	/** Pipeline type - how the fluid surface is computed */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering",
+		meta = (EditCondition = "bEnabled", DisplayName = "Pipeline Type"))
+	EMetaballPipelineType PipelineType = EMetaballPipelineType::RayMarching;
+
+	/** Shading mode - how the fluid surface is lit/rendered */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering",
+		meta = (EditCondition = "bEnabled", DisplayName = "Shading Mode"))
+	EMetaballShadingMode ShadingMode = EMetaballShadingMode::PostProcess;
 
 	/** Use simulation particle radius for rendering (if true, ignores ParticleRenderRadius) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled"))
@@ -81,7 +87,7 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	/** Particle render radius (screen space, cm) - only used when bUseSimulationRadius is false */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled && !bUseSimulationRadius", ClampMin = "1.0", ClampMax = "100.0"))
 	float ParticleRenderRadius = 15.0f;
-	
+
 	/** Render only surface particles (for slime - reduces particle count while maintaining surface) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = "bEnabled"))
 	bool bRenderSurfaceOnly = false;
@@ -137,39 +143,39 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	/** Thickness scale */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (EditCondition = "bEnabled", ClampMin = "0.1", ClampMax = "10.0"))
 	float ThicknessScale = 1.0f;
-	
+
 	//========================================
 	// Ray Marching SDF Mode Parameters
 	//========================================
 
 	/** SDF smoothness for metaball blending (lower = smoother) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "1.0", ClampMax = "32.0"))
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "1.0", ClampMax = "32.0"))
 	float SDFSmoothness = 12.0f;
 
 	/** Maximum ray marching steps */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "16", ClampMax = "256"))
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "16", ClampMax = "256"))
 	int32 MaxRayMarchSteps = 128;
 
 	/** Ray march hit threshold (surface detection) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "0.0001", ClampMax = "1.0"))
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "0.0001", ClampMax = "1.0"))
 	float RayMarchHitThreshold = 1.0f;
 
 	/** Maximum ray march distance */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "100.0", ClampMax = "10000.0"))
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "100.0", ClampMax = "10000.0"))
 	float RayMarchMaxDistance = 2000.0f;
 
 	/** Subsurface scattering intensity (jelly effect) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "0.0", ClampMax = "2.0"))
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "0.0", ClampMax = "2.0"))
 	float SSSIntensity = 1.0f;
 
 	/** Subsurface scattering color */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching"))
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching"))
 	FLinearColor SSSColor = FLinearColor(1.0f, 0.5f, 0.3f, 1.0f);
 
 	/**
@@ -178,12 +184,12 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	 * When disabled, uses direct particle iteration (legacy mode)
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching"))
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching"))
 	bool bUseSDFVolumeOptimization = true;
 
 	/** SDF Volume resolution (64 = 64x64x64 voxels) - higher = more precise but slower compute */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::RayMarching && bUseSDFVolumeOptimization",
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching && bUseSDFVolumeOptimization",
 			ClampMin = "32", ClampMax = "256"))
 	int32 SDFVolumeResolution = 64;
 
@@ -191,18 +197,21 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSSFRRendererSettings
 	// G-Buffer Mode Parameters
 	//========================================
 
-	/** Metallic value for GBuffer (G-Buffer mode only) */
+	/** Metallic value for GBuffer (G-Buffer shading mode only) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (EditCondition = "bEnabled && ShadingMode == EMetaballShadingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
 	float Metallic = 0.1f;
 
-	/** Roughness value for GBuffer (G-Buffer mode only) */
+	/** Roughness value for GBuffer (G-Buffer shading mode only) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (EditCondition = "bEnabled && ShadingMode == EMetaballShadingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
 	float Roughness = 0.3f;
 
-	/** Subsurface scattering opacity (G-Buffer mode only) */
+	/** Subsurface scattering opacity (G-Buffer shading mode only) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
-		meta = (EditCondition = "bEnabled && SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (EditCondition = "bEnabled && ShadingMode == EMetaballShadingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
 	float SubsurfaceOpacity = 0.5f;
 };
+
+// Backwards compatibility alias
+using FKawaiiFluidSSFRRendererSettings = FKawaiiFluidMetaballRendererSettings;

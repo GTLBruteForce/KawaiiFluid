@@ -7,7 +7,7 @@
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/KawaiiFluidISMRenderer.h"
-#include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/KawaiiFluidMetaballRenderer.h"
 
 UKawaiiSlimeComponent::UKawaiiSlimeComponent()
 {
@@ -64,10 +64,10 @@ void UKawaiiSlimeComponent::BeginPlay()
 			ISMRenderer->ApplySettings(ISMSettings);
 		}
 
-		// SSFR 렌더러 설정 적용
-		if (UKawaiiFluidSSFRRenderer* SSFRRenderer = RenderingModule->GetSSFRRenderer())
+		// Metaball 렌더러 설정 적용
+		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
 		{
-			SSFRRenderer->ApplySettings(SSFRSettings);
+			MetaballRenderer->ApplySettings(MetaballSettings);
 		}
 
 		// FluidRendererSubsystem에 등록

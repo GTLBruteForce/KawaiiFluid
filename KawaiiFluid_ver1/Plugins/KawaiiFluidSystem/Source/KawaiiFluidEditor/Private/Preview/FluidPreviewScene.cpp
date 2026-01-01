@@ -9,7 +9,7 @@
 #include "Modules/KawaiiFluidSimulationModule.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
 #include "Rendering/KawaiiFluidISMRenderer.h"
-#include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/KawaiiFluidMetaballRenderer.h"
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -57,14 +57,14 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 			ISMRenderer->ApplySettings(ISMSettings);
 		}
 
-		if (UKawaiiFluidSSFRRenderer* SSFRRenderer = RenderingModule->GetSSFRRenderer())
+		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
 		{
-			FKawaiiFluidSSFRRendererSettings SSFRSettings;
-			SSFRSettings.bEnabled = true;
-			SSFRRenderer->ApplySettings(SSFRSettings);
+			FKawaiiFluidMetaballRendererSettings MetaballSettings;
+			MetaballSettings.bEnabled = true;
+			MetaballRenderer->ApplySettings(MetaballSettings);
 		}
 
-		// Register to FluidRendererSubsystem (required for SSFR ViewExtension!)
+		// Register to FluidRendererSubsystem (required for Metaball ViewExtension!)
 		if (UWorld* World = GetWorld())
 		{
 			if (UFluidRendererSubsystem* RendererSubsystem = World->GetSubsystem<UFluidRendererSubsystem>())
@@ -194,9 +194,9 @@ void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 				ISM->ParticleScale = CachedParticleRadius / 5.0f;
 				ISM->SetFluidColor(CurrentPreset->Color);
 			}
-			if (UKawaiiFluidSSFRRenderer* SSFR = RenderingModule->GetSSFRRenderer())
+			if (UKawaiiFluidMetaballRenderer* Metaball = RenderingModule->GetMetaballRenderer())
 			{
-				SSFR->LocalParameters.FluidColor = CurrentPreset->Color;
+				Metaball->LocalParameters.FluidColor = CurrentPreset->Color;
 			}
 		}
 	}
@@ -234,9 +234,9 @@ void FFluidPreviewScene::RefreshFromPreset()
 			ISM->ParticleScale = CachedParticleRadius / 5.0f;
 			ISM->SetFluidColor(CurrentPreset->Color);
 		}
-		if (UKawaiiFluidSSFRRenderer* SSFR = RenderingModule->GetSSFRRenderer())
+		if (UKawaiiFluidMetaballRenderer* Metaball = RenderingModule->GetMetaballRenderer())
 		{
-			SSFR->LocalParameters.FluidColor = CurrentPreset->Color;
+			Metaball->LocalParameters.FluidColor = CurrentPreset->Color;
 		}
 	}
 }
@@ -411,9 +411,9 @@ void FFluidPreviewScene::ApplyPreviewSettings()
 		{
 			ISMRenderer->ApplySettings(PreviewSettingsObject->ISMSettings);
 		}
-		if (UKawaiiFluidSSFRRenderer* SSFRRenderer = RenderingModule->GetSSFRRenderer())
+		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
 		{
-			SSFRRenderer->ApplySettings(PreviewSettingsObject->SSFRSettings);
+			MetaballRenderer->ApplySettings(PreviewSettingsObject->MetaballSettings);
 		}
 	}
 }

@@ -1,30 +1,39 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 
-#include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/KawaiiFluidMetaballRenderer.h"
 #include "Interfaces/IKawaiiFluidDataProvider.h"
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/KawaiiFluidRenderResource.h"
 #include "Core/KawaiiRenderParticle.h"
-#include "Rendering/Composite/FluidCompositePassFactory.h"
 
-UKawaiiFluidSSFRRenderer::UKawaiiFluidSSFRRenderer()
+// Pipeline + Shading architecture
+#include "Rendering/Pipeline/IKawaiiMetaballRenderingPipeline.h"
+#include "Rendering/Pipeline/KawaiiMetaballScreenSpacePipeline.h"
+#include "Rendering/Pipeline/KawaiiMetaballRayMarchPipeline.h"
+#include "Rendering/Shading/IKawaiiMetaballShadingPass.h"
+#include "Rendering/Shading/KawaiiPostProcessShading.h"
+#include "Rendering/Shading/KawaiiGBufferShading.h"
+#include "Rendering/Shading/KawaiiOpaqueShading.h"
+#include "Rendering/Shading/KawaiiTranslucentShading.h"
+
+UKawaiiFluidMetaballRenderer::UKawaiiFluidMetaballRenderer()
 {
 	// No component tick needed - UObject doesn't tick
 }
 
-void UKawaiiFluidSSFRRenderer::Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent)
+void UKawaiiFluidMetaballRenderer::Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent)
 {
 	CachedWorld = InWorld;
 	CachedOwnerComponent = InOwnerComponent;
 
 	if (!CachedWorld)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidSSFRRenderer::Initialize - No world context provided"));
+		UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidMetaballRenderer::Initialize - No world context provided"));
 	}
 
 	if (!CachedOwnerComponent)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidSSFRRenderer::Initialize - No owner component provided"));
+		UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidMetaballRenderer::Initialize - No owner component provided"));
 	}
 
 	// Cache renderer subsystem for ViewExtension access
@@ -34,7 +43,7 @@ void UKawaiiFluidSSFRRenderer::Initialize(UWorld* InWorld, USceneComponent* InOw
 
 		if (!RendererSubsystem)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidSSFRRenderer: Failed to get FluidRendererSubsystem"));
+			UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidMetaballRenderer: Failed to get FluidRendererSubsystem"));
 		}
 	}
 
@@ -42,26 +51,26 @@ void UKawaiiFluidSSFRRenderer::Initialize(UWorld* InWorld, USceneComponent* InOw
 	RenderResource = MakeShared<FKawaiiFluidRenderResource>();
 
 	// Initialize on render thread
-	ENQUEUE_RENDER_COMMAND(InitSSFRRenderResource)(
+	ENQUEUE_RENDER_COMMAND(InitMetaballRenderResource)(
 		[RenderResourcePtr = RenderResource.Get()](FRHICommandListImmediate& RHICmdList)
 		{
 			RenderResourcePtr->InitResource(RHICmdList);
 		}
 	);
 
-	// Create initial composite pass
-	UpdateCompositePass();
+	// Create initial Pipeline and ShadingPass
+	UpdatePipelineAndShading();
 
-	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Initialized GPU resources (MaxParticles: %d)"),
+	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Initialized GPU resources (MaxParticles: %d)"),
 		MaxRenderParticles);
 }
 
-void UKawaiiFluidSSFRRenderer::Cleanup()
+void UKawaiiFluidMetaballRenderer::Cleanup()
 {
 	// Release render resource
 	if (RenderResource.IsValid())
 	{
-		ENQUEUE_RENDER_COMMAND(ReleaseSSFRRenderResource)(
+		ENQUEUE_RENDER_COMMAND(ReleaseMetaballRenderResource)(
 			[RenderResource = MoveTemp(RenderResource)](FRHICommandListImmediate& RHICmdList) mutable
 			{
 				if (RenderResource.IsValid())
@@ -84,10 +93,10 @@ void UKawaiiFluidSSFRRenderer::Cleanup()
 	CachedOwnerComponent = nullptr;
 	bEnabled = false;
 
-	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Cleanup completed"));
+	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Cleanup completed"));
 }
 
-void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSettings& Settings)
+void UKawaiiFluidMetaballRenderer::ApplySettings(const FKawaiiFluidMetaballRendererSettings& Settings)
 {
 	bEnabled = Settings.bEnabled;
 	bUseSimulationRadius = Settings.bUseSimulationRadius;
@@ -106,7 +115,8 @@ void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSetti
 
 	// Map settings to LocalParameters
 	LocalParameters.bEnableRendering = Settings.bEnabled;
-	LocalParameters.SSFRMode = Settings.SSFRMode;
+	LocalParameters.PipelineType = Settings.PipelineType;
+	LocalParameters.ShadingMode = Settings.ShadingMode;
 	LocalParameters.FluidColor = Settings.FluidColor;
 	LocalParameters.FresnelStrength = Settings.FresnelStrength;
 	LocalParameters.RefractiveIndex = Settings.RefractiveIndex;
@@ -134,17 +144,17 @@ void UKawaiiFluidSSFRRenderer::ApplySettings(const FKawaiiFluidSSFRRendererSetti
 	// MaxRenderParticles stays as member variable (not in LocalParameters)
 	MaxRenderParticles = Settings.MaxRenderParticles;
 
-	// Update composite pass if mode changed
-	UpdateCompositePass();
+	// Update Pipeline and ShadingPass
+	UpdatePipelineAndShading();
 
-	UE_LOG(LogTemp, Log, TEXT("SSFRRenderer: Applied settings (Enabled: %s, UseSimRadius: %s, Color: %s, MaxParticles: %d)"),
+	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Applied settings (Enabled: %s, UseSimRadius: %s, Color: %s, MaxParticles: %d)"),
 		bEnabled ? TEXT("true") : TEXT("false"),
 		bUseSimulationRadius ? TEXT("true") : TEXT("false"),
 		*LocalParameters.FluidColor.ToString(),
 		MaxRenderParticles);
 }
 
-void UKawaiiFluidSSFRRenderer::SetEnabled(bool bInEnabled)
+void UKawaiiFluidMetaballRenderer::SetEnabled(bool bInEnabled)
 {
 	bEnabled = bInEnabled;
 
@@ -161,7 +171,7 @@ void UKawaiiFluidSSFRRenderer::SetEnabled(bool bInEnabled)
 	}
 }
 
-void UKawaiiFluidSSFRRenderer::UpdateRendering(const IKawaiiFluidDataProvider* DataProvider, float DeltaTime)
+void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvider* DataProvider, float DeltaTime)
 {
 	if (!bEnabled || !DataProvider)
 	{
@@ -207,7 +217,7 @@ void UKawaiiFluidSSFRRenderer::UpdateRendering(const IKawaiiFluidDataProvider* D
 	bIsRenderingActive = true;
 }
 
-void UKawaiiFluidSSFRRenderer::UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius)
+void UKawaiiFluidMetaballRenderer::UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius)
 {
 	// Optionally filter to render only surface particles (for slime optimization)
 	RenderParticlesCache.Reset();
@@ -228,7 +238,7 @@ void UKawaiiFluidSSFRRenderer::UpdateGPUResources(const TArray<FFluidParticle>& 
 	}
 
 	// Log rendered particle count
-	UE_LOG(LogTemp, Log, TEXT("SSFR: Rendered particles = %d / Total = %d (SurfaceOnly: %s)"),
+	UE_LOG(LogTemp, Log, TEXT("Metaball: Rendered particles = %d / Total = %d (SurfaceOnly: %s)"),
 		RenderParticlesCache.Num(), Particles.Num(), bRenderSurfaceOnly ? TEXT("true") : TEXT("false"));
 
 	// Upload to GPU (via RenderResource)
@@ -241,25 +251,86 @@ void UKawaiiFluidSSFRRenderer::UpdateGPUResources(const TArray<FFluidParticle>& 
 	CachedParticleRadius = ParticleRadius;
 }
 
-FKawaiiFluidRenderResource* UKawaiiFluidSSFRRenderer::GetFluidRenderResource() const
+FKawaiiFluidRenderResource* UKawaiiFluidMetaballRenderer::GetFluidRenderResource() const
 {
 	return RenderResource.Get();
 }
 
-bool UKawaiiFluidSSFRRenderer::IsRenderingActive() const
+bool UKawaiiFluidMetaballRenderer::IsRenderingActive() const
 {
 	return bIsRenderingActive && RenderResource.IsValid();
 }
 
-void UKawaiiFluidSSFRRenderer::UpdateCompositePass()
+void UKawaiiFluidMetaballRenderer::UpdatePipelineAndShading()
 {
-	// Recreate composite pass if mode changed or pass doesn't exist
-	if (!CompositePass || CachedSSFRMode != LocalParameters.SSFRMode)
-	{
-		CachedSSFRMode = LocalParameters.SSFRMode;
-		CompositePass = FFluidCompositePassFactory::Create(CachedSSFRMode);
+	// Check if Pipeline needs to be recreated
+	bool bPipelineChanged = !Pipeline || CachedPipelineType != LocalParameters.PipelineType;
 
-		UE_LOG(LogTemp, Log, TEXT("SSFR Renderer mode changed to: %s"),
-			CachedSSFRMode == ESSFRRenderingMode::Custom ? TEXT("Custom") : TEXT("G-Buffer"));
+	// IMPORTANT: ShadingPass must be recreated if:
+	// 1. ShadingPass doesn't exist
+	// 2. ShadingMode changed
+	// 3. PipelineType changed (because same shading mode may have different implementation per pipeline)
+	bool bShadingChanged = !ShadingPass ||
+	                       CachedShadingMode != LocalParameters.ShadingMode ||
+	                       CachedPipelineType != LocalParameters.PipelineType;
+
+	// Create/recreate Pipeline if needed
+	if (bPipelineChanged)
+	{
+		switch (LocalParameters.PipelineType)
+		{
+		case EMetaballPipelineType::ScreenSpace:
+			Pipeline = MakeShared<FKawaiiMetaballScreenSpacePipeline>();
+			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created ScreenSpace Pipeline"));
+			break;
+
+		case EMetaballPipelineType::RayMarching:
+			Pipeline = MakeShared<FKawaiiMetaballRayMarchPipeline>();
+			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created RayMarching Pipeline"));
+			break;
+		}
+
+		CachedPipelineType = LocalParameters.PipelineType;
 	}
+
+	// Create/recreate ShadingPass if needed
+	if (bShadingChanged)
+	{
+		switch (LocalParameters.ShadingMode)
+		{
+		case EMetaballShadingMode::PostProcess:
+			ShadingPass = MakeShared<FKawaiiPostProcessShading>();
+			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created PostProcess Shading"));
+			break;
+
+		case EMetaballShadingMode::GBuffer:
+			ShadingPass = MakeShared<FKawaiiGBufferShading>();
+			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created GBuffer Shading"));
+			break;
+
+		case EMetaballShadingMode::Opaque:
+			ShadingPass = MakeShared<FKawaiiOpaqueShading>();
+			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created Opaque Shading (experimental)"));
+			break;
+
+		case EMetaballShadingMode::Translucent:
+			ShadingPass = MakeShared<FKawaiiTranslucentShading>();
+			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created Translucent Shading (experimental)"));
+			break;
+		}
+
+		// Connect ShadingPass to Pipeline
+		if (Pipeline)
+		{
+			Pipeline->SetShadingPass(ShadingPass);
+		}
+
+		CachedShadingMode = LocalParameters.ShadingMode;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Pipeline=%s, Shading=%s"),
+		LocalParameters.PipelineType == EMetaballPipelineType::ScreenSpace ? TEXT("ScreenSpace") : TEXT("RayMarching"),
+		LocalParameters.ShadingMode == EMetaballShadingMode::PostProcess ? TEXT("PostProcess") :
+		LocalParameters.ShadingMode == EMetaballShadingMode::GBuffer ? TEXT("GBuffer") :
+		LocalParameters.ShadingMode == EMetaballShadingMode::Opaque ? TEXT("Opaque") : TEXT("Translucent"));
 }

@@ -8,16 +8,18 @@
 #include "Core/KawaiiRenderParticle.h"
 #include "Rendering/KawaiiFluidRendererSettings.h"
 #include "Rendering/FluidRenderingParameters.h"
-#include "KawaiiFluidSSFRRenderer.generated.h"
+#include "KawaiiFluidMetaballRenderer.generated.h"
 
 class IKawaiiFluidDataProvider;
 class UFluidRendererSubsystem;
 class FKawaiiFluidRenderResource;
+class IKawaiiMetaballRenderingPipeline;
+class IKawaiiMetaballShadingPass;
 
 /**
- * Screen Space Fluid Rendering (SSFR) renderer (UObject-based)
+ * Metaball Renderer (UObject-based)
  *
- * Renders fluid particles using GPU-based depth/thickness rendering and
+ * Renders fluid particles using GPU-based metaball rendering with
  * screen-space surface reconstruction for realistic fluid appearance.
  *
  * Features:
@@ -30,12 +32,12 @@ class FKawaiiFluidRenderResource;
  * Pure UObject implementation (no component dependencies).
  */
 UCLASS()
-class KAWAIIFLUIDRUNTIME_API UKawaiiFluidSSFRRenderer : public UObject
+class KAWAIIFLUIDRUNTIME_API UKawaiiFluidMetaballRenderer : public UObject
 {
 	GENERATED_BODY()
 
 public:
-	UKawaiiFluidSSFRRenderer();
+	UKawaiiFluidMetaballRenderer();
 
 	/**
 	 * Initialize renderer with world and owner context
@@ -53,7 +55,7 @@ public:
 	 * Apply settings from struct
 	 * @param Settings Editor configuration to apply
 	 */
-	void ApplySettings(const FKawaiiFluidSSFRRendererSettings& Settings);
+	void ApplySettings(const FKawaiiFluidMetaballRendererSettings& Settings);
 
 	/**
 	 * Update rendering
@@ -84,8 +86,11 @@ public:
 	/** Get local rendering parameters for batching */
 	const FFluidRenderingParameters& GetLocalParameters() const { return LocalParameters; }
 
-	/** Get composite pass (for ViewExtension access) */
-	TSharedPtr<class IFluidCompositePass> GetCompositePass() const { return CompositePass; }
+	/** Get rendering pipeline (Pipeline + Shading architecture) */
+	TSharedPtr<IKawaiiMetaballRenderingPipeline> GetPipeline() const { return Pipeline; }
+
+	/** Get shading pass (for debugging) */
+	TSharedPtr<IKawaiiMetaballShadingPass> GetShadingPass() const { return ShadingPass; }
 
 	//========================================
 	// Enable Control
@@ -117,7 +122,7 @@ public:
 	/** Last frame rendered particle count */
 	int32 LastRenderedParticleCount = 0;
 
-	/** SSFR rendering active status */
+	/** Metaball rendering active status */
 	bool bIsRenderingActive = false;
 
 protected:
@@ -134,14 +139,14 @@ protected:
 	TObjectPtr<USceneComponent> CachedOwnerComponent;
 
 	//========================================
-	// SSFR-specific Internals
+	// Metaball Renderer Internals
 	//========================================
 
 	/** Update GPU render resources */
 	void UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius);
 
-	/** Update composite pass if mode changed */
-	void UpdateCompositePass();
+	/** Update Pipeline and ShadingPass based on LocalParameters */
+	void UpdatePipelineAndShading();
 
 private:
 	/** Cached particle positions */
@@ -155,22 +160,31 @@ private:
 	TObjectPtr<UFluidRendererSubsystem> RendererSubsystem;
 
 	//========================================
-	// GPU Resources (SSFR Pipeline)
+	// GPU Resources
 	//========================================
 
-	/** GPU render resource (manages structured buffers for SSFR) */
+	/** GPU render resource (manages structured buffers) */
 	TSharedPtr<FKawaiiFluidRenderResource> RenderResource;
 
-	/** Converted render particles cache (FFluidParticle → FKawaiiRenderParticle) */
+	/** Converted render particles cache (FFluidParticle -> FKawaiiRenderParticle) */
 	TArray<FKawaiiRenderParticle> RenderParticlesCache;
 
 	//========================================
-	// Composite Pass (Custom vs GBuffer rendering)
+	// Pipeline + Shading Architecture
 	//========================================
 
-	/** Composite rendering pass (Custom or GBuffer) */
-	TSharedPtr<IFluidCompositePass> CompositePass;
+	/** Rendering pipeline (ScreenSpace or RayMarching) */
+	TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline;
 
-	/** Cached rendering mode (to detect mode changes) */
-	ESSFRRenderingMode CachedSSFRMode = ESSFRRenderingMode::Custom;
+	/** Shading pass (PostProcess, GBuffer, etc.) */
+	TSharedPtr<IKawaiiMetaballShadingPass> ShadingPass;
+
+	/** Cached pipeline type (to detect changes) */
+	EMetaballPipelineType CachedPipelineType = EMetaballPipelineType::ScreenSpace;
+
+	/** Cached shading mode (to detect changes) */
+	EMetaballShadingMode CachedShadingMode = EMetaballShadingMode::PostProcess;
 };
+
+// Backwards compatibility alias
+using UKawaiiFluidSSFRRenderer = UKawaiiFluidMetaballRenderer;

@@ -8,7 +8,7 @@
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/KawaiiFluidISMRenderer.h"
-#include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/KawaiiFluidMetaballRenderer.h"
 
 UKawaiiFluidComponent::UKawaiiFluidComponent()
 {
@@ -42,14 +42,14 @@ void UKawaiiFluidComponent::OnRegister()
 		// RenderingModule 초기화
 		RenderingModule->Initialize(World, this, SimulationModule);
 
-		// ISM/SSFR 설정 적용
+		// ISM/Metaball 설정 적용
 		if (UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer())
 		{
 			ISMRenderer->ApplySettings(ISMSettings);
 		}
-		if (UKawaiiFluidSSFRRenderer* SSFRRenderer = RenderingModule->GetSSFRRenderer())
+		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
 		{
-			SSFRRenderer->ApplySettings(SSFRSettings);
+			MetaballRenderer->ApplySettings(MetaballSettings);
 		}
 
 		// FluidRendererSubsystem에 등록
@@ -121,10 +121,10 @@ void UKawaiiFluidComponent::BeginPlay()
 				ISMRenderer->ApplySettings(ISMSettings);
 			}
 
-			// 3. SSFR 렌더러 설정 적용
-			if (UKawaiiFluidSSFRRenderer* SSFRRenderer = RenderingModule->GetSSFRRenderer())
+			// 3. Metaball 렌더러 설정 적용
+			if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
 			{
-				SSFRRenderer->ApplySettings(SSFRSettings);
+				MetaballRenderer->ApplySettings(MetaballSettings);
 			}
 
 			// 4. FluidRendererSubsystem에 등록
@@ -136,10 +136,10 @@ void UKawaiiFluidComponent::BeginPlay()
 				}
 			}
 
-			UE_LOG(LogTemp, Log, TEXT("KawaiiFluidComponent [%s]: Rendering initialized (ISM: %s, SSFR: %s)"),
+			UE_LOG(LogTemp, Log, TEXT("KawaiiFluidComponent [%s]: Rendering initialized (ISM: %s, Metaball: %s)"),
 				*GetName(),
 				ISMSettings.bEnabled ? TEXT("Enabled") : TEXT("Disabled"),
-				SSFRSettings.bEnabled ? TEXT("Enabled") : TEXT("Disabled"));
+				MetaballSettings.bEnabled ? TEXT("Enabled") : TEXT("Disabled"));
 		}
 	}
 

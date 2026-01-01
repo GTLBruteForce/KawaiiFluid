@@ -2,14 +2,14 @@
 
 #include "Modules/KawaiiFluidRenderingModule.h"
 #include "Rendering/KawaiiFluidISMRenderer.h"
-#include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/KawaiiFluidMetaballRenderer.h"
 #include "Core/FluidParticle.h"
 
 UKawaiiFluidRenderingModule::UKawaiiFluidRenderingModule()
 {
 	// Create renderer instances as default subobjects (Instanced pattern)
 	ISMRenderer = CreateDefaultSubobject<UKawaiiFluidISMRenderer>(TEXT("ISMRenderer"));
-	SSFRRenderer = CreateDefaultSubobject<UKawaiiFluidSSFRRenderer>(TEXT("SSFRRenderer"));
+	MetaballRenderer = CreateDefaultSubobject<UKawaiiFluidMetaballRenderer>(TEXT("MetaballRenderer"));
 }
 
 void UKawaiiFluidRenderingModule::Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent, IKawaiiFluidDataProvider* InDataProvider)
@@ -27,26 +27,26 @@ void UKawaiiFluidRenderingModule::Initialize(UWorld* InWorld, USceneComponent* I
 		UE_LOG(LogTemp, Log, TEXT("RenderingModule: Created ISMRenderer via NewObject (non-CDO context)"));
 	}
 
-	if (!SSFRRenderer)
+	if (!MetaballRenderer)
 	{
-		SSFRRenderer = NewObject<UKawaiiFluidSSFRRenderer>(this, TEXT("SSFRRenderer"));
-		UE_LOG(LogTemp, Log, TEXT("RenderingModule: Created SSFRRenderer via NewObject (non-CDO context)"));
+		MetaballRenderer = NewObject<UKawaiiFluidMetaballRenderer>(this, TEXT("MetaballRenderer"));
+		UE_LOG(LogTemp, Log, TEXT("RenderingModule: Created MetaballRenderer via NewObject (non-CDO context)"));
 	}
 
-	// Initialize renderers (컴포넌트에 부착)
+	// Initialize renderers
 	if (ISMRenderer)
 	{
 		ISMRenderer->Initialize(InWorld, InOwnerComponent);
 	}
 
-	if (SSFRRenderer)
+	if (MetaballRenderer)
 	{
-		SSFRRenderer->Initialize(InWorld, InOwnerComponent);
+		MetaballRenderer->Initialize(InWorld, InOwnerComponent);
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("RenderingModule: Initialized (ISM: %s, SSFR: %s)"),
+	UE_LOG(LogTemp, Log, TEXT("RenderingModule: Initialized (ISM: %s, Metaball: %s)"),
 		ISMRenderer && ISMRenderer->IsEnabled() ? TEXT("Enabled") : TEXT("Disabled"),
-		SSFRRenderer && SSFRRenderer->IsEnabled() ? TEXT("Enabled") : TEXT("Disabled"));
+		MetaballRenderer && MetaballRenderer->IsEnabled() ? TEXT("Enabled") : TEXT("Disabled"));
 }
 
 void UKawaiiFluidRenderingModule::Cleanup()
@@ -56,9 +56,9 @@ void UKawaiiFluidRenderingModule::Cleanup()
 		ISMRenderer->Cleanup();
 	}
 
-	if (SSFRRenderer)
+	if (MetaballRenderer)
 	{
-		SSFRRenderer->Cleanup();
+		MetaballRenderer->Cleanup();
 	}
 
 	DataProviderPtr = nullptr;
@@ -73,15 +73,15 @@ void UKawaiiFluidRenderingModule::UpdateRenderers()
 		return;
 	}
 
-	// Update all enabled renderers (파티클 0개여도 업데이트해서 ISM 클리어)
+	// Update all enabled renderers
 	if (ISMRenderer && ISMRenderer->IsEnabled())
 	{
 		ISMRenderer->UpdateRendering(DataProviderPtr, 0.0f);
 	}
 
-	if (SSFRRenderer && SSFRRenderer->IsEnabled())
+	if (MetaballRenderer && MetaballRenderer->IsEnabled())
 	{
-		SSFRRenderer->UpdateRendering(DataProviderPtr, 0.0f);
+		MetaballRenderer->UpdateRendering(DataProviderPtr, 0.0f);
 	}
 }
 

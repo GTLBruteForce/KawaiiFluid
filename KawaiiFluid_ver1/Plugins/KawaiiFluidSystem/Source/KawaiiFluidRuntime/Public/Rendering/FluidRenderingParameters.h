@@ -18,10 +18,42 @@ enum class EFluidRenderingQuality : uint8
 };
 
 /**
- * SSFR Rendering Mode
- * - Custom: Custom lighting (Blinn-Phong, manual Fresnel)
- * - GBuffer: Write to GBuffer for Unreal's Lumen/VSM (deferred rendering)
- * - RayMarching: Ray Marching SDF for smooth metaball surfaces (best for slime)
+ * Metaball Pipeline Type
+ * Defines how the fluid surface is computed.
+ */
+UENUM(BlueprintType)
+enum class EMetaballPipelineType : uint8
+{
+	/** Screen Space pipeline: Depth -> Smoothing -> Normal -> Thickness */
+	ScreenSpace UMETA(DisplayName = "Screen Space"),
+
+	/** Ray Marching pipeline: Direct SDF computation from particle buffer */
+	RayMarching UMETA(DisplayName = "Ray Marching")
+};
+
+/**
+ * Metaball Shading Mode
+ * Defines how the fluid surface is rendered/lit.
+ */
+UENUM(BlueprintType)
+enum class EMetaballShadingMode : uint8
+{
+	/** PostProcess: Custom lighting (Blinn-Phong, Fresnel, Beer's Law) */
+	PostProcess UMETA(DisplayName = "Post Process"),
+
+	/** GBuffer: Legacy GBuffer write for Lumen/VSM integration */
+	GBuffer UMETA(DisplayName = "GBuffer (Legacy)"),
+
+	/** Opaque: Experimental full GBuffer write approach */
+	Opaque UMETA(DisplayName = "Opaque (Experimental)"),
+
+	/** Translucent: Experimental Depth/Normal only to GBuffer, Color/Refraction later */
+	Translucent UMETA(DisplayName = "Translucent (Experimental)")
+};
+
+/**
+ * SSFR Rendering Mode (DEPRECATED - use EMetaballPipelineType + EMetaballShadingMode)
+ * Kept for backwards compatibility during migration.
  */
 UENUM(BlueprintType)
 enum class ESSFRRenderingMode : uint8
@@ -52,6 +84,14 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	/** 렌더링 품질 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering")
 	EFluidRenderingQuality Quality = EFluidRenderingQuality::Medium;
+
+	/** Pipeline type (how surface is computed) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering")
+	EMetaballPipelineType PipelineType = EMetaballPipelineType::ScreenSpace;
+
+	/** Shading mode (how surface is lit/rendered) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering")
+	EMetaballShadingMode ShadingMode = EMetaballShadingMode::PostProcess;
 
 	/** 파티클 렌더링 반경 (스크린 스페이스, cm) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Depth", meta = (ClampMin = "1.0", ClampMax = "100.0"))
@@ -105,7 +145,7 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Performance", meta = (ClampMin = "0.25", ClampMax = "1.0"))
 	float RenderTargetScale = 1.0f;
 
-	/** SSFR rendering mode */
+	/** SSFR rendering mode (maps to PipelineType + ShadingMode internally) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering")
 	ESSFRRenderingMode SSFRMode = ESSFRRenderingMode::Custom;
 
@@ -159,7 +199,7 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	int32 SDFVolumeResolution = 64;
 
 	//========================================
-	// G-Buffer Mode Parameters (for future implementation)
+	// G-Buffer Mode Parameters
 	//========================================
 
 	/** Metallic value for GBuffer (G-Buffer mode only) */
@@ -184,7 +224,8 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
 {
 	uint32 Hash = GetTypeHash(Params.bEnableRendering);
-	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Params.SSFRMode)));
+	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Params.PipelineType)));
+	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Params.ShadingMode)));
 	Hash = HashCombine(Hash, GetTypeHash(Params.FluidColor.ToString()));
 	Hash = HashCombine(Hash, GetTypeHash(Params.FresnelStrength));
 	Hash = HashCombine(Hash, GetTypeHash(Params.RefractiveIndex));
@@ -216,7 +257,8 @@ FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
 FORCEINLINE bool operator==(const FFluidRenderingParameters& A, const FFluidRenderingParameters& B)
 {
 	return A.bEnableRendering == B.bEnableRendering &&
-	       A.SSFRMode == B.SSFRMode &&
+	       A.PipelineType == B.PipelineType &&
+	       A.ShadingMode == B.ShadingMode &&
 	       A.FluidColor.Equals(B.FluidColor, 0.001f) &&
 	       FMath::IsNearlyEqual(A.FresnelStrength, B.FresnelStrength, 0.001f) &&
 	       FMath::IsNearlyEqual(A.RefractiveIndex, B.RefractiveIndex, 0.001f) &&

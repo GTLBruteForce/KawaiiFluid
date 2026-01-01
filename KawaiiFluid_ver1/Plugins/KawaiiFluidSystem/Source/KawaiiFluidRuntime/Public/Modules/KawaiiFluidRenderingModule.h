@@ -9,7 +9,7 @@
 #include "KawaiiFluidRenderingModule.generated.h"
 
 class UKawaiiFluidISMRenderer;
-class UKawaiiFluidSSFRRenderer;
+class UKawaiiFluidMetaballRenderer;
 
 /**
  * Fluid Rendering Module (UObject-based)
@@ -21,7 +21,7 @@ class UKawaiiFluidSSFRRenderer;
  * by data provider components (e.g., UKawaiiFluidTestDataComponent).
  *
  * Responsibilities:
- * - Own and manage internal renderer instances (ISM, SSFR)
+ * - Own and manage internal renderer instances (ISM, Metaball)
  * - Connect DataProvider with renderers
  * - Control which renderers are active via individual enable flags
  * - Orchestrate rendering updates
@@ -31,7 +31,7 @@ class UKawaiiFluidSSFRRenderer;
  * // Owned internally by TestDataComponent
  * RenderingModule = NewObject<UKawaiiFluidRenderingModule>(this);
  * RenderingModule->bEnableISMRenderer = true;
- * RenderingModule->bEnableSSFRRenderer = false;
+ * RenderingModule->bEnableMetaballRenderer = false;
  * RenderingModule->Initialize(GetWorld(), GetOwner(), this);
  * @endcode
  */
@@ -94,9 +94,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Rendering")
 	UKawaiiFluidISMRenderer* GetISMRenderer() const { return ISMRenderer; }
 
-	/** Get SSFR renderer instance */
+	/** Get Metaball renderer instance */
 	UFUNCTION(BlueprintPure, Category = "Rendering")
-	UKawaiiFluidSSFRRenderer* GetSSFRRenderer() const { return SSFRRenderer; }
+	UKawaiiFluidMetaballRenderer* GetMetaballRenderer() const { return MetaballRenderer; }
+
+	// Backwards compatibility
+	UKawaiiFluidMetaballRenderer* GetSSFRRenderer() const { return MetaballRenderer; }
 
 protected:
 	//========================================
@@ -122,9 +125,9 @@ protected:
 	UPROPERTY()
 	TObjectPtr<UKawaiiFluidISMRenderer> ISMRenderer;
 
-	/** SSFR renderer instance (UPROPERTY for GC) */
+	/** Metaball renderer instance (UPROPERTY for GC) */
 	UPROPERTY()
-	TObjectPtr<UKawaiiFluidSSFRRenderer> SSFRRenderer;
+	TObjectPtr<UKawaiiFluidMetaballRenderer> MetaballRenderer;
 
 	/** Render particles cache (for data conversion) */
 	TArray<FKawaiiRenderParticle> RenderParticlesCache;

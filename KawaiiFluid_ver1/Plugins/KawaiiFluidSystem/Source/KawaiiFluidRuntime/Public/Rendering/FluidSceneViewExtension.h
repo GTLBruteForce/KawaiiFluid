@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "SceneViewExtension.h"
+#include "Rendering/Composite/FluidTransparencyComposite.h"
 
 class UFluidRendererSubsystem;
 
@@ -50,4 +51,7 @@ private:
 
 	/** Subsystem 약한 참조 */
 	TWeakObjectPtr<UFluidRendererSubsystem> Subsystem;
+
+	/** Transparency composite for Translucent shading mode */
+	FFluidTransparencyComposite TransparencyComposite;
 };

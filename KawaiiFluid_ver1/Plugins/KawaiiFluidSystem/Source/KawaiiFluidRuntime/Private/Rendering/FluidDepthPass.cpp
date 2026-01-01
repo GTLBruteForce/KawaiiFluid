@@ -4,7 +4,7 @@
 #include "Rendering/FluidDepthShaders.h"
 #include "Rendering/KawaiiFluidRenderResource.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
-#include "Rendering/KawaiiFluidSSFRRenderer.h"
+#include "Rendering/KawaiiFluidMetaballRenderer.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "SceneView.h"
@@ -22,7 +22,7 @@
 void RenderFluidDepthPass(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
-	const TArray<UKawaiiFluidSSFRRenderer*>& Renderers,
+	const TArray<UKawaiiFluidMetaballRenderer*>& Renderers,
 	FRDGTextureRef SceneDepthTexture,
 	FRDGTextureRef& OutLinearDepthTexture)
 {
@@ -61,7 +61,7 @@ void RenderFluidDepthPass(
 	float ParticleRadius = Renderers[0]->GetLocalParameters().ParticleRenderRadius;
 
 	// Render each renderer's particles (batch-specific only)
-	for (UKawaiiFluidSSFRRenderer* Renderer : Renderers)
+	for (UKawaiiFluidMetaballRenderer* Renderer : Renderers)
 	{
 		if (!Renderer) continue;
 

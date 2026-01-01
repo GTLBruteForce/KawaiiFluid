@@ -7,7 +7,7 @@
 class FRDGBuilder;
 class FSceneView;
 class FRDGTexture;
-class UKawaiiFluidSSFRRenderer;
+class UKawaiiFluidMetaballRenderer;
 typedef FRDGTexture* FRDGTextureRef;
 
 /**
@@ -17,6 +17,6 @@ typedef FRDGTexture* FRDGTextureRef;
 void RenderFluidThicknessPass(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
-	const TArray<UKawaiiFluidSSFRRenderer*>& Renderers,
+	const TArray<UKawaiiFluidMetaballRenderer*>& Renderers,
 	FRDGTextureRef SceneDepthTexture,
 	FRDGTextureRef& OutThicknessTexture);
