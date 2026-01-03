@@ -37,7 +37,7 @@ void UKawaiiFluidMetaballRenderer::Initialize(UWorld* InWorld, USceneComponent* 
 	{
 		RendererSubsystem = CachedWorld->GetSubsystem<UFluidRendererSubsystem>();
 
-		if (!RendererSubsystem)
+		if (!RendererSubsystem.IsValid())
 		{
 			UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidMetaballRenderer: Failed to get FluidRendererSubsystem"));
 		}

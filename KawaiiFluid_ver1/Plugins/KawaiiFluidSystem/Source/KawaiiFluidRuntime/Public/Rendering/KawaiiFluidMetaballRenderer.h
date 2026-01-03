@@ -167,8 +167,7 @@ private:
 	float CachedParticleRadius = 5.0f;
 
 	/** Cached renderer subsystem reference (for ViewExtension access) */
-	UPROPERTY()
-	TObjectPtr<UFluidRendererSubsystem> RendererSubsystem;
+	TWeakObjectPtr<UFluidRendererSubsystem> RendererSubsystem;
 
 	//========================================
 	// GPU Resources
