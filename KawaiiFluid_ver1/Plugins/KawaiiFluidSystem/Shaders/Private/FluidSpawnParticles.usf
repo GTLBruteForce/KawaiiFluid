@@ -1,0 +1,185 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Spawn Particles Pass
+// Creates new particles on GPU from spawn requests (eliminates CPU→GPU race condition)
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// Spawn Request Structure (must match FGPUSpawnRequest in C++)
+//=============================================================================
+
+struct FSpawnRequest
+{
+	float3 Position;      // 12 bytes - Spawn position
+	float Radius;         // 4 bytes  - Initial particle radius (or 0 for default)
+	float3 Velocity;      // 12 bytes - Initial velocity
+	float Mass;           // 4 bytes  - Particle mass (total: 32)
+};
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+// Input: Spawn requests from CPU
+StructuredBuffer<FSpawnRequest> SpawnRequests;
+
+// Output: Particle buffer to write new particles into
+RWStructuredBuffer<FGPUFluidParticle> Particles;
+
+// Atomic counter for particle count (stored as first element of CounterBuffer)
+// CounterBuffer[0] = current particle count
+RWStructuredBuffer<uint> ParticleCounter;
+
+// Spawn parameters
+int SpawnRequestCount;      // Number of spawn requests this frame
+int MaxParticleCount;       // Maximum particle capacity
+int NextParticleID;         // Starting ID for new particles
+float DefaultRadius;        // Default radius if request.Radius == 0
+float DefaultMass;          // Default mass if request.Mass == 0
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(64, 1, 1)]
+void SpawnParticlesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint requestIdx = DispatchThreadId.x;
+
+	// Bounds check
+	if (requestIdx >= (uint)SpawnRequestCount)
+	{
+		return;
+	}
+
+	// Read spawn request
+	FSpawnRequest request = SpawnRequests[requestIdx];
+
+	// Atomically allocate a particle slot
+	uint particleIdx;
+	InterlockedAdd(ParticleCounter[0], 1, particleIdx);
+
+	// Check if we exceeded capacity
+	if (particleIdx >= (uint)MaxParticleCount)
+	{
+		// Rollback the counter (we can't spawn this particle)
+		InterlockedAdd(ParticleCounter[0], -1);
+		return;
+	}
+
+	// Create new particle
+	FGPUFluidParticle newParticle;
+
+	// Position and predicted position start the same
+	newParticle.Position = request.Position;
+	newParticle.PredictedPosition = request.Position;
+
+	// Velocity
+	newParticle.Velocity = request.Velocity;
+
+	// Mass (use default if not specified)
+	newParticle.Mass = (request.Mass > 0.0f) ? request.Mass : DefaultMass;
+
+	// Initialize physics state
+	newParticle.Density = 0.0f;
+	newParticle.Lambda = 0.0f;
+
+	// Set IDs
+	newParticle.ParticleID = NextParticleID + (int)requestIdx;
+	newParticle.ClusterID = 0; // Will be assigned later if needed
+
+	// Initialize flags (no special state)
+	newParticle.Flags = GPU_PARTICLE_FLAG_NONE;
+
+	// Padding
+	newParticle.Padding = 0.0f;
+
+	// Write to particle buffer
+	Particles[particleIdx] = newParticle;
+}
+
+//=============================================================================
+// Batch Spawn Variant (for spawning multiple particles per request)
+// Use this when SpawnRequest represents a spawn volume/area
+//=============================================================================
+
+// Optional: Additional parameters for batch spawning
+int ParticlesPerRequest;    // Number of particles to spawn per request
+float SpawnJitter;          // Random position jitter
+
+// Simple hash for pseudo-random
+uint WangHash(uint seed)
+{
+	seed = (seed ^ 61) ^ (seed >> 16);
+	seed = seed + (seed << 3);
+	seed = seed ^ (seed >> 4);
+	seed = seed * 0x27d4eb2d;
+	seed = seed ^ (seed >> 15);
+	return seed;
+}
+
+float RandomFloat(uint seed)
+{
+	return float(WangHash(seed)) / 4294967295.0f;
+}
+
+float3 RandomOffset(uint seed, float jitter)
+{
+	return float3(
+		(RandomFloat(seed) - 0.5f) * jitter,
+		(RandomFloat(seed + 1) - 0.5f) * jitter,
+		(RandomFloat(seed + 2) - 0.5f) * jitter
+	);
+}
+
+[numthreads(64, 1, 1)]
+void SpawnParticlesBatchCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint totalIdx = DispatchThreadId.x;
+
+	// Calculate which request and which sub-particle within that request
+	uint requestIdx = totalIdx / (uint)ParticlesPerRequest;
+	uint subIdx = totalIdx % (uint)ParticlesPerRequest;
+
+	// Bounds check
+	if (requestIdx >= (uint)SpawnRequestCount)
+	{
+		return;
+	}
+
+	// Read spawn request
+	FSpawnRequest request = SpawnRequests[requestIdx];
+
+	// Atomically allocate a particle slot
+	uint particleIdx;
+	InterlockedAdd(ParticleCounter[0], 1, particleIdx);
+
+	// Check if we exceeded capacity
+	if (particleIdx >= (uint)MaxParticleCount)
+	{
+		InterlockedAdd(ParticleCounter[0], -1);
+		return;
+	}
+
+	// Generate pseudo-random offset for this sub-particle
+	uint seed = requestIdx * 1000 + subIdx;
+	float3 offset = RandomOffset(seed, SpawnJitter);
+
+	// Create new particle
+	FGPUFluidParticle newParticle;
+
+	newParticle.Position = request.Position + offset;
+	newParticle.PredictedPosition = newParticle.Position;
+	newParticle.Velocity = request.Velocity;
+	newParticle.Mass = (request.Mass > 0.0f) ? request.Mass : DefaultMass;
+	newParticle.Density = 0.0f;
+	newParticle.Lambda = 0.0f;
+	newParticle.ParticleID = NextParticleID + (int)totalIdx;
+	newParticle.ClusterID = 0;
+	newParticle.Flags = GPU_PARTICLE_FLAG_NONE;
+	newParticle.Padding = 0.0f;
+
+	Particles[particleIdx] = newParticle;
+}

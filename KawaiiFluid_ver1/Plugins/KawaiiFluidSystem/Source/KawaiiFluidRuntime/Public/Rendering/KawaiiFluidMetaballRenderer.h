@@ -14,6 +14,7 @@ class IKawaiiFluidDataProvider;
 class UFluidRendererSubsystem;
 class FKawaiiFluidRenderResource;
 class IKawaiiMetaballRenderingPipeline;
+class FGPUFluidSimulator;
 
 /**
  * Metaball Renderer (UObject-based)
@@ -89,6 +90,22 @@ public:
 	TSharedPtr<IKawaiiMetaballRenderingPipeline> GetPipeline() const { return Pipeline; }
 
 	//========================================
+	// GPU Simulator Access (for ViewExtension render thread)
+	//========================================
+
+	/** Get cached GPU simulator (for render thread direct access) */
+	FGPUFluidSimulator* GetGPUSimulator() const { return CachedGPUSimulator; }
+
+	/** Set GPU simulator reference (called from game thread) */
+	void SetGPUSimulator(FGPUFluidSimulator* InSimulator) { CachedGPUSimulator = InSimulator; }
+
+	/** Check if GPU simulation mode is active */
+	bool IsGPUSimulationMode() const { return CachedGPUSimulator != nullptr; }
+
+	/** Get spawn position hint for initial bounds (from owner component location) */
+	FVector GetSpawnPositionHint() const { return CachedOwnerComponent ? CachedOwnerComponent->GetComponentLocation() : FVector::ZeroVector; }
+
+	//========================================
 	// Enable Control
 	//========================================
 
@@ -153,8 +170,11 @@ protected:
 	// Metaball Renderer Internals
 	//========================================
 
-	/** Update GPU render resources */
+	/** Update GPU render resources (CPU path - uploads from CPU array) */
 	void UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius);
+
+	/** Update GPU render resources from GPU simulator buffer (GPU path - no CPU upload) */
+	void UpdateGPUResourcesFromGPUBuffer(FGPUFluidSimulator* Simulator, int32 ParticleCount, float ParticleRadius);
 
 	/** Update Pipeline based on LocalParameters (Pipeline handles ShadingMode internally) */
 	void UpdatePipeline();
@@ -188,6 +208,13 @@ private:
 
 	/** Cached pipeline type (to detect changes) */
 	EMetaballPipelineType CachedPipelineType = EMetaballPipelineType::ScreenSpace;
+
+	//========================================
+	// GPU Simulator Reference
+	//========================================
+
+	/** Cached GPU simulator pointer (for render thread direct buffer access) */
+	FGPUFluidSimulator* CachedGPUSimulator = nullptr;
 };
 
 // Backwards compatibility alias

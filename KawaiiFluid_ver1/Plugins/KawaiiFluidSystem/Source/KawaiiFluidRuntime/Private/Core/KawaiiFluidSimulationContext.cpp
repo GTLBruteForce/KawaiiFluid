@@ -7,9 +7,13 @@
 #include "Physics/ViscositySolver.h"
 #include "Physics/AdhesionSolver.h"
 #include "Collision/FluidCollider.h"
+#include "Collision/MeshFluidCollider.h"
 #include "Components/FluidInteractionComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Async/Async.h"
+#include "RenderingThread.h"
+#include "GPU/GPUFluidSimulator.h"
+#include "GPU/GPUFluidParticle.h"
 
 // Profiling
 DECLARE_STATS_GROUP(TEXT("KawaiiFluidContext"), STATGROUP_KawaiiFluidContext, STATCAT_Advanced);
@@ -30,6 +34,7 @@ UKawaiiFluidSimulationContext::UKawaiiFluidSimulationContext()
 
 UKawaiiFluidSimulationContext::~UKawaiiFluidSimulationContext()
 {
+	ReleaseGPUSimulator();
 }
 
 void UKawaiiFluidSimulationContext::InitializeSolvers(const UKawaiiFluidPresetDataAsset* Preset)
@@ -58,6 +63,332 @@ void UKawaiiFluidSimulationContext::EnsureSolversInitialized(const UKawaiiFluidP
 	}
 }
 
+//=============================================================================
+// GPU Simulation Methods
+//=============================================================================
+
+void UKawaiiFluidSimulationContext::InitializeGPUSimulator(int32 MaxParticleCount)
+{
+	if (GPUSimulator.IsValid())
+	{
+		// Already initialized - resize if needed
+		if (GPUSimulator->GetMaxParticleCount() < MaxParticleCount)
+		{
+			GPUSimulator->Release();
+			GPUSimulator->Initialize(MaxParticleCount);
+		}
+		return;
+	}
+
+	GPUSimulator = MakeShared<FGPUFluidSimulator>();
+	GPUSimulator->Initialize(MaxParticleCount);
+
+	UE_LOG(LogTemp, Log, TEXT("GPU Fluid Simulator initialized with capacity: %d"), MaxParticleCount);
+}
+
+void UKawaiiFluidSimulationContext::ReleaseGPUSimulator()
+{
+	if (GPUSimulator.IsValid())
+	{
+		GPUSimulator->Release();
+		GPUSimulator.Reset();
+	}
+}
+
+bool UKawaiiFluidSimulationContext::IsGPUSimulatorReady() const
+{
+	return GPUSimulator.IsValid() && GPUSimulator->IsReady();
+}
+
+FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
+	const UKawaiiFluidPresetDataAsset* Preset,
+	const FKawaiiFluidSimulationParams& Params,
+	float SubstepDT) const
+{
+	FGPUFluidSimulationParams GPUParams;
+
+	// Physics parameters from preset
+	GPUParams.RestDensity = Preset->RestDensity;
+	GPUParams.SmoothingRadius = Preset->SmoothingRadius;
+	GPUParams.Compliance = Preset->Compliance;
+	GPUParams.ParticleRadius = Preset->ParticleRadius;
+	GPUParams.ViscosityCoefficient = Preset->ViscosityCoefficient;
+
+	// Gravity from preset
+	GPUParams.Gravity = FVector3f(Preset->Gravity);
+
+	// Time
+	GPUParams.DeltaTime = SubstepDT;
+
+	// Spatial hash
+	GPUParams.CellSize = Preset->SmoothingRadius;  // Cell size = smoothing radius
+
+	// Bounds collision (use world bounds from params or default)
+	if (Params.WorldBounds.IsValid)
+	{
+		GPUParams.BoundsMin = FVector3f(Params.WorldBounds.Min);
+		GPUParams.BoundsMax = FVector3f(Params.WorldBounds.Max);
+	}
+	else
+	{
+		// Default large bounds (effectively no bounds collision)
+		GPUParams.BoundsMin = FVector3f(-1000000.0f, -1000000.0f, -1000000.0f);
+		GPUParams.BoundsMax = FVector3f(1000000.0f, 1000000.0f, 1000000.0f);
+	}
+
+	GPUParams.BoundsRestitution = Preset->Restitution;
+	GPUParams.BoundsFriction = Preset->Friction;
+
+	// Pressure iterations (typically 1-4)
+	GPUParams.PressureIterations = 1;
+
+	// Precompute kernel coefficients
+	GPUParams.PrecomputeKernelCoefficients();
+
+	// Configure Distance Field collision on GPU simulator (if enabled)
+	if (GPUSimulator.IsValid() && Preset->bUseDistanceFieldCollision)
+	{
+		FGPUDistanceFieldCollisionParams DFParams;
+		DFParams.bEnabled = 1;
+		DFParams.ParticleRadius = Preset->ParticleRadius;
+		DFParams.Restitution = Preset->DFCollisionRestitution;
+		DFParams.Friction = Preset->DFCollisionFriction;
+		DFParams.CollisionThreshold = Preset->DFCollisionThreshold;
+
+		// Volume parameters will be set by scene renderer
+		// when Global Distance Field is available
+		DFParams.VolumeCenter = FVector3f::ZeroVector;
+		DFParams.VolumeExtent = FVector3f(10000.0f);  // Large default extent
+		DFParams.VoxelSize = 10.0f;  // Default voxel size
+		DFParams.MaxDistance = 1000.0f;
+
+		GPUSimulator->SetDistanceFieldCollisionParams(DFParams);
+	}
+	else if (GPUSimulator.IsValid())
+	{
+		GPUSimulator->SetDistanceFieldCollisionEnabled(false);
+	}
+
+	return GPUParams;
+}
+
+TArray<int32> UKawaiiFluidSimulationContext::ExtractAttachedParticleIndices(const TArray<FFluidParticle>& Particles) const
+{
+	TArray<int32> AttachedIndices;
+	AttachedIndices.Reserve(Particles.Num() / 10);  // Estimate ~10% attached
+
+	for (int32 i = 0; i < Particles.Num(); ++i)
+	{
+		if (Particles[i].bIsAttached)
+		{
+			AttachedIndices.Add(i);
+		}
+	}
+
+	return AttachedIndices;
+}
+
+void UKawaiiFluidSimulationContext::HandleAttachedParticlesCPU(
+	TArray<FFluidParticle>& Particles,
+	const TArray<int32>& AttachedIndices,
+	const UKawaiiFluidPresetDataAsset* Preset,
+	const FKawaiiFluidSimulationParams& Params,
+	float SubstepDT)
+{
+	if (AttachedIndices.Num() == 0)
+	{
+		return;
+	}
+
+	// Update attached particle positions (bone tracking)
+	// This is already done in the main Simulate loop before substeps
+
+	// Apply adhesion for attached particles
+	if (AdhesionSolver.IsValid() && Preset->AdhesionStrength > 0.0f)
+	{
+		// Only apply to attached particles
+		for (int32 Idx : AttachedIndices)
+		{
+			FFluidParticle& Particle = Particles[Idx];
+
+			// Apply sliding gravity (tangent component)
+			const FVector& Normal = Particle.AttachedSurfaceNormal;
+			float NormalComponent = FVector::DotProduct(Preset->Gravity, Normal);
+			FVector TangentGravity = Preset->Gravity - NormalComponent * Normal;
+			Particle.Velocity += TangentGravity * SubstepDT;
+
+			// Apply velocity damping for attached particles (they move slower)
+			Particle.Velocity *= 0.95f;
+
+			// Update predicted position
+			Particle.PredictedPosition = Particle.Position + Particle.Velocity * SubstepDT;
+		}
+	}
+
+	// CPU handles world collision for attached particles
+	// (Per-polygon collision will be added in Phase 2)
+}
+
+void UKawaiiFluidSimulationContext::SimulateGPU(
+	TArray<FFluidParticle>& Particles,
+	const UKawaiiFluidPresetDataAsset* Preset,
+	const FKawaiiFluidSimulationParams& Params,
+	FSpatialHash& SpatialHash,
+	float DeltaTime,
+	float& AccumulatedTime)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(KawaiiFluidContext_SimulateGPU);
+
+	if (!Preset || Particles.Num() == 0)
+	{
+		return;
+	}
+
+	// Ensure GPU simulator is ready
+	if (!IsGPUSimulatorReady())
+	{
+		InitializeGPUSimulator(Preset->MaxParticles);
+		if (!IsGPUSimulatorReady())
+		{
+			// Fall back to CPU simulation with modified params to avoid recursion
+			UE_LOG(LogTemp, Warning, TEXT("GPU Simulator not ready, falling back to CPU simulation"));
+			//FKawaiiFluidSimulationParams CPUParams = Params;
+			//CPUParams.bUseGPUSimulation = false;
+			//Simulate(Particles, Preset, CPUParams, SpatialHash, DeltaTime, AccumulatedTime);
+			return;
+		}
+	}
+
+	EnsureSolversInitialized(Preset);
+
+	// =====================================================
+	// Phase 2: No CPU readback - GPU buffer is source of truth
+	// Rendering should read directly from GPU buffer
+	//
+	// OLD (Phase 1): Download → Upload → Simulate → Readback
+	// NEW (Phase 2): Upload → Simulate (GPU keeps results)
+	// =====================================================
+
+	// Phase 2: Skip readback to avoid CPU-GPU sync stall
+	// Particles array on CPU may be outdated, but GPU has correct data
+	// Renderer should use GPU buffer directly via DataProvider::IsGPUSimulationActive()
+
+	// TODO: Only readback occasionally if CPU needs to know positions
+	// (e.g., for spawning near existing particles)
+	/*
+	if (GPUSimulator->GetParticleCount() > 0)
+	{
+		GPUSimulator->DownloadParticles(Particles);
+	}
+	*/
+
+	// Cache collider shapes once per frame (required for IsCacheValid() to return true)
+	CacheColliderShapes(Params.Colliders);
+
+	// Collect and upload collision primitives to GPU
+	{
+		FGPUCollisionPrimitives CollisionPrimitives;
+		const float DefaultFriction = Preset->Friction;
+		const float DefaultRestitution = Preset->Restitution;
+
+		for (UFluidCollider* Collider : Params.Colliders)
+		{
+			if (!Collider || !Collider->IsColliderEnabled())
+			{
+				continue;
+			}
+
+			// Check if this is a MeshFluidCollider (has ExportToGPUPrimitives)
+			UMeshFluidCollider* MeshCollider = Cast<UMeshFluidCollider>(Collider);
+			if (MeshCollider && MeshCollider->IsCacheValid())
+			{
+				MeshCollider->ExportToGPUPrimitives(
+					CollisionPrimitives.Spheres,
+					CollisionPrimitives.Capsules,
+					CollisionPrimitives.Boxes,
+					CollisionPrimitives.Convexes,
+					CollisionPrimitives.ConvexPlanes,
+					DefaultFriction,
+					DefaultRestitution
+				);
+			}
+		}
+
+		// Upload to GPU
+		if (!CollisionPrimitives.IsEmpty())
+		{
+			GPUSimulator->UploadCollisionPrimitives(CollisionPrimitives);
+		}
+	}
+
+	// Update attached particle positions (bone tracking - before physics)
+	UpdateAttachedParticlePositions(Particles, Params.InteractionComponents);
+
+	// Step 2: Build GPU simulation parameters for this frame
+	// Use fixed DeltaTime for stability (GPU handles its own substeps internally)
+	const float SubstepDT = Preset->SubstepDeltaTime;
+	FGPUFluidSimulationParams GPUParams = BuildGPUSimParams(Preset, Params, SubstepDT);
+	GPUParams.ParticleCount = Particles.Num();
+
+	// =====================================================
+	// Phase 3: GPU-based particle spawning (eliminates race condition)
+	// - New particles: Use AddSpawnRequests (GPU creates particles atomically)
+	// - Particle removal: Use UploadParticles (fallback - rare case)
+	// - Same count: No action needed (GPU buffer persists)
+	// =====================================================
+	const int32 CurrentCPUCount = Particles.Num();
+	const int32 CurrentGPUCount = GPUSimulator->GetParticleCount();
+
+	if (CurrentCPUCount > CurrentGPUCount)
+	{
+		// New particles spawned - use GPU spawn system (no race condition!)
+		const int32 NewParticleCount = CurrentCPUCount - CurrentGPUCount;
+		TArray<FGPUSpawnRequest> SpawnRequests;
+		SpawnRequests.Reserve(NewParticleCount);
+
+		for (int32 i = CurrentGPUCount; i < CurrentCPUCount; ++i)
+		{
+			const FFluidParticle& Particle = Particles[i];
+			FGPUSpawnRequest Request;
+			Request.Position = FVector3f(Particle.Position);
+			Request.Velocity = FVector3f(Particle.Velocity);
+			Request.Mass = Particle.Mass;
+			Request.Radius = Preset->ParticleRadius;
+			SpawnRequests.Add(Request);
+		}
+
+		// Debug: Log spawn positions
+		if (SpawnRequests.Num() > 0)
+		{
+			const FGPUSpawnRequest& FirstReq = SpawnRequests[0];
+			UE_LOG(LogTemp, Warning, TEXT("GPU Spawn: First particle position = (%.1f, %.1f, %.1f)"),
+				FirstReq.Position.X, FirstReq.Position.Y, FirstReq.Position.Z);
+		}
+
+		GPUSimulator->AddSpawnRequests(SpawnRequests);
+
+		UE_LOG(LogTemp, Log, TEXT("GPU Spawn: Adding %d new particles via GPU spawn system (total: %d -> %d)"),
+			NewParticleCount, CurrentGPUCount, CurrentCPUCount);
+	}
+	else if (CurrentCPUCount < CurrentGPUCount)
+	{
+		// Particles removed - fallback to full upload (rare case)
+		// TODO: Implement GPU-based particle removal
+		GPUSimulator->UploadParticles(Particles);
+
+		UE_LOG(LogTemp, Warning, TEXT("GPU Upload: Particle count reduced %d -> %d (using fallback upload)"),
+			CurrentGPUCount, CurrentCPUCount);
+	}
+	// else: Particle count same - GPU buffer already has simulation results, no upload needed
+
+	// Step 4: Run GPU simulation (async - results available next frame)
+	GPUSimulator->SimulateSubstep(GPUParams);
+
+	// Note: Attached particles, adhesion, cohesion are handled on CPU
+	// but with 1-frame delay, these would need special handling
+	// For now, skip CPU-only effects in GPU mode
+}
+
 void UKawaiiFluidSimulationContext::Simulate(
 	TArray<FFluidParticle>& Particles,
 	const UKawaiiFluidPresetDataAsset* Preset,
@@ -71,6 +402,13 @@ void UKawaiiFluidSimulationContext::Simulate(
 
 	if (!Preset || Particles.Num() == 0)
 	{
+		return;
+	}
+
+	// Dispatch to GPU or CPU simulation based on Params (from Component)
+	if (Params.bUseGPUSimulation)
+	{
+		SimulateGPU(Particles, Preset, Params, SpatialHash, DeltaTime, AccumulatedTime);
 		return;
 	}
 

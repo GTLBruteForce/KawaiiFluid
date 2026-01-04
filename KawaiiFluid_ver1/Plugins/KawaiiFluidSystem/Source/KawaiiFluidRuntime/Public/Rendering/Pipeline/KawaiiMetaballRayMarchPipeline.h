@@ -80,6 +80,10 @@ private:
 	/** Cached pipeline data from PostBasePass for use in PrePostProcess/Tonemap */
 	FRayMarchingPipelineData CachedPipelineData;
 
+	/** Pooled buffer for GPU bounds readback (double-buffered for async readback) */
+	TRefCountPtr<FRDGPooledBuffer> PendingBoundsReadbackBuffer;
+	bool bHasPendingBoundsReadback = false;
+
 	//========================================
 	// Particle Buffer Preparation
 	//========================================
@@ -89,6 +93,9 @@ private:
 		FRDGBuilder& GraphBuilder,
 		const FFluidRenderingParameters& RenderParams,
 		const TArray<UKawaiiFluidMetaballRenderer*>& Renderers);
+
+	/** Process pending bounds readback from previous frame */
+	void ProcessPendingBoundsReadback();
 
 	// Note: Shading methods are in KawaiiRayMarchShadingImpl.h/cpp
 	// This pipeline delegates to KawaiiRayMarchShading::* namespace functions

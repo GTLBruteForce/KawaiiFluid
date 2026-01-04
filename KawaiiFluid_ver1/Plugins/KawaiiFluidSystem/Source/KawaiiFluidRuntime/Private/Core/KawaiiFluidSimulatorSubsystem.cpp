@@ -288,6 +288,17 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 
 		Context->Simulate(Particles, EffectivePreset, Params, *SpatialHash, DeltaTime, AccumulatedTime);
 
+		// Phase 2: Update Module's GPU state for renderers
+		if (Params.bUseGPUSimulation && Context->IsGPUSimulatorReady())
+		{
+			Module->SetGPUSimulator(Context->GetGPUSimulator());
+			Module->SetGPUSimulationActive(true);
+		}
+		else
+		{
+			Module->SetGPUSimulationActive(false);
+		}
+
 		Module->SetAccumulatedTime(AccumulatedTime);
 		Module->ResetExternalForce();
 	}
@@ -341,11 +352,26 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaT
 
 		Context->Simulate(MergedFluidParticleBuffer, Preset, Params, *SharedSpatialHash, DeltaTime, AccumulatedTime);
 
+		// Phase 2: Determine GPU state once for the batch
+		const bool bBatchGPUActive = Params.bUseGPUSimulation && Context->IsGPUSimulatorReady();
+		FGPUFluidSimulator* BatchGPUSimulator = bBatchGPUActive ? Context->GetGPUSimulator() : nullptr;
+
 		// Update accumulated time and reset external force for all modules
 		for (UKawaiiFluidSimulationModule* Module : Modules)
 		{
 			if (Module)
 			{
+				// Phase 2: Update GPU state for renderers
+				if (bBatchGPUActive)
+				{
+					Module->SetGPUSimulator(BatchGPUSimulator);
+					Module->SetGPUSimulationActive(true);
+				}
+				else
+				{
+					Module->SetGPUSimulationActive(false);
+				}
+
 				Module->SetAccumulatedTime(AccumulatedTime);
 				Module->ResetExternalForce();
 			}

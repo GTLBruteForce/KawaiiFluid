@@ -114,6 +114,30 @@ public:
 	TEnumAsByte<ECollisionChannel> CollisionChannel = ECC_GameTraceChannel1;
 
 	//========================================
+	// Distance Field Collision (GPU)
+	//========================================
+
+	/**
+	 * Enable Distance Field collision
+	 * Uses UE5 Global Distance Field for GPU-based static mesh collision
+	 * Requires "Generate Mesh Distance Fields" enabled in Project Settings
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Distance Field Collision")
+	bool bUseDistanceFieldCollision = false;
+
+	/** Distance threshold for collision detection (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Distance Field Collision", meta = (ClampMin = "0.1", ClampMax = "50.0", EditCondition = "bUseDistanceFieldCollision"))
+	float DFCollisionThreshold = 1.0f;
+
+	/** Distance Field collision restitution (bounciness) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Distance Field Collision", meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bUseDistanceFieldCollision"))
+	float DFCollisionRestitution = 0.3f;
+
+	/** Distance Field collision friction */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Distance Field Collision", meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bUseDistanceFieldCollision"))
+	float DFCollisionFriction = 0.1f;
+
+	//========================================
 	// Rendering Parameters
 	//========================================
 

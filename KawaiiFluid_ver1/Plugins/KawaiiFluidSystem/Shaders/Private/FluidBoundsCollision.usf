@@ -1,0 +1,104 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Bounds Collision Pass
+// Applies AABB bounds collision with velocity response
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+RWStructuredBuffer<FGPUFluidParticle> Particles;
+int ParticleCount;
+float ParticleRadius;
+float3 BoundsMin;
+float3 BoundsMax;
+float Restitution;
+float Friction;
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void BoundsCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	FGPUFluidParticle particle = Particles[idx];
+
+	// Skip attached particles (handled by CPU)
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+	{
+		return;
+	}
+
+	float3 pos = particle.PredictedPosition;
+	float3 vel = particle.Velocity;
+
+	// Effective bounds considering particle radius
+	float3 effectiveMin = BoundsMin + ParticleRadius;
+	float3 effectiveMax = BoundsMax - ParticleRadius;
+
+	// X axis collision
+	if (pos.x < effectiveMin.x)
+	{
+		pos.x = effectiveMin.x;
+		vel.x = -vel.x * Restitution;
+		vel.yz *= (1.0f - Friction);
+	}
+	else if (pos.x > effectiveMax.x)
+	{
+		pos.x = effectiveMax.x;
+		vel.x = -vel.x * Restitution;
+		vel.yz *= (1.0f - Friction);
+	}
+
+	// Y axis collision
+	if (pos.y < effectiveMin.y)
+	{
+		pos.y = effectiveMin.y;
+		vel.y = -vel.y * Restitution;
+		vel.xz *= (1.0f - Friction);
+	}
+	else if (pos.y > effectiveMax.y)
+	{
+		pos.y = effectiveMax.y;
+		vel.y = -vel.y * Restitution;
+		vel.xz *= (1.0f - Friction);
+	}
+
+	// Z axis collision (typically ground collision)
+	if (pos.z < effectiveMin.z)
+	{
+		pos.z = effectiveMin.z;
+		vel.z = -vel.z * Restitution;
+		vel.xy *= (1.0f - Friction);
+
+		// Mark as near ground for adhesion system
+		particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+	}
+	else if (pos.z > effectiveMax.z)
+	{
+		pos.z = effectiveMax.z;
+		vel.z = -vel.z * Restitution;
+		vel.xy *= (1.0f - Friction);
+	}
+	else
+	{
+		// Clear near ground flag if not on ground
+		particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+	}
+
+	// Update particle
+	particle.PredictedPosition = pos;
+	particle.Velocity = vel;
+
+	Particles[idx] = particle;
+}

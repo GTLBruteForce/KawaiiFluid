@@ -6,6 +6,7 @@
 #include "GlobalShader.h"
 #include "ShaderParameterStruct.h"
 #include "RenderGraphDefinitions.h"
+#include "Core/KawaiiRenderParticle.h"
 
 /**
  * @brief Shared parameter structure for Ray Marching SDF shaders
@@ -15,9 +16,9 @@
  */
 BEGIN_SHADER_PARAMETER_STRUCT(FFluidRayMarchParameters, )
 	//========================================
-	// Particle Data
+	// Particle Data (FKawaiiRenderParticle: Position, Velocity, Radius, Padding)
 	//========================================
-	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector3f>, ParticlePositions)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FKawaiiRenderParticle>, RenderParticles)
 	SHADER_PARAMETER(int32, ParticleCount)
 	SHADER_PARAMETER(float, ParticleRadius)
 

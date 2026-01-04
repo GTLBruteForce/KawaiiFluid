@@ -1,0 +1,66 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Extract Render Data Pass
+// Converts physics particle buffer to render particle buffer (GPU → GPU)
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// Render Particle Structure (must match FKawaiiRenderParticle - 32 bytes)
+//=============================================================================
+
+struct FRenderParticle
+{
+	float3 Position;
+	float3 Velocity;
+	float Radius;
+	float Padding;
+};
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> PhysicsParticles;
+RWStructuredBuffer<FRenderParticle> RenderParticles;
+int ParticleCount;
+float ParticleRadius;
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void ExtractRenderDataCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	FGPUFluidParticle physics = PhysicsParticles[idx];
+
+	// Validate position - skip particles with invalid/extreme positions
+	float3 pos = physics.Position;
+	bool bValidPosition = !any(isnan(pos)) && !any(isinf(pos)) &&
+						  abs(pos.x) < 1e10 && abs(pos.y) < 1e10 && abs(pos.z) < 1e10;
+
+	FRenderParticle render;
+	if (bValidPosition)
+	{
+		render.Position = pos;
+		render.Velocity = physics.Velocity;
+	}
+	else
+	{
+		// Invalid particle - place at infinity so it won't be rendered
+		render.Position = float3(1e20, 1e20, 1e20);
+		render.Velocity = float3(0, 0, 0);
+	}
+	render.Radius = ParticleRadius;
+	render.Padding = 0.0f;
+
+	RenderParticles[idx] = render;
+}

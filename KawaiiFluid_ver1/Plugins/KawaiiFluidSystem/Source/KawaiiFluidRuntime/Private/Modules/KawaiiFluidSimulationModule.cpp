@@ -4,7 +4,9 @@
 #include "Core/SpatialHash.h"
 #include "Collision/FluidCollider.h"
 #include "Components/FluidInteractionComponent.h"
+#include "Components/KawaiiFluidComponent.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
+#include "GPU/GPUFluidSimulator.h"
 
 UKawaiiFluidSimulationModule::UKawaiiFluidSimulationModule()
 {
@@ -279,6 +281,12 @@ FKawaiiFluidSimulationParams UKawaiiFluidSimulationModule::BuildSimulationParams
 	Params.IgnoreActor = GetOwnerActor();
 	Params.bUseWorldCollision = bUseWorldCollision;
 
+	// GPU Simulation - get from owner component
+	if (UKawaiiFluidComponent* OwnerComp = Cast<UKawaiiFluidComponent>(GetOuter()))
+	{
+		Params.bUseGPUSimulation = OwnerComp->bUseGPUSimulation;
+	}
+
 	// Event Settings
 	Params.bEnableCollisionEvents = bEnableCollisionEvents;
 	Params.MinVelocityForEvent = MinVelocityForEvent;
@@ -481,4 +489,22 @@ FString UKawaiiFluidSimulationModule::GetDebugName() const
 	AActor* Owner = GetOwnerActor();
 	return FString::Printf(TEXT("SimulationModule_%s"),
 		Owner ? *Owner->GetName() : TEXT("NoOwner"));
+}
+
+//========================================
+// GPU Buffer Access (Phase 2)
+//========================================
+
+bool UKawaiiFluidSimulationModule::IsGPUSimulationActive() const
+{
+	return bGPUSimulationActive && CachedGPUSimulator != nullptr;
+}
+
+int32 UKawaiiFluidSimulationModule::GetGPUParticleCount() const
+{
+	if (CachedGPUSimulator && CachedGPUSimulator->IsReady())
+	{
+		return CachedGPUSimulator->GetParticleCount();
+	}
+	return 0;
 }

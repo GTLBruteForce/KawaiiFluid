@@ -1,0 +1,126 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU-based particle bounds calculation using parallel reduction
+//
+// Two-pass approach:
+// Pass 1: Each group calculates local min/max and writes to intermediate buffer
+// Pass 2: Reduce intermediate results to final min/max
+//
+// For simplicity, we use a single group with 256 threads processing all particles
+// via grid-stride loop. This handles up to ~100k particles efficiently.
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+
+//=============================================================================
+// Render Particle Structure (must match FKawaiiRenderParticle - 32 bytes)
+//=============================================================================
+
+struct FRenderParticle
+{
+	float3 Position;   // 12 bytes
+	float3 Velocity;   // 12 bytes
+	float Radius;      // 4 bytes
+	float Padding;     // 4 bytes
+};
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+StructuredBuffer<FRenderParticle> RenderParticles;
+RWStructuredBuffer<float3> OutputBounds; // [0] = Min, [1] = Max
+uint ParticleCount;
+float ParticleRadius;  // Added: expand bounds by particle radius
+float BoundsMargin;    // Added: additional margin for safety
+
+// Shared memory for reduction (256 threads per group)
+#define THREAD_GROUP_SIZE 256
+groupshared float3 SharedMin[THREAD_GROUP_SIZE];
+groupshared float3 SharedMax[THREAD_GROUP_SIZE];
+
+//=============================================================================
+// Pass 1: Calculate bounds using single group with grid-stride loop
+// Dispatch: (1, 1, 1) - single group of 256 threads
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void CalculateBoundsCS(uint3 GroupId : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint GI : SV_GroupIndex)
+{
+	// Initialize with extreme values
+	float3 localMin = float3(1e10, 1e10, 1e10);
+	float3 localMax = float3(-1e10, -1e10, -1e10);
+
+	// Handle empty particle case
+	if (ParticleCount == 0)
+	{
+		if (GI == 0)
+		{
+			OutputBounds[0] = float3(0, 0, 0);
+			OutputBounds[1] = float3(0, 0, 0);
+		}
+		return;
+	}
+
+	// Grid-stride loop: each thread processes particles at indices GI, GI+256, GI+512, ...
+	// Using GI (group index 0-255) ensures we only process with single group
+	const float MAX_VALID_COORD = 100000.0f;  // Filter out garbage values (uninitialized memory, fallback bounds)
+
+	for (uint i = GI; i < ParticleCount; i += THREAD_GROUP_SIZE)
+	{
+		float3 pos = RenderParticles[i].Position;
+
+		// Filter out invalid positions:
+		// - NaN check: any(isnan(pos))
+		// - Inf check: any(isinf(pos))
+		// - Garbage value check: abs(coord) > 100000 (uninitialized memory, fallback bounds ±1000000)
+		bool isValid = !any(isnan(pos)) && !any(isinf(pos));
+		isValid = isValid && abs(pos.x) < MAX_VALID_COORD && abs(pos.y) < MAX_VALID_COORD && abs(pos.z) < MAX_VALID_COORD;
+
+		if (isValid)
+		{
+			localMin = min(localMin, pos);
+			localMax = max(localMax, pos);
+		}
+	}
+
+	// Store in shared memory
+	SharedMin[GI] = localMin;
+	SharedMax[GI] = localMax;
+
+	GroupMemoryBarrierWithGroupSync();
+
+	// Parallel reduction within work group (log2(256) = 8 iterations)
+	[unroll]
+	for (uint s = THREAD_GROUP_SIZE / 2; s > 0; s >>= 1)
+	{
+		if (GI < s)
+		{
+			SharedMin[GI] = min(SharedMin[GI], SharedMin[GI + s]);
+			SharedMax[GI] = max(SharedMax[GI], SharedMax[GI + s]);
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+
+	// Thread 0 writes final result with margin expansion
+	if (GI == 0)
+	{
+		float3 finalMin = SharedMin[0];
+		float3 finalMax = SharedMax[0];
+
+		// Check if we found any valid particles (initial values were 1e10 / -1e10)
+		bool hasValidBounds = (finalMin.x < 1e9) && (finalMax.x > -1e9);
+
+		if (hasValidBounds)
+		{
+			float expansion = ParticleRadius + BoundsMargin;
+			OutputBounds[0] = finalMin - float3(expansion, expansion, expansion);
+			OutputBounds[1] = finalMax + float3(expansion, expansion, expansion);
+		}
+		else
+		{
+			// No valid particles found - output zero bounds as signal
+			OutputBounds[0] = float3(0, 0, 0);
+			OutputBounds[1] = float3(0, 0, 0);
+		}
+	}
+}

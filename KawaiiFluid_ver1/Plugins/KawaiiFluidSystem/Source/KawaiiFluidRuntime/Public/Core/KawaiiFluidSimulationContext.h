@@ -13,6 +13,8 @@ class FDensityConstraint;
 class FViscositySolver;
 class FAdhesionSolver;
 class UKawaiiFluidPresetDataAsset;
+class FGPUFluidSimulator;
+struct FGPUFluidSimulationParams;
 
 /**
  * Stateless Simulation Context
@@ -38,6 +40,38 @@ public:
 	 * Initialize solvers (called once when context is created)
 	 */
 	virtual void InitializeSolvers(const UKawaiiFluidPresetDataAsset* Preset);
+
+	//========================================
+	// GPU Simulation Mode
+	//========================================
+
+	/**
+	 * Enable/disable GPU simulation mode
+	 * When enabled, physics calculations run on GPU compute shaders
+	 * Attached particles are still handled by CPU
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GPU")
+	bool bUseGPUSimulation = false;
+
+	/**
+	 * Initialize GPU simulator (call before using GPU mode)
+	 */
+	virtual void InitializeGPUSimulator(int32 MaxParticleCount);
+
+	/**
+	 * Release GPU simulator resources
+	 */
+	virtual void ReleaseGPUSimulator();
+
+	/**
+	 * Check if GPU simulator is ready
+	 */
+	bool IsGPUSimulatorReady() const;
+
+	/**
+	 * Get GPU simulator pointer (for Phase 2 GPU→GPU rendering)
+	 */
+	FGPUFluidSimulator* GetGPUSimulator() const { return GPUSimulator.Get(); }
 
 	/**
 	 * Main simulation entry point (Stateless)
@@ -169,4 +203,50 @@ protected:
 
 	/** Ensure solvers are initialized */
 	void EnsureSolversInitialized(const UKawaiiFluidPresetDataAsset* Preset);
+
+	//========================================
+	// GPU Simulation
+	//========================================
+
+	/** GPU fluid simulator instance */
+	TSharedPtr<FGPUFluidSimulator> GPUSimulator;
+
+	/**
+	 * Simulate using GPU compute shaders
+	 * Called when bUseGPUSimulation is true
+	 */
+	virtual void SimulateGPU(
+		TArray<FFluidParticle>& Particles,
+		const UKawaiiFluidPresetDataAsset* Preset,
+		const FKawaiiFluidSimulationParams& Params,
+		FSpatialHash& SpatialHash,
+		float DeltaTime,
+		float& AccumulatedTime
+	);
+
+	/**
+	 * Build GPU simulation parameters from preset and frame params
+	 */
+	FGPUFluidSimulationParams BuildGPUSimParams(
+		const UKawaiiFluidPresetDataAsset* Preset,
+		const FKawaiiFluidSimulationParams& Params,
+		float SubstepDT
+	) const;
+
+	/**
+	 * Separate attached particles for CPU handling
+	 * @return Indices of attached particles
+	 */
+	TArray<int32> ExtractAttachedParticleIndices(const TArray<FFluidParticle>& Particles) const;
+
+	/**
+	 * Handle attached particles on CPU (bone tracking, adhesion, per-polygon collision)
+	 */
+	virtual void HandleAttachedParticlesCPU(
+		TArray<FFluidParticle>& Particles,
+		const TArray<int32>& AttachedIndices,
+		const UKawaiiFluidPresetDataAsset* Preset,
+		const FKawaiiFluidSimulationParams& Params,
+		float SubstepDT
+	);
 };

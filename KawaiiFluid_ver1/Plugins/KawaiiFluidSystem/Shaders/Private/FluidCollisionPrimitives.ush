@@ -1,0 +1,231 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Collision Primitives - SDF Functions
+// Provides signed distance functions for collision primitives
+
+#ifndef FLUID_COLLISION_PRIMITIVES_USH
+#define FLUID_COLLISION_PRIMITIVES_USH
+
+//=============================================================================
+// Primitive Structures (must match C++ definitions)
+//=============================================================================
+
+struct FGPUCollisionSphere
+{
+	float3 Center;
+	float Radius;
+	float Friction;
+	float Restitution;
+	float Padding1;
+	float Padding2;
+};
+
+struct FGPUCollisionCapsule
+{
+	float3 Start;
+	float Radius;
+	float3 End;
+	float Friction;
+	float Restitution;
+	float Padding1;
+	float Padding2;
+	float Padding3;
+};
+
+struct FGPUCollisionBox
+{
+	float3 Center;
+	float Friction;
+	float3 Extent;
+	float Restitution;
+	float4 Rotation;  // Quaternion (x, y, z, w)
+	float3 Padding;
+	float Padding2;
+};
+
+struct FGPUCollisionConvex
+{
+	float3 Center;
+	float BoundingRadius;
+	int PlaneStartIndex;
+	int PlaneCount;
+	float Friction;
+	float Restitution;
+};
+
+struct FGPUConvexPlane
+{
+	float3 Normal;
+	float Distance;
+};
+
+//=============================================================================
+// Quaternion Utilities
+//=============================================================================
+
+// Rotate vector by quaternion
+float3 RotateByQuat(float3 v, float4 q)
+{
+	float3 t = 2.0f * cross(q.xyz, v);
+	return v + q.w * t + cross(q.xyz, t);
+}
+
+// Inverse rotate vector by quaternion
+float3 InverseRotateByQuat(float3 v, float4 q)
+{
+	// Conjugate of quaternion: (x,y,z,w) -> (-x,-y,-z,w)
+	return RotateByQuat(v, float4(-q.xyz, q.w));
+}
+
+//=============================================================================
+// SDF Functions
+//=============================================================================
+
+// Sphere SDF
+float sdSphere(float3 p, float3 center, float radius)
+{
+	return length(p - center) - radius;
+}
+
+// Capsule SDF (line segment with radius)
+float sdCapsule(float3 p, float3 a, float3 b, float radius)
+{
+	float3 pa = p - a;
+	float3 ba = b - a;
+	float h = saturate(dot(pa, ba) / dot(ba, ba));
+	return length(pa - ba * h) - radius;
+}
+
+// Axis-aligned box SDF (in local space)
+float sdBoxLocal(float3 p, float3 halfExtent)
+{
+	float3 q = abs(p) - halfExtent;
+	return length(max(q, 0.0f)) + min(max(q.x, max(q.y, q.z)), 0.0f);
+}
+
+// Oriented box SDF
+float sdBox(float3 p, float3 center, float3 halfExtent, float4 rotation)
+{
+	// Transform point to local space
+	float3 localP = InverseRotateByQuat(p - center, rotation);
+	return sdBoxLocal(localP, halfExtent);
+}
+
+// Convex hull SDF (intersection of half-spaces)
+float sdConvex(
+	float3 p,
+	float3 center,
+	float boundingRadius,
+	int planeStart,
+	int planeCount,
+	StructuredBuffer<FGPUConvexPlane> planes)
+{
+	// Early out with bounding sphere
+	float boundDist = length(p - center) - boundingRadius;
+	if (boundDist > 0.0f)
+	{
+		return boundDist;
+	}
+
+	// Find maximum signed distance to all planes
+	float maxDist = -1e10f;
+	for (int i = 0; i < planeCount; ++i)
+	{
+		FGPUConvexPlane plane = planes[planeStart + i];
+		float dist = dot(p, plane.Normal) - plane.Distance;
+		maxDist = max(maxDist, dist);
+	}
+	return maxDist;
+}
+
+//=============================================================================
+// Collision Response
+//=============================================================================
+
+struct FCollisionResult
+{
+	bool bHit;
+	float Distance;
+	float3 Normal;
+	float Friction;
+	float Restitution;
+};
+
+// Calculate gradient (normal) from SDF
+float3 CalcSDFGradient(float3 p, float sdfValue, float3 center)
+{
+	// Simple approximation: direction from center to point
+	float3 dir = p - center;
+	float len = length(dir);
+	return len > 0.0001f ? dir / len : float3(0, 0, 1);
+}
+
+// Numerical gradient for more accurate normal
+float3 CalcNumericalGradient_Sphere(float3 p, float3 center, float radius)
+{
+	const float eps = 0.1f;
+	float3 gradient;
+	gradient.x = sdSphere(p + float3(eps, 0, 0), center, radius)
+	           - sdSphere(p - float3(eps, 0, 0), center, radius);
+	gradient.y = sdSphere(p + float3(0, eps, 0), center, radius)
+	           - sdSphere(p - float3(0, eps, 0), center, radius);
+	gradient.z = sdSphere(p + float3(0, 0, eps), center, radius)
+	           - sdSphere(p - float3(0, 0, eps), center, radius);
+	return normalize(gradient);
+}
+
+float3 CalcNumericalGradient_Capsule(float3 p, float3 a, float3 b, float radius)
+{
+	const float eps = 0.1f;
+	float3 gradient;
+	gradient.x = sdCapsule(p + float3(eps, 0, 0), a, b, radius)
+	           - sdCapsule(p - float3(eps, 0, 0), a, b, radius);
+	gradient.y = sdCapsule(p + float3(0, eps, 0), a, b, radius)
+	           - sdCapsule(p - float3(0, eps, 0), a, b, radius);
+	gradient.z = sdCapsule(p + float3(0, 0, eps), a, b, radius)
+	           - sdCapsule(p - float3(0, 0, eps), a, b, radius);
+	return normalize(gradient);
+}
+
+float3 CalcNumericalGradient_Box(float3 p, float3 center, float3 extent, float4 rotation)
+{
+	const float eps = 0.1f;
+	float3 gradient;
+	gradient.x = sdBox(p + float3(eps, 0, 0), center, extent, rotation)
+	           - sdBox(p - float3(eps, 0, 0), center, extent, rotation);
+	gradient.y = sdBox(p + float3(0, eps, 0), center, extent, rotation)
+	           - sdBox(p - float3(0, eps, 0), center, extent, rotation);
+	gradient.z = sdBox(p + float3(0, 0, eps), center, extent, rotation)
+	           - sdBox(p - float3(0, 0, eps), center, extent, rotation);
+	return normalize(gradient);
+}
+
+// Apply collision response to velocity
+void ApplyCollisionResponse(
+	inout float3 position,
+	inout float3 velocity,
+	float3 normal,
+	float penetration,
+	float friction,
+	float restitution)
+{
+	// Push out of collision
+	position += normal * (penetration + 0.1f);
+
+	// Velocity response
+	float velNormal = dot(velocity, normal);
+	if (velNormal < 0.0f)
+	{
+		float3 velNormalVec = velNormal * normal;
+		float3 velTangent = velocity - velNormalVec;
+
+		// Reflect with restitution
+		velNormalVec = -velNormalVec * restitution;
+
+		// Apply friction
+		velTangent *= (1.0f - friction);
+
+		velocity = velNormalVec + velTangent;
+	}
+}
+
+#endif // FLUID_COLLISION_PRIMITIVES_USH

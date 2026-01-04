@@ -6,18 +6,21 @@
 #include "GlobalShader.h"
 #include "ShaderParameterStruct.h"
 #include "RenderGraphDefinitions.h"
+#include "Core/KawaiiRenderParticle.h"
 
 /**
  * @brief Compute shader parameters for SDF volume baking
  *
  * Bakes metaball SDF from particle positions into a 3D volume texture.
  * This allows O(1) SDF lookup during ray marching instead of O(N) particle iteration.
+ *
+ * Now uses FKawaiiRenderParticle for GPU simulation compatibility (Phase 2).
  */
 BEGIN_SHADER_PARAMETER_STRUCT(FSDFBakeParameters, )
 	//========================================
-	// Particle Data (Input)
+	// Particle Data (Input) - Uses FKawaiiRenderParticle for GPU buffer compatibility
 	//========================================
-	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector3f>, ParticlePositions)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FKawaiiRenderParticle>, RenderParticles)
 	SHADER_PARAMETER(int32, ParticleCount)
 	SHADER_PARAMETER(float, ParticleRadius)
 	SHADER_PARAMETER(float, SDFSmoothness)

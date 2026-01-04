@@ -35,6 +35,23 @@ struct FCachedBox
 	FTransform BoneTransform;
 };
 
+/** Convex 평면 데이터 */
+struct FCachedConvexPlane
+{
+	FVector Normal;      // 외부를 향하는 단위 법선
+	float Distance;      // 원점에서의 부호 있는 거리
+};
+
+/** 캐싱된 Convex Hull 데이터 */
+struct FCachedConvex
+{
+	FVector Center;           // Bounding sphere 중심
+	float BoundingRadius;     // Bounding sphere 반경
+	TArray<FCachedConvexPlane> Planes;  // Convex 정의하는 평면들
+	FName BoneName;
+	FTransform BoneTransform;
+};
+
 /**
  * 메시 기반 유체 콜라이더
  * 캐릭터나 복잡한 형태의 오브젝트와 상호작용
@@ -70,6 +87,17 @@ public:
 	/** 캐시가 유효한지 */
 	virtual bool IsCacheValid() const override { return bCacheValid; }
 
+	/** GPU 충돌용 primitive 데이터 내보내기 */
+	void ExportToGPUPrimitives(
+		TArray<struct FGPUCollisionSphere>& OutSpheres,
+		TArray<struct FGPUCollisionCapsule>& OutCapsules,
+		TArray<struct FGPUCollisionBox>& OutBoxes,
+		TArray<struct FGPUCollisionConvex>& OutConvexes,
+		TArray<struct FGPUConvexPlane>& OutPlanes,
+		float Friction = 0.1f,
+		float Restitution = 0.3f
+	) const;
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -80,6 +108,11 @@ private:
 	TArray<FCachedCapsule> CachedCapsules;
 	TArray<FCachedSphere> CachedSpheres;
 	TArray<FCachedBox> CachedBoxes;
+	TArray<FCachedConvex> CachedConvexes;
 	FBox CachedBounds;
 	bool bCacheValid;
+
+	// StaticMesh용 충돌 형상 추출
+	void CacheStaticMeshCollision(UStaticMeshComponent* StaticMesh);
+	void CacheSkeletalMeshCollision(USkeletalMeshComponent* SkelMesh);
 };

@@ -1,0 +1,304 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Common GPU Physics functions and structures for SPH fluid simulation
+
+#pragma once
+
+#include "/Engine/Public/Platform.ush"
+
+//=============================================================================
+// GPU Particle Structure (must match FGPUFluidParticle in C++)
+//=============================================================================
+
+struct FGPUFluidParticle
+{
+	float3 Position;           // 12 bytes
+	float Mass;                // 4 bytes
+
+	float3 PredictedPosition;  // 12 bytes
+	float Density;             // 4 bytes
+
+	float3 Velocity;           // 12 bytes
+	float Lambda;              // 4 bytes
+
+	int ParticleID;            // 4 bytes
+	int ClusterID;             // 4 bytes
+	uint Flags;                // 4 bytes
+	float Padding;             // 4 bytes
+};
+
+//=============================================================================
+// GPU Particle Flags
+//=============================================================================
+
+#define GPU_PARTICLE_FLAG_NONE          0
+#define GPU_PARTICLE_FLAG_IS_ATTACHED   (1 << 0)
+#define GPU_PARTICLE_FLAG_IS_SURFACE    (1 << 1)
+#define GPU_PARTICLE_FLAG_IS_CORE       (1 << 2)
+#define GPU_PARTICLE_FLAG_JUST_DETACHED (1 << 3)
+#define GPU_PARTICLE_FLAG_NEAR_GROUND   (1 << 4)
+
+//=============================================================================
+// Constants
+//=============================================================================
+
+#ifndef PI
+#define PI 3.14159265359f
+#endif
+
+#ifndef SMALL_NUMBER
+#define SMALL_NUMBER 0.0001f
+#endif
+
+//=============================================================================
+// SPH Kernel Functions
+// Based on: Müller et al. "Particle-Based Fluid Simulation for Interactive Applications"
+//=============================================================================
+
+/**
+ * Poly6 kernel (for density calculation)
+ * W(r, h) = 315 / (64 * PI * h^9) * (h^2 - r^2)^3
+ *
+ * @param r2 - Squared distance between particles
+ * @param h2 - Squared smoothing radius
+ * @return Kernel value (NOT multiplied by coefficient)
+ */
+float Poly6Kernel(float r2, float h2)
+{
+	float diff = h2 - r2;
+	return (diff > 0.0f) ? diff * diff * diff : 0.0f;
+}
+
+/**
+ * Poly6 kernel with coefficient
+ * @param r2 - Squared distance
+ * @param h - Smoothing radius
+ * @param coeff - Precomputed coefficient (315 / (64 * PI * h^9))
+ */
+float Poly6KernelWithCoeff(float r2, float h, float coeff)
+{
+	float h2 = h * h;
+	float diff = h2 - r2;
+	return (diff > 0.0f) ? coeff * diff * diff * diff : 0.0f;
+}
+
+/**
+ * Spiky kernel gradient (for pressure calculation)
+ * ∇W(r, h) = -45 / (PI * h^6) * (h - |r|)^2 * r̂
+ *
+ * @param r - Vector from neighbor to particle (particle.pos - neighbor.pos)
+ * @param rLen - Length of r
+ * @param h - Smoothing radius
+ * @return Gradient vector (NOT multiplied by coefficient)
+ */
+float3 SpikyGradient(float3 r, float rLen, float h)
+{
+	if (rLen < SMALL_NUMBER)
+	{
+		return float3(0.0f, 0.0f, 0.0f);
+	}
+
+	float diff = h - rLen;
+	if (diff <= 0.0f)
+	{
+		return float3(0.0f, 0.0f, 0.0f);
+	}
+
+	// Normalized direction * (h - r)^2
+	float3 dir = r / rLen;
+	return dir * (diff * diff);
+}
+
+/**
+ * Spiky gradient with coefficient
+ * @param r - Vector from neighbor to particle
+ * @param rLen - Length of r
+ * @param h - Smoothing radius
+ * @param coeff - Precomputed coefficient (-45 / (PI * h^6))
+ */
+float3 SpikyGradientWithCoeff(float3 r, float rLen, float h, float coeff)
+{
+	if (rLen < SMALL_NUMBER)
+	{
+		return float3(0.0f, 0.0f, 0.0f);
+	}
+
+	float diff = h - rLen;
+	if (diff <= 0.0f)
+	{
+		return float3(0.0f, 0.0f, 0.0f);
+	}
+
+	float3 dir = r / rLen;
+	return coeff * (diff * diff) * dir;
+}
+
+/**
+ * Viscosity kernel Laplacian (for viscosity calculation)
+ * ∇²W(r, h) = 45 / (PI * h^6) * (h - |r|)
+ *
+ * @param rLen - Distance between particles
+ * @param h - Smoothing radius
+ * @param coeff - Precomputed coefficient (45 / (PI * h^6))
+ */
+float ViscosityLaplacian(float rLen, float h, float coeff)
+{
+	float diff = h - rLen;
+	return (diff > 0.0f) ? coeff * diff : 0.0f;
+}
+
+//=============================================================================
+// Cohesion / Adhesion Kernels (Akinci et al. 2013)
+//=============================================================================
+
+/**
+ * Cohesion kernel for surface tension
+ * C(r, h) = 32 / (PI * h^9) * ...
+ */
+float CohesionKernel(float rLen, float h)
+{
+	if (rLen > h || rLen < SMALL_NUMBER)
+	{
+		return 0.0f;
+	}
+
+	float h2 = h * h;
+	float h3 = h2 * h;
+	float h9 = h3 * h3 * h3;
+	float coeff = 32.0f / (PI * h9);
+
+	float halfH = h * 0.5f;
+
+	if (rLen > halfH)
+	{
+		float diff = h - rLen;
+		return coeff * diff * diff * diff * rLen * rLen * rLen;
+	}
+	else
+	{
+		float diff = h - rLen;
+		float term1 = 2.0f * diff * diff * diff * rLen * rLen * rLen;
+		float term2 = h3 * h3 / 64.0f;
+		return coeff * (term1 - term2);
+	}
+}
+
+/**
+ * Adhesion kernel for boundary adhesion
+ */
+float AdhesionKernel(float rLen, float h)
+{
+	float halfH = h * 0.5f;
+	if (rLen > h || rLen < halfH)
+	{
+		return 0.0f;
+	}
+
+	float coeff = 0.007f / pow(h, 3.25f);
+	float diff = -4.0f * rLen * rLen / h + 6.0f * rLen - 2.0f * h;
+	return coeff * pow(diff, 0.25f);
+}
+
+//=============================================================================
+// Utility Functions
+//=============================================================================
+
+/**
+ * Calculate squared distance between two points
+ */
+float DistanceSquared(float3 a, float3 b)
+{
+	float3 diff = a - b;
+	return dot(diff, diff);
+}
+
+/**
+ * Clamp position to bounds with collision response
+ * @param position - Current position
+ * @param velocity - Current velocity (modified on collision)
+ * @param boundsMin - Minimum bounds
+ * @param boundsMax - Maximum bounds
+ * @param restitution - Bounce factor (0-1)
+ * @param friction - Friction factor (0-1)
+ * @return Clamped position
+ */
+float3 ClampToBoundsWithResponse(
+	float3 position,
+	inout float3 velocity,
+	float3 boundsMin,
+	float3 boundsMax,
+	float particleRadius,
+	float restitution,
+	float friction)
+{
+	float3 newPos = position;
+	float3 effectiveMin = boundsMin + particleRadius;
+	float3 effectiveMax = boundsMax - particleRadius;
+
+	// X axis
+	if (newPos.x < effectiveMin.x)
+	{
+		newPos.x = effectiveMin.x;
+		velocity.x = -velocity.x * restitution;
+		velocity.yz *= (1.0f - friction);
+	}
+	else if (newPos.x > effectiveMax.x)
+	{
+		newPos.x = effectiveMax.x;
+		velocity.x = -velocity.x * restitution;
+		velocity.yz *= (1.0f - friction);
+	}
+
+	// Y axis
+	if (newPos.y < effectiveMin.y)
+	{
+		newPos.y = effectiveMin.y;
+		velocity.y = -velocity.y * restitution;
+		velocity.xz *= (1.0f - friction);
+	}
+	else if (newPos.y > effectiveMax.y)
+	{
+		newPos.y = effectiveMax.y;
+		velocity.y = -velocity.y * restitution;
+		velocity.xz *= (1.0f - friction);
+	}
+
+	// Z axis
+	if (newPos.z < effectiveMin.z)
+	{
+		newPos.z = effectiveMin.z;
+		velocity.z = -velocity.z * restitution;
+		velocity.xy *= (1.0f - friction);
+	}
+	else if (newPos.z > effectiveMax.z)
+	{
+		newPos.z = effectiveMax.z;
+		velocity.z = -velocity.z * restitution;
+		velocity.xy *= (1.0f - friction);
+	}
+
+	return newPos;
+}
+
+/**
+ * Convert flag check to bool
+ */
+bool HasFlag(uint flags, uint flag)
+{
+	return (flags & flag) != 0;
+}
+
+/**
+ * Set flag
+ */
+uint SetFlag(uint flags, uint flag)
+{
+	return flags | flag;
+}
+
+/**
+ * Clear flag
+ */
+uint ClearFlag(uint flags, uint flag)
+{
+	return flags & ~flag;
+}

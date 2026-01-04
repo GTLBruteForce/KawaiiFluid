@@ -73,6 +73,17 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSimulationParams
 	TWeakObjectPtr<AActor> IgnoreActor;
 
 	//========================================
+	// GPU Simulation
+	//========================================
+
+	/** Use GPU compute shaders for physics simulation */
+	bool bUseGPUSimulation = false;
+
+	/** World bounds for GPU AABB collision (optional) */
+	UPROPERTY(BlueprintReadWrite, Category = "Simulation")
+	FBox WorldBounds = FBox(EForceInit::ForceInit);
+
+	//========================================
 	// Collision Event Settings
 	//========================================
 

@@ -7,6 +7,7 @@
 #include "IKawaiiFluidDataProvider.generated.h"
 
 struct FFluidParticle;
+class FGPUFluidSimulator;
 
 /**
  * UInterface (for Unreal Reflection System)
@@ -90,5 +91,29 @@ public:
 	 * @return Human-readable identifier for this data provider
 	 */
 	virtual FString GetDebugName() const = 0;
+
+	//========================================
+	// GPU Buffer Access (Phase 2)
+	//========================================
+
+	/**
+	 * Check if GPU simulation is active
+	 * When true, renderers should use GPU buffer directly instead of CPU particles
+	 * @return True if GPU simulation is running
+	 */
+	virtual bool IsGPUSimulationActive() const { return false; }
+
+	/**
+	 * Get GPU particle count
+	 * @return Number of particles currently in GPU buffer
+	 */
+	virtual int32 GetGPUParticleCount() const { return 0; }
+
+	/**
+	 * Get GPU fluid simulator instance (for advanced GPU operations)
+	 * Use this to access GPU buffers directly: GetGPUSimulator()->GetParticleSRV()
+	 * @return Pointer to GPU simulator, or nullptr if not using GPU
+	 */
+	virtual FGPUFluidSimulator* GetGPUSimulator() const { return nullptr; }
 };
 

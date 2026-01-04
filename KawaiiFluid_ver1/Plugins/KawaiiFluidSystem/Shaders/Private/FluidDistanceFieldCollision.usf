@@ -1,0 +1,106 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Distance Field Collision Pass
+// Applies collision with UE5 Global Distance Field (static mesh collision)
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+// Enable Global Distance Field sampling
+#define USE_GLOBAL_DISTANCE_FIELD 1
+#include "FluidDistanceFieldCommon.ush"
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+RWStructuredBuffer<FGPUFluidParticle> Particles;
+int ParticleCount;
+float ParticleRadius;
+
+// Distance Field Volume Parameters (passed from CPU)
+// Note: These override the common header parameters
+// GDFVolumeCenter, GDFVolumeExtent, GDFVoxelSize, GDFMaxDistance are defined in common header
+
+// Collision Response Parameters
+// DFCollisionRestitution, DFCollisionFriction, DFCollisionThreshold are defined in common header
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void DistanceFieldCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	FGPUFluidParticle particle = Particles[idx];
+
+	// Skip attached particles (handled by CPU for bone tracking)
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+	{
+		return;
+	}
+
+	float3 pos = particle.PredictedPosition;
+	float3 vel = particle.Velocity;
+
+	// Sample distance field at particle position
+	float SDF = SampleGlobalDistanceField(pos);
+	float EffectiveDistance = SDF - ParticleRadius;
+
+	// Check for collision
+	if (EffectiveDistance < DFCollisionThreshold)
+	{
+		// Calculate surface normal from distance field gradient
+		float3 Normal = CalculateGDFGradient(pos);
+
+		// Calculate penetration depth
+		float Penetration = max(0.0f, -EffectiveDistance);
+
+		// Push particle out of surface (along normal)
+		pos += Normal * (Penetration + 0.1f); // Small offset to prevent re-penetration
+
+		// Velocity response
+		float VelNormal = dot(vel, Normal);
+
+		// Only apply collision response if moving into the surface
+		if (VelNormal < 0.0f)
+		{
+			// Decompose velocity
+			float3 VelNormalVec = VelNormal * Normal;
+			float3 VelTangent = vel - VelNormalVec;
+
+			// Reflect normal velocity with restitution
+			VelNormalVec = -VelNormalVec * DFCollisionRestitution;
+
+			// Apply friction to tangent velocity
+			VelTangent *= (1.0f - DFCollisionFriction);
+
+			// Reconstruct velocity
+			vel = VelNormalVec + VelTangent;
+		}
+
+		// Mark particle as near ground if collision normal is mostly upward
+		// This is used by the adhesion system
+		if (Normal.z > 0.5f)
+		{
+			particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+		}
+	}
+	else if (EffectiveDistance > DFCollisionThreshold * 2.0f)
+	{
+		// Clear near ground flag if particle is away from surfaces
+		particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+	}
+
+	// Write back updated particle state
+	particle.PredictedPosition = pos;
+	particle.Velocity = vel;
+
+	Particles[idx] = particle;
+}

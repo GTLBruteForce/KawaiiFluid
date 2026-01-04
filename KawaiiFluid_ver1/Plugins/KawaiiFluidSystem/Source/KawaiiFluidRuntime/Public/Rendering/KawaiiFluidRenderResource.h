@@ -5,7 +5,9 @@
 #include "CoreMinimal.h"
 #include "RenderResource.h"
 #include "RHIResources.h"
+#include "RenderGraphResources.h"
 #include "Core/KawaiiRenderParticle.h"
+#include <atomic>
 
 /**
  * 유체 입자 데이터를 GPU 버퍼로 관리하는 렌더 리소스
@@ -37,6 +39,14 @@ public:
 	 */
 	void UpdateParticleData(const TArray<FKawaiiRenderParticle>& InParticles);
 
+	/**
+	 * GPU 버퍼에서 직접 복사 (Phase 2: GPU → GPU, no CPU involvement)
+	 * @param PhysicsPooledBuffer 물리 시뮬레이터의 Pooled 파티클 버퍼
+	 * @param InParticleCount 파티클 수
+	 * @param InParticleRadius 파티클 반경
+	 */
+	void UpdateFromGPUBuffer(TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer, int32 InParticleCount, float InParticleRadius);
+
 	//========================================
 	// GPU 버퍼 접근 (렌더 스레드)
 	//========================================
@@ -61,10 +71,32 @@ public:
 	//========================================
 
 	/** 캐시된 파티클 데이터 반환 (RenderGraph Pass에서 사용) */
-	const TArray<FKawaiiRenderParticle>& GetCachedParticles() const 
-	{ 
-		return CachedParticles; 
+	const TArray<FKawaiiRenderParticle>& GetCachedParticles() const
+	{
+		return CachedParticles;
 	}
+
+	//========================================
+	// GPU 버퍼 접근 (Phase 2: GPU → GPU 렌더링)
+	//========================================
+
+	/** GPU Pooled Buffer 반환 (RDG 등록용) */
+	TRefCountPtr<FRDGPooledBuffer> GetPooledParticleBuffer() const
+	{
+		return PooledParticleBuffer;
+	}
+
+	/** GPU 버퍼가 유효한지 확인 (Phase 2 경로용) */
+	bool HasValidGPUBuffer() const
+	{
+		return PooledParticleBuffer.IsValid() && ParticleCount > 0 && bBufferReadyForRendering.load();
+	}
+
+	/** Mark buffer as ready for rendering (called after ExtractRenderDataPass completes) */
+	void SetBufferReadyForRendering(bool bReady) { bBufferReadyForRendering = bReady; }
+
+	/** Check if GPU mode is active (UpdateFromGPUBuffer was called instead of UpdateParticleData) */
+	bool IsInGPUMode() const { return bIsInGPUMode.load(); }
 
 private:
 	//========================================
@@ -74,14 +106,26 @@ private:
 	/** Structured Buffer (GPU 메모리) */
 	FBufferRHIRef ParticleBuffer;
 
-	/** Shader Resource View (쉐이더 접근용) */
+	/** Shader Resource View (쉐이더 읽기용) */
 	FShaderResourceViewRHIRef ParticleSRV;
+
+	/** Unordered Access View (쉐이더 쓰기용 - Phase 2 GPU→GPU 복사) */
+	FUnorderedAccessViewRHIRef ParticleUAV;
+
+	/** Pooled Buffer for RDG registration (Phase 2 GPU→GPU 복사) */
+	TRefCountPtr<FRDGPooledBuffer> PooledParticleBuffer;
 
 	/** 현재 버퍼에 저장된 파티클 수 */
 	int32 ParticleCount;
 
 	/** 버퍼 최대 용량 (재할당 최소화) */
 	int32 BufferCapacity;
+
+	/** Buffer is ready for rendering (ExtractRenderDataPass has completed) */
+	std::atomic<bool> bBufferReadyForRendering{false};
+
+	/** Flag indicating GPU mode is active (UpdateFromGPUBuffer was called) */
+	std::atomic<bool> bIsInGPUMode{false};
 
 	//========================================
 	// CPU 측 데이터 캐시 (게임 스레드)

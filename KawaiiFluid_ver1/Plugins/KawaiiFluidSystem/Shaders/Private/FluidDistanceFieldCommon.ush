@@ -1,0 +1,170 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Distance Field Collision Helpers
+// Provides utilities for sampling UE5 Global Distance Field in compute shaders
+
+#ifndef FLUID_DISTANCE_FIELD_COMMON_USH
+#define FLUID_DISTANCE_FIELD_COMMON_USH
+
+//=============================================================================
+// Distance Field Parameters
+// These must be bound from FViewUniformShaderParameters or passed explicitly
+//=============================================================================
+
+// Global Distance Field Volume Parameters
+float3 GDFVolumeCenter;           // Center of the global distance field volume
+float3 GDFVolumeExtent;           // Half-extents of the volume
+float3 GDFVoxelSize;              // Size of each voxel in world units
+float GDFMaxDistance;             // Maximum distance stored in the field (negative inside)
+
+// Collision Response Parameters
+float DFCollisionRestitution;     // Bounciness (0-1)
+float DFCollisionFriction;        // Friction coefficient (0-1)
+float DFCollisionThreshold;       // Distance threshold for collision detection
+
+//=============================================================================
+// Distance Field Texture
+//=============================================================================
+
+#if USE_GLOBAL_DISTANCE_FIELD
+// UE5 Global Distance Field texture (bound from scene renderer)
+Texture3D<float> GlobalDistanceFieldTexture;
+SamplerState GlobalDistanceFieldSampler;
+#endif
+
+//=============================================================================
+// Utility Functions
+//=============================================================================
+
+/**
+ * Convert world position to GDF UV coordinates
+ * @param WorldPos - World space position
+ * @return UVW coordinates (0-1 range)
+ */
+float3 WorldToGDFUV(float3 WorldPos)
+{
+	float3 LocalPos = WorldPos - (GDFVolumeCenter - GDFVolumeExtent);
+	return LocalPos / (2.0f * GDFVolumeExtent);
+}
+
+/**
+ * Sample the global distance field at a world position
+ * Returns positive distance outside surfaces, negative inside
+ * @param WorldPos - World space position to sample
+ * @return Signed distance to nearest surface
+ */
+float SampleGlobalDistanceField(float3 WorldPos)
+{
+#if USE_GLOBAL_DISTANCE_FIELD
+	float3 UVW = WorldToGDFUV(WorldPos);
+
+	// Check if position is within volume bounds
+	if (any(UVW < 0.0f) || any(UVW > 1.0f))
+	{
+		return GDFMaxDistance; // Outside volume, return max distance
+	}
+
+	// Sample distance field with trilinear filtering
+	float Distance = GlobalDistanceFieldTexture.SampleLevel(GlobalDistanceFieldSampler, UVW, 0);
+	return Distance;
+#else
+	return GDFMaxDistance; // Return large positive distance if GDF not available
+#endif
+}
+
+/**
+ * Calculate gradient of distance field (surface normal direction)
+ * Uses central differences for smooth gradient estimation
+ * @param WorldPos - World space position
+ * @return Normalized gradient vector (points away from surfaces)
+ */
+float3 CalculateGDFGradient(float3 WorldPos)
+{
+	float EPS = GDFVoxelSize.x * 0.5f; // Half voxel for central difference
+
+	float3 Gradient;
+	Gradient.x = SampleGlobalDistanceField(WorldPos + float3(EPS, 0, 0))
+	           - SampleGlobalDistanceField(WorldPos - float3(EPS, 0, 0));
+	Gradient.y = SampleGlobalDistanceField(WorldPos + float3(0, EPS, 0))
+	           - SampleGlobalDistanceField(WorldPos - float3(0, EPS, 0));
+	Gradient.z = SampleGlobalDistanceField(WorldPos + float3(0, 0, EPS))
+	           - SampleGlobalDistanceField(WorldPos - float3(0, 0, EPS));
+
+	float GradLen = length(Gradient);
+	return GradLen > 0.0001f ? Gradient / GradLen : float3(0, 0, 1);
+}
+
+/**
+ * Calculate collision response for a particle
+ * @param Position - Current particle position (will be modified)
+ * @param Velocity - Current particle velocity (will be modified)
+ * @param Radius - Particle radius
+ * @param Restitution - Bounciness coefficient
+ * @param Friction - Friction coefficient
+ * @return true if collision occurred
+ */
+bool ResolveDistanceFieldCollision(
+	inout float3 Position,
+	inout float3 Velocity,
+	float Radius,
+	float Restitution,
+	float Friction)
+{
+	float SDF = SampleGlobalDistanceField(Position);
+	float EffectiveDistance = SDF - Radius;
+
+	if (EffectiveDistance < DFCollisionThreshold)
+	{
+		// Calculate surface normal
+		float3 Normal = CalculateGDFGradient(Position);
+
+		// Push particle out of surface
+		float Penetration = max(0.0f, -EffectiveDistance);
+		Position += Normal * (Penetration + 0.01f); // Small epsilon to prevent re-penetration
+
+		// Decompose velocity into normal and tangent components
+		float VelNormal = dot(Velocity, Normal);
+		float3 VelNormalVec = VelNormal * Normal;
+		float3 VelTangent = Velocity - VelNormalVec;
+
+		// Only reflect if moving into the surface
+		if (VelNormal < 0.0f)
+		{
+			// Apply restitution to normal velocity (bounce)
+			VelNormalVec = -VelNormalVec * Restitution;
+
+			// Apply friction to tangent velocity
+			VelTangent *= (1.0f - Friction);
+
+			// Reconstruct velocity
+			Velocity = VelNormalVec + VelTangent;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+/**
+ * Simplified collision check - just returns distance
+ * Useful for determining if particle is near a surface
+ * @param WorldPos - World space position
+ * @param Radius - Particle radius
+ * @return Distance to surface (negative = inside)
+ */
+float GetDistanceToSurface(float3 WorldPos, float Radius)
+{
+	return SampleGlobalDistanceField(WorldPos) - Radius;
+}
+
+/**
+ * Check if position is inside geometry
+ * @param WorldPos - World space position
+ * @return true if inside geometry (SDF < 0)
+ */
+bool IsInsideGeometry(float3 WorldPos)
+{
+	return SampleGlobalDistanceField(WorldPos) < 0.0f;
+}
+
+#endif // FLUID_DISTANCE_FIELD_COMMON_USH

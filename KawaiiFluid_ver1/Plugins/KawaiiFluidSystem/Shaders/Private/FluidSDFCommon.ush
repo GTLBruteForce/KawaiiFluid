@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "../KawaiiRenderParticle.ush"
+
 //=============================================================================
 // SDF Primitives
 //=============================================================================
@@ -38,7 +40,7 @@ float sminQuadratic(float a, float b, float k)
 // Metaball SDF Evaluation
 //=============================================================================
 
-// Evaluate metaball SDF from particle positions
+// Evaluate metaball SDF from particle positions (float3 version - legacy)
 // Uses smooth minimum to blend all particles together
 float EvaluateMetaballSDF(
 	float3 p,
@@ -57,6 +59,31 @@ float EvaluateMetaballSDF(
 	for (int i = 1; i < ParticleCount; ++i)
 	{
 		float d = sdSphere(p, ParticlePositions[i], ParticleRadius);
+		sdf = smin(sdf, d, Smoothness);
+	}
+
+	return sdf;
+}
+
+// Evaluate metaball SDF from FKawaiiRenderParticle buffer (GPU mode)
+// Uses smooth minimum to blend all particles together
+float EvaluateMetaballSDFFromRenderParticles(
+	float3 p,
+	StructuredBuffer<FKawaiiRenderParticle> RenderParticles,
+	int ParticleCount,
+	float ParticleRadius,
+	float Smoothness)
+{
+	if (ParticleCount <= 0)
+		return 1e10;  // Very large distance (no particles)
+
+	// Start with first particle
+	float sdf = sdSphere(p, RenderParticles[0].Position, ParticleRadius);
+
+	// Blend with remaining particles using smooth minimum
+	for (int i = 1; i < ParticleCount; ++i)
+	{
+		float d = sdSphere(p, RenderParticles[i].Position, ParticleRadius);
 		sdf = smin(sdf, d, Smoothness);
 	}
 
@@ -83,6 +110,25 @@ float3 CalculateSDFNormal3Tap(
 	n.x = EvaluateMetaballSDF(p + float3(eps, 0, 0), ParticlePositions, ParticleCount, ParticleRadius, Smoothness) - centerSDF;
 	n.y = EvaluateMetaballSDF(p + float3(0, eps, 0), ParticlePositions, ParticleCount, ParticleRadius, Smoothness) - centerSDF;
 	n.z = EvaluateMetaballSDF(p + float3(0, 0, eps), ParticlePositions, ParticleCount, ParticleRadius, Smoothness) - centerSDF;
+
+	return normalize(n);
+}
+
+// Calculate normal using 3-tap forward difference (FKawaiiRenderParticle version)
+float3 CalculateSDFNormal3TapFromRenderParticles(
+	float3 p,
+	float centerSDF,
+	StructuredBuffer<FKawaiiRenderParticle> RenderParticles,
+	int ParticleCount,
+	float ParticleRadius,
+	float Smoothness)
+{
+	const float eps = 0.001;
+
+	float3 n;
+	n.x = EvaluateMetaballSDFFromRenderParticles(p + float3(eps, 0, 0), RenderParticles, ParticleCount, ParticleRadius, Smoothness) - centerSDF;
+	n.y = EvaluateMetaballSDFFromRenderParticles(p + float3(0, eps, 0), RenderParticles, ParticleCount, ParticleRadius, Smoothness) - centerSDF;
+	n.z = EvaluateMetaballSDFFromRenderParticles(p + float3(0, 0, eps), RenderParticles, ParticleCount, ParticleRadius, Smoothness) - centerSDF;
 
 	return normalize(n);
 }

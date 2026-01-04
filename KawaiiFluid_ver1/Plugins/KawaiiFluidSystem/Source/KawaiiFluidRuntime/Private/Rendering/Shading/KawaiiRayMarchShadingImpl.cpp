@@ -56,8 +56,8 @@ void KawaiiRayMarchShading::RenderTranslucentGBufferWrite(
 
 	auto* PassParameters = GraphBuilder.AllocParameters<FFluidRayMarchGBufferParameters>();
 
-	// Particle data
-	PassParameters->ParticlePositions = PipelineData.ParticleBufferSRV;
+	// Particle data (FKawaiiRenderParticle buffer)
+	PassParameters->RenderParticles = PipelineData.ParticleBufferSRV;
 	PassParameters->ParticleCount = PipelineData.ParticleCount;
 	PassParameters->ParticleRadius = PipelineData.ParticleRadius;
 
@@ -311,8 +311,8 @@ void KawaiiRayMarchShading::RenderPostProcessShading(
 
 	auto* PassParameters = GraphBuilder.AllocParameters<FFluidRayMarchPS::FParameters>();
 
-	// Particle data
-	PassParameters->ParticlePositions = PipelineData.ParticleBufferSRV;
+	// Particle data (FKawaiiRenderParticle buffer)
+	PassParameters->RenderParticles = PipelineData.ParticleBufferSRV;
 	PassParameters->ParticleCount = PipelineData.ParticleCount;
 	PassParameters->ParticleRadius = PipelineData.ParticleRadius;
 

@@ -6,6 +6,9 @@
 #include "Components/CapsuleComponent.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PhysicsEngine/SkeletalBodySetup.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "Engine/StaticMesh.h"
+#include "GPU/GPUFluidParticle.h"
 
 UMeshFluidCollider::UMeshFluidCollider()
 {
@@ -93,6 +96,7 @@ void UMeshFluidCollider::CacheCollisionShapes()
 	CachedCapsules.Reset();
 	CachedSpheres.Reset();
 	CachedBoxes.Reset();
+	CachedConvexes.Reset();
 	CachedBounds = FBox(ForceInit);
 	bCacheValid = false;
 
@@ -128,115 +132,21 @@ void UMeshFluidCollider::CacheCollisionShapes()
 	USkeletalMeshComponent* SkelMesh = Cast<USkeletalMeshComponent>(TargetMeshComponent);
 	if (SkelMesh)
 	{
-		UPhysicsAsset* PhysAsset = SkelMesh->GetPhysicsAsset();
-		if (PhysAsset)
+		CacheSkeletalMeshCollision(SkelMesh);
+		if (bCacheValid)
 		{
-			for (USkeletalBodySetup* BodySetup : PhysAsset->SkeletalBodySetups)
-			{
-				if (!BodySetup)
-				{
-					continue;
-				}
+			return;
+		}
+	}
 
-				int32 BoneIndex = SkelMesh->GetBoneIndex(BodySetup->BoneName);
-				if (BoneIndex == INDEX_NONE)
-				{
-					continue;
-				}
-
-				FTransform BoneTransform = SkelMesh->GetBoneTransform(BoneIndex);
-
-				// 캡슐 캐싱
-				for (const FKSphylElem& SphylElem : BodySetup->AggGeom.SphylElems)
-				{
-					FTransform CapsuleLocalTransform = SphylElem.GetTransform();
-					FTransform CapsuleWorldTransform = CapsuleLocalTransform * BoneTransform;
-
-					FVector CapsuleCenter = CapsuleWorldTransform.GetLocation();
-					float CapsuleRadius = SphylElem.Radius + CollisionMargin;
-					float CapsuleLength = SphylElem.Length;
-					FVector CapsuleUp = CapsuleWorldTransform.GetRotation().GetUpVector();
-
-					float HalfLength = CapsuleLength * 0.5f;
-
-					FCachedCapsule CachedCap;
-					CachedCap.Start = CapsuleCenter - CapsuleUp * HalfLength;
-					CachedCap.End = CapsuleCenter + CapsuleUp * HalfLength;
-					CachedCap.Radius = CapsuleRadius;
-					CachedCap.BoneName = BodySetup->BoneName;
-					CachedCap.BoneTransform = BoneTransform;
-					CachedCapsules.Add(CachedCap);
-
-					CachedBounds += CachedCap.Start;
-					CachedBounds += CachedCap.End;
-				}
-
-				// 스피어 캐싱
-				for (const FKSphereElem& SphereElem : BodySetup->AggGeom.SphereElems)
-				{
-					FTransform SphereLocalTransform = SphereElem.GetTransform();
-					FTransform SphereWorldTransform = SphereLocalTransform * BoneTransform;
-
-					FCachedSphere CachedSph;
-					CachedSph.Center = SphereWorldTransform.GetLocation();
-					CachedSph.Radius = SphereElem.Radius + CollisionMargin;
-					CachedSph.BoneName = BodySetup->BoneName;
-					CachedSph.BoneTransform = BoneTransform;
-					CachedSpheres.Add(CachedSph);
-
-					CachedBounds += CachedSph.Center;
-				}
-
-				// 박스 캐싱
-				for (const FKBoxElem& BoxElem : BodySetup->AggGeom.BoxElems)
-				{
-					FTransform BoxLocalTransform = BoxElem.GetTransform();
-					FTransform BoxWorldTransform = BoxLocalTransform * BoneTransform;
-
-					FCachedBox CachedBx;
-					CachedBx.Center = BoxWorldTransform.GetLocation();
-					CachedBx.Extent = FVector(BoxElem.X * 0.5f + CollisionMargin,
-					                          BoxElem.Y * 0.5f + CollisionMargin,
-					                          BoxElem.Z * 0.5f + CollisionMargin);
-					CachedBx.Rotation = BoxWorldTransform.GetRotation();
-					CachedBx.BoneName = BodySetup->BoneName;
-					CachedBx.BoneTransform = BoneTransform;
-					CachedBoxes.Add(CachedBx);
-
-					// 박스 8개 코너 추가하여 바운딩 박스 확장
-					for (int32 CornerIdx = 0; CornerIdx < 8; ++CornerIdx)
-					{
-						FVector LocalCorner(
-							(CornerIdx & 1) ? CachedBx.Extent.X : -CachedBx.Extent.X,
-							(CornerIdx & 2) ? CachedBx.Extent.Y : -CachedBx.Extent.Y,
-							(CornerIdx & 4) ? CachedBx.Extent.Z : -CachedBx.Extent.Z
-						);
-						FVector WorldCorner = CachedBx.Center + CachedBx.Rotation.RotateVector(LocalCorner);
-						CachedBounds += WorldCorner;
-					}
-				}
-			}
-
-			if (CachedCapsules.Num() > 0 || CachedSpheres.Num() > 0 || CachedBoxes.Num() > 0)
-			{
-				// 가장 큰 반경으로 바운딩 박스 확장
-				float MaxRadius = CollisionMargin;
-				for (const FCachedCapsule& Cap : CachedCapsules)
-				{
-					MaxRadius = FMath::Max(MaxRadius, Cap.Radius);
-				}
-				for (const FCachedSphere& Sph : CachedSpheres)
-				{
-					MaxRadius = FMath::Max(MaxRadius, Sph.Radius);
-				}
-				for (const FCachedBox& Box : CachedBoxes)
-				{
-					MaxRadius = FMath::Max(MaxRadius, Box.Extent.GetMax());
-				}
-				CachedBounds = CachedBounds.ExpandBy(MaxRadius);
-				bCacheValid = true;
-				return;
-			}
+	// StaticMeshComponent인 경우 - Simple Collision 사용
+	UStaticMeshComponent* StaticMesh = Cast<UStaticMeshComponent>(TargetMeshComponent);
+	if (StaticMesh)
+	{
+		CacheStaticMeshCollision(StaticMesh);
+		if (bCacheValid)
+		{
+			return;
 		}
 	}
 
@@ -244,6 +154,432 @@ void UMeshFluidCollider::CacheCollisionShapes()
 	FBoxSphereBounds Bounds = TargetMeshComponent->Bounds;
 	CachedBounds = Bounds.GetBox();
 	bCacheValid = true;
+}
+
+void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* SkelMesh)
+{
+	UPhysicsAsset* PhysAsset = SkelMesh->GetPhysicsAsset();
+	if (!PhysAsset)
+	{
+		return;
+	}
+
+	for (USkeletalBodySetup* BodySetup : PhysAsset->SkeletalBodySetups)
+	{
+		if (!BodySetup)
+		{
+			continue;
+		}
+
+		int32 BoneIndex = SkelMesh->GetBoneIndex(BodySetup->BoneName);
+		if (BoneIndex == INDEX_NONE)
+		{
+			continue;
+		}
+
+		FTransform BoneTransform = SkelMesh->GetBoneTransform(BoneIndex);
+
+		// 캡슐 캐싱
+		for (const FKSphylElem& SphylElem : BodySetup->AggGeom.SphylElems)
+		{
+			FTransform CapsuleLocalTransform = SphylElem.GetTransform();
+			FTransform CapsuleWorldTransform = CapsuleLocalTransform * BoneTransform;
+
+			FVector CapsuleCenter = CapsuleWorldTransform.GetLocation();
+			float CapsuleRadius = SphylElem.Radius + CollisionMargin;
+			float CapsuleLength = SphylElem.Length;
+			FVector CapsuleUp = CapsuleWorldTransform.GetRotation().GetUpVector();
+
+			float HalfLength = CapsuleLength * 0.5f;
+
+			FCachedCapsule CachedCap;
+			CachedCap.Start = CapsuleCenter - CapsuleUp * HalfLength;
+			CachedCap.End = CapsuleCenter + CapsuleUp * HalfLength;
+			CachedCap.Radius = CapsuleRadius;
+			CachedCap.BoneName = BodySetup->BoneName;
+			CachedCap.BoneTransform = BoneTransform;
+			CachedCapsules.Add(CachedCap);
+
+			CachedBounds += CachedCap.Start;
+			CachedBounds += CachedCap.End;
+		}
+
+		// 스피어 캐싱
+		for (const FKSphereElem& SphereElem : BodySetup->AggGeom.SphereElems)
+		{
+			FTransform SphereLocalTransform = SphereElem.GetTransform();
+			FTransform SphereWorldTransform = SphereLocalTransform * BoneTransform;
+
+			FCachedSphere CachedSph;
+			CachedSph.Center = SphereWorldTransform.GetLocation();
+			CachedSph.Radius = SphereElem.Radius + CollisionMargin;
+			CachedSph.BoneName = BodySetup->BoneName;
+			CachedSph.BoneTransform = BoneTransform;
+			CachedSpheres.Add(CachedSph);
+
+			CachedBounds += CachedSph.Center;
+		}
+
+		// 박스 캐싱
+		for (const FKBoxElem& BoxElem : BodySetup->AggGeom.BoxElems)
+		{
+			FTransform BoxLocalTransform = BoxElem.GetTransform();
+			FTransform BoxWorldTransform = BoxLocalTransform * BoneTransform;
+
+			FCachedBox CachedBx;
+			CachedBx.Center = BoxWorldTransform.GetLocation();
+			CachedBx.Extent = FVector(BoxElem.X * 0.5f + CollisionMargin,
+			                          BoxElem.Y * 0.5f + CollisionMargin,
+			                          BoxElem.Z * 0.5f + CollisionMargin);
+			CachedBx.Rotation = BoxWorldTransform.GetRotation();
+			CachedBx.BoneName = BodySetup->BoneName;
+			CachedBx.BoneTransform = BoneTransform;
+			CachedBoxes.Add(CachedBx);
+
+			// 박스 8개 코너 추가하여 바운딩 박스 확장
+			for (int32 CornerIdx = 0; CornerIdx < 8; ++CornerIdx)
+			{
+				FVector LocalCorner(
+					(CornerIdx & 1) ? CachedBx.Extent.X : -CachedBx.Extent.X,
+					(CornerIdx & 2) ? CachedBx.Extent.Y : -CachedBx.Extent.Y,
+					(CornerIdx & 4) ? CachedBx.Extent.Z : -CachedBx.Extent.Z
+				);
+				FVector WorldCorner = CachedBx.Center + CachedBx.Rotation.RotateVector(LocalCorner);
+				CachedBounds += WorldCorner;
+			}
+		}
+
+		// Convex 캐싱
+		for (const FKConvexElem& ConvexElem : BodySetup->AggGeom.ConvexElems)
+		{
+			FCachedConvex CachedCvx;
+			CachedCvx.BoneName = BodySetup->BoneName;
+			CachedCvx.BoneTransform = BoneTransform;
+
+			// 버텍스에서 평면 추출 (Convex Hull)
+			const TArray<FVector>& VertexData = ConvexElem.VertexData;
+			if (VertexData.Num() < 4)
+			{
+				continue;  // 최소 4개의 정점 필요
+			}
+
+			// 월드 좌표로 변환된 버텍스
+			TArray<FVector> WorldVerts;
+			WorldVerts.Reserve(VertexData.Num());
+			FVector CenterSum = FVector::ZeroVector;
+			for (const FVector& V : VertexData)
+			{
+				FVector WorldV = BoneTransform.TransformPosition(V);
+				WorldVerts.Add(WorldV);
+				CenterSum += WorldV;
+			}
+
+			CachedCvx.Center = CenterSum / static_cast<float>(WorldVerts.Num());
+
+			// Bounding radius 계산
+			float MaxDistSq = 0.0f;
+			for (const FVector& V : WorldVerts)
+			{
+				float DistSq = FVector::DistSquared(V, CachedCvx.Center);
+				MaxDistSq = FMath::Max(MaxDistSq, DistSq);
+				CachedBounds += V;
+			}
+			CachedCvx.BoundingRadius = FMath::Sqrt(MaxDistSq) + CollisionMargin;
+
+			// Index 데이터에서 평면 생성
+			const TArray<int32>& IndexData = ConvexElem.IndexData;
+			if (IndexData.Num() >= 3)
+			{
+				// 삼각형마다 평면 생성 (중복 평면 제거 필요)
+				TSet<uint32> PlaneHashes;
+				for (int32 i = 0; i + 2 < IndexData.Num(); i += 3)
+				{
+					int32 I0 = IndexData[i];
+					int32 I1 = IndexData[i + 1];
+					int32 I2 = IndexData[i + 2];
+
+					if (I0 < WorldVerts.Num() && I1 < WorldVerts.Num() && I2 < WorldVerts.Num())
+					{
+						FVector V0 = WorldVerts[I0];
+						FVector V1 = WorldVerts[I1];
+						FVector V2 = WorldVerts[I2];
+
+						FVector Edge1 = V1 - V0;
+						FVector Edge2 = V2 - V0;
+						FVector Normal = FVector::CrossProduct(Edge1, Edge2);
+						float NormalLen = Normal.Size();
+
+						if (NormalLen > KINDA_SMALL_NUMBER)
+						{
+							Normal /= NormalLen;
+
+							// 외부를 향하도록 normal 방향 조정
+							FVector ToCenter = CachedCvx.Center - V0;
+							if (FVector::DotProduct(Normal, ToCenter) > 0)
+							{
+								Normal = -Normal;
+							}
+
+							// 해시로 중복 제거 (양자화된 normal 사용)
+							int32 Nx = FMath::RoundToInt(Normal.X * 1000.0f);
+							int32 Ny = FMath::RoundToInt(Normal.Y * 1000.0f);
+							int32 Nz = FMath::RoundToInt(Normal.Z * 1000.0f);
+							uint32 Hash = HashCombine(HashCombine(GetTypeHash(Nx), GetTypeHash(Ny)), GetTypeHash(Nz));
+
+							if (!PlaneHashes.Contains(Hash))
+							{
+								PlaneHashes.Add(Hash);
+
+								FCachedConvexPlane Plane;
+								Plane.Normal = Normal;
+								Plane.Distance = FVector::DotProduct(V0, Normal);
+								CachedCvx.Planes.Add(Plane);
+							}
+						}
+					}
+				}
+			}
+
+			if (CachedCvx.Planes.Num() >= 4)
+			{
+				CachedConvexes.Add(MoveTemp(CachedCvx));
+			}
+		}
+	}
+
+	if (CachedCapsules.Num() > 0 || CachedSpheres.Num() > 0 || CachedBoxes.Num() > 0 || CachedConvexes.Num() > 0)
+	{
+		// 가장 큰 반경으로 바운딩 박스 확장
+		float MaxRadius = CollisionMargin;
+		for (const FCachedCapsule& Cap : CachedCapsules)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Cap.Radius);
+		}
+		for (const FCachedSphere& Sph : CachedSpheres)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Sph.Radius);
+		}
+		for (const FCachedBox& Box : CachedBoxes)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Box.Extent.GetMax());
+		}
+		for (const FCachedConvex& Cvx : CachedConvexes)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Cvx.BoundingRadius);
+		}
+		CachedBounds = CachedBounds.ExpandBy(MaxRadius);
+		bCacheValid = true;
+	}
+}
+
+void UMeshFluidCollider::CacheStaticMeshCollision(UStaticMeshComponent* StaticMesh)
+{
+	UStaticMesh* Mesh = StaticMesh->GetStaticMesh();
+	if (!Mesh)
+	{
+		return;
+	}
+
+	UBodySetup* BodySetup = Mesh->GetBodySetup();
+	if (!BodySetup)
+	{
+		return;
+	}
+
+	FTransform ComponentTransform = StaticMesh->GetComponentTransform();
+
+	// 스피어 캐싱
+	for (const FKSphereElem& SphereElem : BodySetup->AggGeom.SphereElems)
+	{
+		FTransform SphereLocalTransform = SphereElem.GetTransform();
+		FTransform SphereWorldTransform = SphereLocalTransform * ComponentTransform;
+
+		FCachedSphere CachedSph;
+		CachedSph.Center = SphereWorldTransform.GetLocation();
+		CachedSph.Radius = SphereElem.Radius * ComponentTransform.GetScale3D().GetMax() + CollisionMargin;
+		CachedSph.BoneName = NAME_None;
+		CachedSph.BoneTransform = ComponentTransform;
+		CachedSpheres.Add(CachedSph);
+
+		CachedBounds += CachedSph.Center;
+	}
+
+	// 캡슐 캐싱
+	for (const FKSphylElem& SphylElem : BodySetup->AggGeom.SphylElems)
+	{
+		FTransform CapsuleLocalTransform = SphylElem.GetTransform();
+		FTransform CapsuleWorldTransform = CapsuleLocalTransform * ComponentTransform;
+
+		FVector CapsuleCenter = CapsuleWorldTransform.GetLocation();
+		FVector3d Scale = ComponentTransform.GetScale3D();
+		float ScaledRadius = SphylElem.Radius * FMath::Max(Scale.X, Scale.Y) + CollisionMargin;
+		float ScaledLength = SphylElem.Length * Scale.Z;
+		FVector CapsuleUp = CapsuleWorldTransform.GetRotation().GetUpVector();
+
+		float HalfLength = ScaledLength * 0.5f;
+
+		FCachedCapsule CachedCap;
+		CachedCap.Start = CapsuleCenter - CapsuleUp * HalfLength;
+		CachedCap.End = CapsuleCenter + CapsuleUp * HalfLength;
+		CachedCap.Radius = ScaledRadius;
+		CachedCap.BoneName = NAME_None;
+		CachedCap.BoneTransform = ComponentTransform;
+		CachedCapsules.Add(CachedCap);
+
+		CachedBounds += CachedCap.Start;
+		CachedBounds += CachedCap.End;
+	}
+
+	// 박스 캐싱
+	for (const FKBoxElem& BoxElem : BodySetup->AggGeom.BoxElems)
+	{
+		FTransform BoxLocalTransform = BoxElem.GetTransform();
+		FTransform BoxWorldTransform = BoxLocalTransform * ComponentTransform;
+
+		FVector3d Scale = ComponentTransform.GetScale3D();
+
+		FCachedBox CachedBx;
+		CachedBx.Center = BoxWorldTransform.GetLocation();
+		CachedBx.Extent = FVector(BoxElem.X * 0.5f * Scale.X + CollisionMargin,
+		                          BoxElem.Y * 0.5f * Scale.Y + CollisionMargin,
+		                          BoxElem.Z * 0.5f * Scale.Z + CollisionMargin);
+		CachedBx.Rotation = BoxWorldTransform.GetRotation();
+		CachedBx.BoneName = NAME_None;
+		CachedBx.BoneTransform = ComponentTransform;
+		CachedBoxes.Add(CachedBx);
+
+		// 박스 8개 코너 추가
+		for (int32 CornerIdx = 0; CornerIdx < 8; ++CornerIdx)
+		{
+			FVector LocalCorner(
+				(CornerIdx & 1) ? CachedBx.Extent.X : -CachedBx.Extent.X,
+				(CornerIdx & 2) ? CachedBx.Extent.Y : -CachedBx.Extent.Y,
+				(CornerIdx & 4) ? CachedBx.Extent.Z : -CachedBx.Extent.Z
+			);
+			FVector WorldCorner = CachedBx.Center + CachedBx.Rotation.RotateVector(LocalCorner);
+			CachedBounds += WorldCorner;
+		}
+	}
+
+	// Convex 캐싱
+	for (const FKConvexElem& ConvexElem : BodySetup->AggGeom.ConvexElems)
+	{
+		FCachedConvex CachedCvx;
+		CachedCvx.BoneName = NAME_None;
+		CachedCvx.BoneTransform = ComponentTransform;
+
+		const TArray<FVector>& VertexData = ConvexElem.VertexData;
+		if (VertexData.Num() < 4)
+		{
+			continue;
+		}
+
+		// 월드 좌표로 변환
+		TArray<FVector> WorldVerts;
+		WorldVerts.Reserve(VertexData.Num());
+		FVector CenterSum = FVector::ZeroVector;
+		for (const FVector& V : VertexData)
+		{
+			FVector WorldV = ComponentTransform.TransformPosition(V);
+			WorldVerts.Add(WorldV);
+			CenterSum += WorldV;
+		}
+
+		CachedCvx.Center = CenterSum / static_cast<float>(WorldVerts.Num());
+
+		// Bounding radius
+		float MaxDistSq = 0.0f;
+		for (const FVector& V : WorldVerts)
+		{
+			float DistSq = FVector::DistSquared(V, CachedCvx.Center);
+			MaxDistSq = FMath::Max(MaxDistSq, DistSq);
+			CachedBounds += V;
+		}
+		CachedCvx.BoundingRadius = FMath::Sqrt(MaxDistSq) + CollisionMargin;
+
+		// Index 데이터에서 평면 생성
+		const TArray<int32>& IndexData = ConvexElem.IndexData;
+		if (IndexData.Num() >= 3)
+		{
+			TSet<uint32> PlaneHashes;
+			for (int32 i = 0; i + 2 < IndexData.Num(); i += 3)
+			{
+				int32 I0 = IndexData[i];
+				int32 I1 = IndexData[i + 1];
+				int32 I2 = IndexData[i + 2];
+
+				if (I0 < WorldVerts.Num() && I1 < WorldVerts.Num() && I2 < WorldVerts.Num())
+				{
+					FVector V0 = WorldVerts[I0];
+					FVector V1 = WorldVerts[I1];
+					FVector V2 = WorldVerts[I2];
+
+					FVector Edge1 = V1 - V0;
+					FVector Edge2 = V2 - V0;
+					FVector Normal = FVector::CrossProduct(Edge1, Edge2);
+					float NormalLen = Normal.Size();
+
+					if (NormalLen > KINDA_SMALL_NUMBER)
+					{
+						Normal /= NormalLen;
+
+						// 외부를 향하도록
+						FVector ToCenter = CachedCvx.Center - V0;
+						if (FVector::DotProduct(Normal, ToCenter) > 0)
+						{
+							Normal = -Normal;
+						}
+
+						// 해시로 중복 제거
+						int32 Nx = FMath::RoundToInt(Normal.X * 1000.0f);
+						int32 Ny = FMath::RoundToInt(Normal.Y * 1000.0f);
+						int32 Nz = FMath::RoundToInt(Normal.Z * 1000.0f);
+						uint32 Hash = HashCombine(HashCombine(GetTypeHash(Nx), GetTypeHash(Ny)), GetTypeHash(Nz));
+
+						if (!PlaneHashes.Contains(Hash))
+						{
+							PlaneHashes.Add(Hash);
+
+							FCachedConvexPlane Plane;
+							Plane.Normal = Normal;
+							Plane.Distance = FVector::DotProduct(V0, Normal);
+							CachedCvx.Planes.Add(Plane);
+						}
+					}
+				}
+			}
+		}
+
+		if (CachedCvx.Planes.Num() >= 4)
+		{
+			CachedConvexes.Add(MoveTemp(CachedCvx));
+		}
+	}
+
+	if (CachedCapsules.Num() > 0 || CachedSpheres.Num() > 0 || CachedBoxes.Num() > 0 || CachedConvexes.Num() > 0)
+	{
+		float MaxRadius = CollisionMargin;
+		for (const FCachedCapsule& Cap : CachedCapsules)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Cap.Radius);
+		}
+		for (const FCachedSphere& Sph : CachedSpheres)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Sph.Radius);
+		}
+		for (const FCachedBox& Box : CachedBoxes)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Box.Extent.GetMax());
+		}
+		for (const FCachedConvex& Cvx : CachedConvexes)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Cvx.BoundingRadius);
+		}
+		CachedBounds = CachedBounds.ExpandBy(MaxRadius);
+		bCacheValid = true;
+
+		//UE_LOG(LogTemp, Log, TEXT("MeshFluidCollider: StaticMesh cached - Spheres: %d, Capsules: %d, Boxes: %d, Convexes: %d"),CachedSpheres.Num(), CachedCapsules.Num(), CachedBoxes.Num(), CachedConvexes.Num());
+	}
 }
 
 bool UMeshFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance) const
@@ -399,6 +735,43 @@ bool UMeshFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClose
 			OutClosestPoint = TempClosestPoint;
 			OutNormal = TempNormal;
 			OutDistance = TempDistance;
+			bFoundAny = true;
+		}
+	}
+
+	// 캐싱된 Convex들 순회
+	for (const FCachedConvex& Cvx : CachedConvexes)
+	{
+		// Bounding sphere 컬링
+		float BoundDist = FVector::Dist(Point, Cvx.Center) - Cvx.BoundingRadius;
+		if (BoundDist > MinDistance)
+		{
+			continue;
+		}
+
+		// Convex SDF: 모든 평면과의 부호 있는 거리 중 최대값
+		float MaxPlaneDist = -TNumericLimits<float>::Max();
+		FVector BestNormal = FVector::UpVector;
+
+		for (const FCachedConvexPlane& Plane : Cvx.Planes)
+		{
+			float PlaneDist = FVector::DotProduct(Point, Plane.Normal) - Plane.Distance;
+			if (PlaneDist > MaxPlaneDist)
+			{
+				MaxPlaneDist = PlaneDist;
+				BestNormal = Plane.Normal;
+			}
+		}
+
+		float TempDistance = MaxPlaneDist;
+
+		if (TempDistance < MinDistance)
+		{
+			MinDistance = TempDistance;
+			OutNormal = BestNormal;
+			OutDistance = TempDistance;
+			// Closest point는 point에서 normal 방향으로 distance만큼 이동
+			OutClosestPoint = Point - BestNormal * TempDistance;
 			bFoundAny = true;
 		}
 	}
@@ -591,6 +964,44 @@ bool UMeshFluidCollider::GetClosestPointWithBone(const FVector& Point, FVector& 
 		}
 	}
 
+	// 캐싱된 Convex들 순회
+	for (const FCachedConvex& Cvx : CachedConvexes)
+	{
+		// Bounding sphere 컬링
+		float BoundDist = FVector::Dist(Point, Cvx.Center) - Cvx.BoundingRadius;
+		if (BoundDist > MinDistance)
+		{
+			continue;
+		}
+
+		// Convex SDF: 모든 평면과의 부호 있는 거리 중 최대값
+		float MaxPlaneDist = -TNumericLimits<float>::Max();
+		FVector BestNormal = FVector::UpVector;
+
+		for (const FCachedConvexPlane& Plane : Cvx.Planes)
+		{
+			float PlaneDist = FVector::DotProduct(Point, Plane.Normal) - Plane.Distance;
+			if (PlaneDist > MaxPlaneDist)
+			{
+				MaxPlaneDist = PlaneDist;
+				BestNormal = Plane.Normal;
+			}
+		}
+
+		float TempDistance = MaxPlaneDist;
+
+		if (TempDistance < MinDistance)
+		{
+			MinDistance = TempDistance;
+			OutNormal = BestNormal;
+			OutDistance = TempDistance;
+			OutClosestPoint = Point - BestNormal * TempDistance;
+			OutBoneName = Cvx.BoneName;
+			OutBoneTransform = Cvx.BoneTransform;
+			bFoundAny = true;
+		}
+	}
+
 	// 캐싱된 데이터가 없으면 바운딩 박스 사용 (본 정보 없음)
 	if (!bFoundAny && TargetMeshComponent)
 	{
@@ -747,11 +1158,145 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 				}
 			}
 
+			// 캐싱된 Convex 체크 (PhysicsAsset에서 직접 읽지 않고 캐시 사용)
+			for (const FCachedConvex& Cvx : CachedConvexes)
+			{
+				// Bounding sphere 컬링
+				float BoundDist = FVector::Dist(Point, Cvx.Center) - Cvx.BoundingRadius;
+				if (BoundDist > 0.0f)
+				{
+					continue;
+				}
+
+				// Convex 내부 = 모든 평면에 대해 부호 있는 거리가 음수
+				bool bInside = true;
+				for (const FCachedConvexPlane& Plane : Cvx.Planes)
+				{
+					float PlaneDist = FVector::DotProduct(Point, Plane.Normal) - Plane.Distance;
+					if (PlaneDist > 0.0f)
+					{
+						bInside = false;
+						break;
+					}
+				}
+
+				if (bInside)
+				{
+					return true;
+				}
+			}
+
 			return false;
+		}
+	}
+
+	// 캐싱된 Convex 체크 (StaticMesh 등)
+	for (const FCachedConvex& Cvx : CachedConvexes)
+	{
+		// Bounding sphere 컬링
+		float BoundDist = FVector::Dist(Point, Cvx.Center) - Cvx.BoundingRadius;
+		if (BoundDist > 0.0f)
+		{
+			continue;
+		}
+
+		// Convex 내부 = 모든 평면에 대해 부호 있는 거리가 음수
+		bool bInside = true;
+		for (const FCachedConvexPlane& Plane : Cvx.Planes)
+		{
+			float PlaneDist = FVector::DotProduct(Point, Plane.Normal) - Plane.Distance;
+			if (PlaneDist > 0.0f)
+			{
+				bInside = false;
+				break;
+			}
+		}
+
+		if (bInside)
+		{
+			return true;
 		}
 	}
 
 	// 폴백: 바운딩 박스 사용
 	FBoxSphereBounds Bounds = TargetMeshComponent->Bounds;
 	return Bounds.GetBox().IsInside(Point);
+}
+
+void UMeshFluidCollider::ExportToGPUPrimitives(
+	TArray<FGPUCollisionSphere>& OutSpheres,
+	TArray<FGPUCollisionCapsule>& OutCapsules,
+	TArray<FGPUCollisionBox>& OutBoxes,
+	TArray<FGPUCollisionConvex>& OutConvexes,
+	TArray<FGPUConvexPlane>& OutPlanes,
+	float InFriction,
+	float InRestitution
+) const
+{
+	if (!bCacheValid)
+	{
+		return;
+	}
+
+	// Export spheres
+	for (const FCachedSphere& Sph : CachedSpheres)
+	{
+		FGPUCollisionSphere GPUSphere;
+		GPUSphere.Center = FVector3f(Sph.Center);
+		GPUSphere.Radius = Sph.Radius;
+		GPUSphere.Friction = InFriction;
+		GPUSphere.Restitution = InRestitution;
+		OutSpheres.Add(GPUSphere);
+	}
+
+	// Export capsules
+	for (const FCachedCapsule& Cap : CachedCapsules)
+	{
+		FGPUCollisionCapsule GPUCapsule;
+		GPUCapsule.Start = FVector3f(Cap.Start);
+		GPUCapsule.End = FVector3f(Cap.End);
+		GPUCapsule.Radius = Cap.Radius;
+		GPUCapsule.Friction = InFriction;
+		GPUCapsule.Restitution = InRestitution;
+		OutCapsules.Add(GPUCapsule);
+	}
+
+	// Export boxes
+	for (const FCachedBox& Box : CachedBoxes)
+	{
+		FGPUCollisionBox GPUBox;
+		GPUBox.Center = FVector3f(Box.Center);
+		GPUBox.Extent = FVector3f(Box.Extent);
+		GPUBox.Rotation = FVector4f(
+			static_cast<float>(Box.Rotation.X),
+			static_cast<float>(Box.Rotation.Y),
+			static_cast<float>(Box.Rotation.Z),
+			static_cast<float>(Box.Rotation.W)
+		);
+		GPUBox.Friction = InFriction;
+		GPUBox.Restitution = InRestitution;
+		OutBoxes.Add(GPUBox);
+	}
+
+	// Export convexes (with plane references)
+	for (const FCachedConvex& Cvx : CachedConvexes)
+	{
+		FGPUCollisionConvex GPUConvex;
+		GPUConvex.Center = FVector3f(Cvx.Center);
+		GPUConvex.BoundingRadius = Cvx.BoundingRadius;
+		GPUConvex.PlaneStartIndex = OutPlanes.Num();  // Start index in plane buffer
+		GPUConvex.PlaneCount = Cvx.Planes.Num();
+		GPUConvex.Friction = InFriction;
+		GPUConvex.Restitution = InRestitution;
+		OutConvexes.Add(GPUConvex);
+
+		// Add planes to the plane buffer
+		for (const FCachedConvexPlane& Plane : Cvx.Planes)
+		{
+			FGPUConvexPlane GPUPlane;
+			GPUPlane.Normal = FVector3f(Plane.Normal);
+			GPUPlane.Distance = Plane.Distance;
+			OutPlanes.Add(GPUPlane);
+		}
+	}
 }

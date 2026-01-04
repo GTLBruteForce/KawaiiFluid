@@ -128,6 +128,17 @@ public:
 	UKawaiiFluidSimulationModule* GetSimulationModule() const { return SimulationModule; }
 
 	//========================================
+	// GPU Simulation
+	//========================================
+
+	/** Enable GPU physics simulation (compute shaders)
+	 * When enabled, SPH physics runs on GPU for better performance with large particle counts
+	 * Attached particles are still handled by CPU for bone tracking
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|GPU")
+	bool bUseGPUSimulation = false;
+
+	//========================================
 	// Rendering Settings
 	//========================================
 

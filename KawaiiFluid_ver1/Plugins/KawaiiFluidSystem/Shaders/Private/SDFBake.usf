@@ -6,11 +6,23 @@
 #include "/Engine/Private/Common.ush"
 
 //=============================================================================
+// Render Particle Structure (must match FKawaiiRenderParticle - 32 bytes)
+//=============================================================================
+
+struct FRenderParticle
+{
+	float3 Position;   // 12 bytes
+	float3 Velocity;   // 12 bytes
+	float Radius;      // 4 bytes
+	float Padding;     // 4 bytes
+};
+
+//=============================================================================
 // Shader Parameters
 //=============================================================================
 
-// Particle Data (Input)
-StructuredBuffer<float3> ParticlePositions;
+// Particle Data (Input) - now uses FRenderParticle for GPU simulation compatibility
+StructuredBuffer<FRenderParticle> RenderParticles;
 int ParticleCount;
 float ParticleRadius;
 float SDFSmoothness;
@@ -64,11 +76,12 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     }
 
     // Evaluate metaball SDF at this position
-    float sdf = sdSphere(worldPos, ParticlePositions[0], ParticleRadius);
+    // Now reading from FRenderParticle structure for GPU simulation compatibility
+    float sdf = sdSphere(worldPos, RenderParticles[0].Position, ParticleRadius);
 
     for (int i = 1; i < ParticleCount; ++i)
     {
-        float d = sdSphere(worldPos, ParticlePositions[i], ParticleRadius);
+        float d = sdSphere(worldPos, RenderParticles[i].Position, ParticleRadius);
         sdf = smin(sdf, d, SDFSmoothness);
     }
 

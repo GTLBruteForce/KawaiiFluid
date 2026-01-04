@@ -257,8 +257,7 @@ bool FSpatialHashBuilder::CreateAndBuildHash(
             FIntVector(NumGroups, 1, 1));
     }
 
-    UE_LOG(LogTemp, Log, TEXT("CreateAndBuildHash - Success (Particles: %d, CellSize: %.2f)"),
-        ParticleCount, CellSize);
+    //UE_LOG(LogTemp, Log, TEXT("CreateAndBuildHash - Success (Particles: %d, CellSize: %.2f)"), ParticleCount, CellSize);
 
     return true;
 }

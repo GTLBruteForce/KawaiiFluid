@@ -432,4 +432,30 @@ public:
 
 	/** Get debug name - IKawaiiFluidDataProvider */
 	virtual FString GetDebugName() const override;
+
+	//========================================
+	// GPU Buffer Access (Phase 2) - IKawaiiFluidDataProvider
+	//========================================
+
+	/** Check if GPU simulation is active */
+	virtual bool IsGPUSimulationActive() const override;
+
+	/** Get GPU particle count */
+	virtual int32 GetGPUParticleCount() const override;
+
+	/** Get GPU simulator instance */
+	virtual FGPUFluidSimulator* GetGPUSimulator() const override { return CachedGPUSimulator; }
+
+	/** Set GPU simulator reference (called by Context when GPU mode is active) */
+	void SetGPUSimulator(FGPUFluidSimulator* InSimulator) { CachedGPUSimulator = InSimulator; }
+
+	/** Set GPU simulation active flag */
+	void SetGPUSimulationActive(bool bActive) { bGPUSimulationActive = bActive; }
+
+private:
+	/** Cached GPU simulator pointer (owned by SimulationContext) */
+	FGPUFluidSimulator* CachedGPUSimulator = nullptr;
+
+	/** GPU simulation active flag */
+	bool bGPUSimulationActive = false;
 };

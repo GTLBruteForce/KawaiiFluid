@@ -6,6 +6,8 @@
 #include "Rendering/KawaiiFluidRenderResource.h"
 #include "Core/KawaiiRenderParticle.h"
 #include "DrawDebugHelpers.h"
+#include "RenderGraphResources.h"
+#include "GPU/GPUFluidSimulator.h"
 
 // Pipeline architecture (Pipeline handles ShadingMode internally)
 #include "Rendering/Pipeline/IKawaiiMetaballRenderingPipeline.h"
@@ -179,7 +181,65 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 		return;
 	}
 
-	// Get simulation data from DataProvider
+	// Get particle radius from simulation
+	float ParticleRadius = DataProvider->GetParticleRadius();
+
+	// Determine which radius to use for rendering
+	float RenderRadius;
+	if (bUseSimulationRadius)
+	{
+		RenderRadius = ParticleRadius;
+		LocalParameters.ParticleRenderRadius = RenderRadius;
+	}
+	else
+	{
+		RenderRadius = LocalParameters.ParticleRenderRadius;
+	}
+
+	// =====================================================
+	// Phase 2: Check if GPU simulation is active
+	// If active, store simulator reference for render thread direct access
+	// NO game thread buffer access - eliminates race condition!
+	// =====================================================
+	if (DataProvider->IsGPUSimulationActive())
+	{
+		FGPUFluidSimulator* Simulator = DataProvider->GetGPUSimulator();
+
+		if (Simulator)
+		{
+			// Store simulator reference for render thread access
+			// The Pipeline (on render thread) will directly access Simulator->GetPersistentParticleBuffer()
+			CachedGPUSimulator = Simulator;
+
+			// Get particle count (atomic, thread-safe read)
+			const int32 GPUParticleCount = Simulator->GetPersistentParticleCount();
+
+			// Update stats
+			LastRenderedParticleCount = FMath::Min(GPUParticleCount, MaxRenderParticles);
+			bIsRenderingActive = (GPUParticleCount > 0);
+
+			// Cache radius for shader parameters
+			CachedParticleRadius = RenderRadius;
+
+			// Debug logging
+			static int32 FrameCounter = 0;
+			if (++FrameCounter % 60 == 0)
+			{
+				UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: GPU mode active - simulator reference set (%d particles, radius: %.2f)"),
+					GPUParticleCount, RenderRadius);
+			}
+
+			DrawDebugVisualization();
+			return;
+		}
+	}
+
+	// Clear GPU simulator reference when not in GPU mode
+	CachedGPUSimulator = nullptr;
+
+	// =====================================================
+	// CPU path: Traditional CPU → GPU upload
+	// =====================================================
 	const TArray<FFluidParticle>& SimParticles = DataProvider->GetParticles();
 
 	if (SimParticles.Num() == 0)
@@ -189,25 +249,7 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 		return;
 	}
 
-	// Limit number of particles to render
 	int32 NumParticles = FMath::Min(SimParticles.Num(), MaxRenderParticles);
-
-	// Get particle radius from simulation
-	float ParticleRadius = DataProvider->GetParticleRadius();
-
-	// Determine which radius to use for rendering
-	float RenderRadius;
-	if (bUseSimulationRadius)
-	{
-		// Use simulation particle radius (from Preset->ParticleRadius)
-		RenderRadius = ParticleRadius;
-		LocalParameters.ParticleRenderRadius = RenderRadius;
-	}
-	else
-	{
-		// Use manually configured render radius from Settings
-		RenderRadius = LocalParameters.ParticleRenderRadius;
-	}
 
 	// Update GPU resources (ViewExtension will handle rendering automatically)
 	UpdateGPUResources(SimParticles, RenderRadius);
@@ -252,6 +294,42 @@ void UKawaiiFluidMetaballRenderer::UpdateGPUResources(const TArray<FFluidParticl
 
 	// Cache particle radius for ViewExtension access
 	CachedParticleRadius = ParticleRadius;
+}
+
+void UKawaiiFluidMetaballRenderer::UpdateGPUResourcesFromGPUBuffer(
+	FGPUFluidSimulator* Simulator,
+	int32 ParticleCount,
+	float ParticleRadius)
+{
+	if (!Simulator || ParticleCount <= 0)
+	{
+		return;
+	}
+
+	// Get physics particle pooled buffer from GPU simulator
+	TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer = Simulator->GetPersistentParticleBuffer();
+	if (!PhysicsPooledBuffer.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MetaballRenderer: GPU Simulator has no valid pooled buffer"));
+		return;
+	}
+
+	// Update render resource using GPU→GPU copy (no CPU involvement)
+	if (RenderResource.IsValid())
+	{
+		RenderResource->UpdateFromGPUBuffer(PhysicsPooledBuffer, ParticleCount, ParticleRadius);
+	}
+
+	// Cache particle radius for ViewExtension access
+	CachedParticleRadius = ParticleRadius;
+
+	// Log periodically for debugging
+	static int32 FrameCounter = 0;
+	if (++FrameCounter % 60 == 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: GPU→GPU path active (%d particles, radius: %.2f)"),
+			ParticleCount, ParticleRadius);
+	}
 }
 
 FKawaiiFluidRenderResource* UKawaiiFluidMetaballRenderer::GetFluidRenderResource() const

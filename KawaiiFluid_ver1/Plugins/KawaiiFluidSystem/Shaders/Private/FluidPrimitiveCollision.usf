@@ -1,0 +1,169 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Primitive Collision Pass
+// Applies collision with explicit primitives (spheres, capsules, boxes, convexes)
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+#include "FluidCollisionPrimitives.ush"
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+// Particle buffer
+RWStructuredBuffer<FGPUFluidParticle> Particles;
+int ParticleCount;
+float ParticleRadius;
+
+// Collision primitives
+StructuredBuffer<FGPUCollisionSphere> CollisionSpheres;
+int SphereCount;
+
+StructuredBuffer<FGPUCollisionCapsule> CollisionCapsules;
+int CapsuleCount;
+
+StructuredBuffer<FGPUCollisionBox> CollisionBoxes;
+int BoxCount;
+
+StructuredBuffer<FGPUCollisionConvex> CollisionConvexes;
+int ConvexCount;
+
+StructuredBuffer<FGPUConvexPlane> ConvexPlanes;
+
+// Collision threshold
+float CollisionThreshold;
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	FGPUFluidParticle particle = Particles[idx];
+
+	// Skip attached particles (handled by CPU)
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+	{
+		return;
+	}
+
+	float3 pos = particle.PredictedPosition;
+	float3 vel = particle.Velocity;
+	bool bCollided = false;
+
+	// Check collision with all spheres
+	for (int si = 0; si < SphereCount; ++si)
+	{
+		FGPUCollisionSphere sphere = CollisionSpheres[si];
+		float sdf = sdSphere(pos, sphere.Center, sphere.Radius);
+		float effectiveDist = sdf - ParticleRadius;
+
+		if (effectiveDist < CollisionThreshold)
+		{
+			float3 normal = CalcNumericalGradient_Sphere(pos, sphere.Center, sphere.Radius);
+			float penetration = max(0.0f, -effectiveDist);
+			ApplyCollisionResponse(pos, vel, normal, penetration, sphere.Friction, sphere.Restitution);
+			bCollided = true;
+		}
+	}
+
+	// Check collision with all capsules
+	for (int ci = 0; ci < CapsuleCount; ++ci)
+	{
+		FGPUCollisionCapsule capsule = CollisionCapsules[ci];
+		float sdf = sdCapsule(pos, capsule.Start, capsule.End, capsule.Radius);
+		float effectiveDist = sdf - ParticleRadius;
+
+		if (effectiveDist < CollisionThreshold)
+		{
+			float3 normal = CalcNumericalGradient_Capsule(pos, capsule.Start, capsule.End, capsule.Radius);
+			float penetration = max(0.0f, -effectiveDist);
+			ApplyCollisionResponse(pos, vel, normal, penetration, capsule.Friction, capsule.Restitution);
+			bCollided = true;
+		}
+	}
+
+	// Check collision with all boxes
+	for (int bi = 0; bi < BoxCount; ++bi)
+	{
+		FGPUCollisionBox box = CollisionBoxes[bi];
+		float sdf = sdBox(pos, box.Center, box.Extent, box.Rotation);
+		float effectiveDist = sdf - ParticleRadius;
+
+		if (effectiveDist < CollisionThreshold)
+		{
+			float3 normal = CalcNumericalGradient_Box(pos, box.Center, box.Extent, box.Rotation);
+			float penetration = max(0.0f, -effectiveDist);
+			ApplyCollisionResponse(pos, vel, normal, penetration, box.Friction, box.Restitution);
+			bCollided = true;
+
+			// Mark as near ground if collision normal is mostly upward
+			if (normal.z > 0.5f)
+			{
+				particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+			}
+		}
+	}
+
+	// Check collision with all convex hulls
+	for (int cxi = 0; cxi < ConvexCount; ++cxi)
+	{
+		FGPUCollisionConvex convex = CollisionConvexes[cxi];
+
+		// Early out with bounding sphere
+		float boundDist = length(pos - convex.Center) - convex.BoundingRadius - ParticleRadius;
+		if (boundDist > CollisionThreshold)
+		{
+			continue;
+		}
+
+		float sdf = sdConvex(pos, convex.Center, convex.BoundingRadius,
+		                     convex.PlaneStartIndex, convex.PlaneCount, ConvexPlanes);
+		float effectiveDist = sdf - ParticleRadius;
+
+		if (effectiveDist < CollisionThreshold)
+		{
+			// Find the closest plane for normal calculation
+			float3 normal = float3(0, 0, 1);
+			float maxDist = -1e10f;
+			for (int pi = 0; pi < convex.PlaneCount; ++pi)
+			{
+				FGPUConvexPlane plane = ConvexPlanes[convex.PlaneStartIndex + pi];
+				float dist = dot(pos, plane.Normal) - plane.Distance;
+				if (dist > maxDist)
+				{
+					maxDist = dist;
+					normal = plane.Normal;
+				}
+			}
+
+			float penetration = max(0.0f, -effectiveDist);
+			ApplyCollisionResponse(pos, vel, normal, penetration, convex.Friction, convex.Restitution);
+			bCollided = true;
+
+			if (normal.z > 0.5f)
+			{
+				particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+			}
+		}
+	}
+
+	// Clear near ground flag if no collision
+	if (!bCollided)
+	{
+		particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+	}
+
+	// Write back
+	particle.PredictedPosition = pos;
+	particle.Velocity = vel;
+	Particles[idx] = particle;
+}
