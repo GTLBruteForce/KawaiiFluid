@@ -44,15 +44,18 @@ void SolvePressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	float3 pos = particle.PredictedPosition;
 	float lambda_i = particle.Lambda;
-	float h = SmoothingRadius;
+
+	// IMPORTANT: Convert smoothing radius from cm to m for kernel calculations
+	// Kernel coefficients (SpikyCoeff) are precomputed with h in meters
+	float h = SmoothingRadius * CM_TO_M;  // Convert to meters
 	float h2 = h * h;
 
-	// Position correction accumulator
+	// Position correction accumulator (will be in meters, convert back at end)
 	float3 deltaP = float3(0.0f, 0.0f, 0.0f);
 
-	// Get cell coordinate for this particle
+	// Get cell coordinate for this particle (still use cm for spatial hash)
 	int3 centerCell = WorldToCell(pos, CellSize);
-	int cellRadius = (int)ceil(h / CellSize);
+	int cellRadius = (int)ceil(SmoothingRadius / CellSize);  // Use original cm value
 
 	// Iterate over neighboring cells
 	for (int dz = -cellRadius; dz <= cellRadius; ++dz)
@@ -78,23 +81,28 @@ void SolvePressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 					FGPUFluidParticle neighbor = Particles[neighborIdx];
 					float3 neighborPos = neighbor.PredictedPosition;
-					float3 r = pos - neighborPos;
-					float r2 = dot(r, r);
+					float3 r_cm = pos - neighborPos;           // Distance in cm
+					float r2_cm = dot(r_cm, r_cm);             // r² in cm²
 
-					// Skip if outside smoothing radius or too close
+					// Convert to meters for kernel calculations
+					float r2 = r2_cm * CM_TO_M_SQ;             // r² in m²
+
+					// Skip if outside smoothing radius or too close (both in m²)
 					if (r2 >= h2 || r2 < SMALL_NUMBER)
 					{
 						continue;
 					}
 
-					float rLen = sqrt(r2);
+					float rLen = sqrt(r2);                     // Distance in meters
+					float3 r = r_cm * CM_TO_M;                 // Convert r vector to meters
 					float lambda_j = neighbor.Lambda;
 
-					// Spiky gradient
+					// Spiky gradient (using meter units)
 					float3 gradW = SpikyGradient(r, rLen, h);
-					gradW *= SpikyCoeff;
+					// IMPORTANT: Multiply by CM_TO_M to match CPU calculation scale
+					gradW *= SpikyCoeff * CM_TO_M;
 
-					// Position correction: Δp = (λ_i + λ_j) * ∇W
+					// Position correction: Δp = (λ_i + λ_j) * ∇W (result in meters)
 					deltaP += (lambda_i + lambda_j) * gradW;
 				}
 			}
@@ -102,7 +110,10 @@ void SolvePressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	// Apply correction (divided by rest density for proper scaling)
-	particle.PredictedPosition += deltaP / RestDensity;
+	// With CM_TO_M applied to gradW, deltaP is now in cm-compatible units
+	// No additional unit conversion needed (matches CPU behavior)
+	float3 deltaP_cm = deltaP / RestDensity;
+	particle.PredictedPosition += deltaP_cm;
 
 	Particles[idx] = particle;
 }

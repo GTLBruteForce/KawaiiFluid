@@ -50,16 +50,19 @@ void ApplyViscosityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	float3 pos = particle.PredictedPosition;
 	float3 vel = particle.Velocity;
-	float h = SmoothingRadius;
+
+	// IMPORTANT: Convert smoothing radius from cm to m for kernel calculations
+	// Kernel coefficients (Poly6Coeff) are precomputed with h in meters
+	float h = SmoothingRadius * CM_TO_M;  // Convert to meters
 	float h2 = h * h;
 
 	// XSPH velocity correction accumulator
 	float3 velocityCorrection = float3(0.0f, 0.0f, 0.0f);
 	float weightSum = 0.0f;
 
-	// Get cell coordinate for this particle
+	// Get cell coordinate for this particle (still use cm for spatial hash)
 	int3 centerCell = WorldToCell(pos, CellSize);
-	int cellRadius = (int)ceil(h / CellSize);
+	int cellRadius = (int)ceil(SmoothingRadius / CellSize);  // Use original cm value
 
 	// Iterate over neighboring cells
 	for (int dz = -cellRadius; dz <= cellRadius; ++dz)
@@ -93,13 +96,16 @@ void ApplyViscosityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 					float3 neighborPos = neighbor.PredictedPosition;
 					float3 neighborVel = neighbor.Velocity;
-					float3 r = pos - neighborPos;
-					float r2 = dot(r, r);
+					float3 r_cm = pos - neighborPos;           // Distance in cm
+					float r2_cm = dot(r_cm, r_cm);             // r² in cm²
 
-					// Within smoothing radius?
+					// Convert to meters for kernel calculations
+					float r2 = r2_cm * CM_TO_M_SQ;             // r² in m²
+
+					// Within smoothing radius? (both in m²)
 					if (r2 < h2)
 					{
-						// Poly6 kernel weight
+						// Poly6 kernel weight (using meter units)
 						float w = Poly6Kernel(r2, h2) * Poly6Coeff;
 
 						// Velocity difference weighted by kernel

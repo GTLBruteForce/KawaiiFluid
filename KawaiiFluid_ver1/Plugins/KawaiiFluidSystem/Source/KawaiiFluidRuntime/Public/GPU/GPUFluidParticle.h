@@ -130,7 +130,10 @@ struct FGPUFluidSimulationParams
 	/** Precompute SPH kernel coefficients based on smoothing radius */
 	void PrecomputeKernelCoefficients()
 	{
-		const float h = SmoothingRadius;
+		// IMPORTANT: Convert cm to m for kernel calculations to match CPU physics
+		// Unreal uses centimeters, but SPH kernels are designed for meters
+		constexpr float CmToMeters = 0.01f;
+		const float h = SmoothingRadius * CmToMeters;  // Convert to meters
 		const float h2 = h * h;
 		const float h3 = h2 * h;
 		const float h6 = h3 * h3;

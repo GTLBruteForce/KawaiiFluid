@@ -49,7 +49,10 @@ void ComputeDensityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	float3 pos = particle.PredictedPosition;
-	float h = SmoothingRadius;
+
+	// IMPORTANT: Convert smoothing radius from cm to m for kernel calculations
+	// Kernel coefficients (Poly6Coeff, SpikyCoeff) are precomputed with h in meters
+	float h = SmoothingRadius * CM_TO_M;  // Convert to meters
 	float h2 = h * h;
 
 	// Density accumulator
@@ -59,9 +62,9 @@ void ComputeDensityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3 gradC_i = float3(0.0f, 0.0f, 0.0f);
 	float sumGradC2 = 0.0f;
 
-	// Get cell coordinate for this particle
+	// Get cell coordinate for this particle (still use cm for spatial hash)
 	int3 centerCell = WorldToCell(pos, CellSize);
-	int cellRadius = (int)ceil(h / CellSize);
+	int cellRadius = (int)ceil(SmoothingRadius / CellSize);  // Use original cm value
 
 	// Iterate over neighboring cells
 	for (int dz = -cellRadius; dz <= cellRadius; ++dz)
@@ -85,22 +88,29 @@ void ComputeDensityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 					FGPUFluidParticle neighbor = Particles[neighborIdx];
 					float3 neighborPos = neighbor.PredictedPosition;
-					float3 r = pos - neighborPos;
-					float r2 = dot(r, r);
+					float3 r_cm = pos - neighborPos;           // Distance in cm
+					float r2_cm = dot(r_cm, r_cm);             // r² in cm²
 
-					// Within smoothing radius?
+					// Convert to meters for kernel calculations
+					float r2 = r2_cm * CM_TO_M_SQ;             // r² in m²
+
+					// Within smoothing radius? (both now in m²)
 					if (r2 < h2)
 					{
 						float mass = neighbor.Mass;
 
-						// Poly6 kernel for density
+						// Poly6 kernel for density (using meter units)
 						float w = Poly6Kernel(r2, h2);
 						density += mass * Poly6Coeff * w;
 
 						// Spiky gradient for constraint (only for Lambda calculation)
-						float rLen = sqrt(r2);
+						float rLen = sqrt(r2);                 // Distance in meters
+						float3 r = r_cm * CM_TO_M;             // Convert r vector to meters
 						float3 gradW = SpikyGradient(r, rLen, h);
-						gradW *= SpikyCoeff;
+						// IMPORTANT: Multiply by CM_TO_M to match CPU calculation scale
+						// This ensures sumGradC2 has the same magnitude as CPU, making
+						// the compliance term (epsilon) work correctly in Lambda calculation
+						gradW *= SpikyCoeff * CM_TO_M;
 
 						// Gradient of constraint function
 						float3 gradC_j = -gradW / RestDensity;
