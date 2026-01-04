@@ -467,3 +467,63 @@ struct FGPUFluidSimulationResources
 		return ParticleBuffer != nullptr && ParticleCount > 0;
 	}
 };
+
+//=============================================================================
+// Stream Compaction Structures (Phase 2 - Per-Polygon Collision)
+//=============================================================================
+
+/**
+ * GPU AABB Filter Structure
+ * Used for Stream Compaction to filter particles inside AABBs
+ * 32 bytes, GPU-aligned
+ */
+struct FGPUFilterAABB
+{
+	FVector3f Min;           // 12 bytes
+	float Padding0;          // 4 bytes
+	FVector3f Max;           // 12 bytes
+	int32 InteractionIndex;  // 4 bytes - Which FluidInteractionComponent this belongs to
+
+	FGPUFilterAABB()
+		: Min(FVector3f::ZeroVector)
+		, Padding0(0.0f)
+		, Max(FVector3f::ZeroVector)
+		, InteractionIndex(-1)
+	{
+	}
+
+	FGPUFilterAABB(const FVector3f& InMin, const FVector3f& InMax, int32 InIndex)
+		: Min(InMin)
+		, Padding0(0.0f)
+		, Max(InMax)
+		, InteractionIndex(InIndex)
+	{
+	}
+};
+static_assert(sizeof(FGPUFilterAABB) == 32, "FGPUFilterAABB must be 32 bytes for GPU alignment");
+
+/**
+ * GPU Candidate Particle Structure
+ * Output of Stream Compaction - particles that passed AABB filtering
+ * 48 bytes, GPU-aligned
+ */
+struct FGPUCandidateParticle
+{
+	FVector3f Position;           // 12 bytes
+	uint32 ParticleIndex;         // 4 bytes
+	FVector3f Velocity;           // 12 bytes
+	int32 InteractionIndex;       // 4 bytes - Which AABB this particle matched
+	FVector3f PredictedPosition;  // 12 bytes
+	float Mass;                   // 4 bytes
+
+	FGPUCandidateParticle()
+		: Position(FVector3f::ZeroVector)
+		, ParticleIndex(0)
+		, Velocity(FVector3f::ZeroVector)
+		, InteractionIndex(-1)
+		, PredictedPosition(FVector3f::ZeroVector)
+		, Mass(1.0f)
+	{
+	}
+};
+static_assert(sizeof(FGPUCandidateParticle) == 48, "FGPUCandidateParticle must be 48 bytes for GPU alignment");

@@ -1,0 +1,137 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Prefix Sum (Stream Compaction Step 2)
+// Calculates exclusive prefix sum for compaction indices
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+
+//=============================================================================
+// Shared Shader Parameters (used by multiple entry points)
+// All buffers declared once to avoid redefinition errors
+//=============================================================================
+
+// Input buffer (read-only)
+StructuredBuffer<uint> MarkedFlags;        // Input: 0/1 marks
+
+// Output buffers (read-write, used by multiple shaders)
+RWStructuredBuffer<uint> PrefixSums;       // Prefix sum output
+RWStructuredBuffer<uint> BlockSums;        // Block sums (written by Pass 2a, scanned in Pass 2b, read by Pass 2c)
+
+// Scalar parameters
+int ElementCount;
+int BlockCount;
+
+// Shared memory for block-level scan
+groupshared uint SharedData[THREAD_GROUP_SIZE * 2];
+groupshared uint SharedBlockData[1024];  // Support up to 1024 blocks
+
+//=============================================================================
+// Pass 2a: Block-level Prefix Sum
+// Each block computes local prefix sum and outputs block total
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void PrefixSumBlockCS(uint3 GroupId : SV_GroupID, uint3 GroupThreadId : SV_GroupThreadID, uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint tid = GroupThreadId.x;
+	uint gid = GroupId.x;
+	uint idx = DispatchThreadId.x;
+
+	// Load data into shared memory
+	uint value = (idx < (uint)ElementCount) ? MarkedFlags[idx] : 0;
+	SharedData[tid] = value;
+
+	GroupMemoryBarrierWithGroupSync();
+
+	// Up-sweep (reduce) phase
+	uint offset = 1;
+	for (uint d = THREAD_GROUP_SIZE >> 1; d > 0; d >>= 1)
+	{
+		if (tid < d)
+		{
+			uint ai = offset * (2 * tid + 1) - 1;
+			uint bi = offset * (2 * tid + 2) - 1;
+			SharedData[bi] += SharedData[ai];
+		}
+		offset *= 2;
+		GroupMemoryBarrierWithGroupSync();
+	}
+
+	// Save block sum and clear last element
+	if (tid == 0)
+	{
+		BlockSums[gid] = SharedData[THREAD_GROUP_SIZE - 1];
+		SharedData[THREAD_GROUP_SIZE - 1] = 0;
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+
+	// Down-sweep phase
+	for (uint d2 = 1; d2 < THREAD_GROUP_SIZE; d2 *= 2)
+	{
+		offset >>= 1;
+		if (tid < d2)
+		{
+			uint ai = offset * (2 * tid + 1) - 1;
+			uint bi = offset * (2 * tid + 2) - 1;
+			uint temp = SharedData[ai];
+			SharedData[ai] = SharedData[bi];
+			SharedData[bi] += temp;
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+
+	// Write result (exclusive prefix sum)
+	if (idx < (uint)ElementCount)
+	{
+		PrefixSums[idx] = SharedData[tid];
+	}
+}
+
+//=============================================================================
+// Pass 2b: Scan Block Sums
+// Small number of blocks, can be done in single pass
+// In-place exclusive scan of block sums
+//=============================================================================
+
+[numthreads(1024, 1, 1)]
+void ScanBlockSumsCS(uint3 GroupThreadId : SV_GroupThreadID)
+{
+	uint tid = GroupThreadId.x;
+
+	// Load block sum into shared memory
+	uint value = (tid < (uint)BlockCount) ? BlockSums[tid] : 0;
+	SharedBlockData[tid] = value;
+
+	GroupMemoryBarrierWithGroupSync();
+
+	// Simple sequential exclusive scan (small data, single thread is fine)
+	if (tid == 0)
+	{
+		uint sum = 0;
+		for (int i = 0; i < BlockCount; i++)
+		{
+			uint temp = SharedBlockData[i];
+			BlockSums[i] = sum;  // Write exclusive prefix sum back to same buffer
+			sum += temp;
+		}
+	}
+}
+
+//=============================================================================
+// Pass 2c: Add Block Offsets
+// Add block offset to each element's prefix sum
+// BlockSums now contains exclusive prefix sum of block totals (from Pass 2b)
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void AddBlockOffsetsCS(uint3 GroupId : SV_GroupID, uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	uint gid = GroupId.x;
+
+	if (idx < (uint)ElementCount)
+	{
+		PrefixSums[idx] += BlockSums[gid];
+	}
+}

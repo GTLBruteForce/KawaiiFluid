@@ -1,0 +1,82 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - AABB Mark Pass (Stream Compaction Step 1)
+// Marks particles that are inside any of the filter AABBs
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// AABB Structure
+//=============================================================================
+
+struct FFilterAABB
+{
+	float3 Min;
+	float Padding0;
+	float3 Max;
+	int InteractionIndex;  // Which FluidInteractionComponent this belongs to
+};
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+StructuredBuffer<FFilterAABB> FilterAABBs;
+RWStructuredBuffer<uint> MarkedFlags;      // 0 or 1 for each particle
+RWStructuredBuffer<int> MarkedAABBIndex;   // Which AABB the particle is in (-1 if none)
+
+int ParticleCount;
+int NumAABBs;
+
+//=============================================================================
+// Helper Functions
+//=============================================================================
+
+bool IsInsideAABB(float3 pos, FFilterAABB aabb)
+{
+	return pos.x >= aabb.Min.x && pos.x <= aabb.Max.x &&
+	       pos.y >= aabb.Min.y && pos.y <= aabb.Max.y &&
+	       pos.z >= aabb.Min.z && pos.z <= aabb.Max.z;
+}
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void AABBMarkCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	FGPUFluidParticle particle = Particles[idx];
+	float3 pos = particle.Position;
+
+	// Skip already attached particles (they're handled differently)
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+	{
+		MarkedFlags[idx] = 0;
+		MarkedAABBIndex[idx] = -1;
+		return;
+	}
+
+	// Check against all AABBs
+	for (int i = 0; i < NumAABBs; i++)
+	{
+		if (IsInsideAABB(pos, FilterAABBs[i]))
+		{
+			MarkedFlags[idx] = 1;
+			MarkedAABBIndex[idx] = FilterAABBs[i].InteractionIndex;
+			return;
+		}
+	}
+
+	// Not inside any AABB
+	MarkedFlags[idx] = 0;
+	MarkedAABBIndex[idx] = -1;
+}

@@ -1,0 +1,103 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Compact Pass (Stream Compaction Step 3)
+// Gathers marked particles into a compact output buffer
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// Candidate Particle Structure (for CPU Per-polygon processing)
+//=============================================================================
+
+struct FCandidateParticle
+{
+	float3 Position;
+	uint ParticleIndex;          // Original index in particle buffer
+	float3 Velocity;
+	int InteractionIndex;        // Which FluidInteractionComponent
+	float3 PredictedPosition;
+	float Mass;
+};
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+StructuredBuffer<uint> MarkedFlags;        // 0/1 marks from Pass 1
+StructuredBuffer<uint> PrefixSums;         // Output indices from Pass 2
+StructuredBuffer<int> MarkedAABBIndex;     // AABB index from Pass 1
+
+RWStructuredBuffer<FCandidateParticle> CompactedParticles;  // Compacted output
+
+int ParticleCount;
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void CompactCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	// Only process marked particles
+	if (MarkedFlags[idx] == 0)
+	{
+		return;
+	}
+
+	// Get output index from prefix sum
+	uint outputIdx = PrefixSums[idx];
+
+	// Copy particle data to candidate buffer
+	FGPUFluidParticle particle = Particles[idx];
+
+	FCandidateParticle candidate;
+	candidate.Position = particle.Position;
+	candidate.ParticleIndex = idx;
+	candidate.Velocity = particle.Velocity;
+	candidate.InteractionIndex = MarkedAABBIndex[idx];
+	candidate.PredictedPosition = particle.PredictedPosition;
+	candidate.Mass = particle.Mass;
+
+	CompactedParticles[outputIdx] = candidate;
+
+	// Update count (only first marked particle writes this)
+	// Actually, we can get count from BlockOffsets[NumBlocks] after prefix sum
+	// But for safety, use atomic on first element
+	if (idx == 0 || (idx > 0 && MarkedFlags[idx - 1] == 0 && MarkedFlags[idx] == 1))
+	{
+		// This is approximate - real count comes from prefix sum total
+	}
+}
+
+//=============================================================================
+// Write Total Count
+// Called after compact to store the total candidate count
+// Total = PrefixSums[last] + MarkedFlags[last] (exclusive prefix sum + last element)
+//=============================================================================
+
+StructuredBuffer<uint> MarkedFlagsForCount;
+StructuredBuffer<uint> PrefixSumsForCount;
+RWStructuredBuffer<uint> TotalCount;
+
+[numthreads(1, 1, 1)]
+void WriteTotalCountCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	// Total count = exclusive prefix sum at last element + marked flag at last element
+	if (ParticleCount > 0)
+	{
+		uint lastIdx = (uint)ParticleCount - 1;
+		TotalCount[0] = PrefixSumsForCount[lastIdx] + MarkedFlagsForCount[lastIdx];
+	}
+	else
+	{
+		TotalCount[0] = 0;
+	}
+}

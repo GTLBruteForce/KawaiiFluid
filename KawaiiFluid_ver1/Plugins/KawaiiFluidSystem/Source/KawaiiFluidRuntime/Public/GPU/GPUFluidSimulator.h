@@ -192,6 +192,36 @@ public:
 	}
 
 	//=============================================================================
+	// Stream Compaction (Phase 2 - Per-Polygon Collision)
+	// GPU AABB filtering using parallel prefix sum
+	//=============================================================================
+
+	/**
+	 * Execute AABB filtering on GPU
+	 * Filters particles inside any of the provided AABBs using Stream Compaction
+	 * @param FilterAABBs - Array of AABBs to filter against
+	 */
+	void ExecuteAABBFiltering(const TArray<FGPUFilterAABB>& FilterAABBs);
+
+	/**
+	 * Get filtered candidate particles (GPU→CPU readback)
+	 * Call after ExecuteAABBFiltering to get results
+	 * @param OutCandidates - Output array of candidate particles
+	 * @return true if candidates are available
+	 */
+	bool GetFilteredCandidates(TArray<FGPUCandidateParticle>& OutCandidates);
+
+	/**
+	 * Get count of filtered candidates
+	 */
+	int32 GetFilteredCandidateCount() const { return FilteredCandidateCount; }
+
+	/**
+	 * Check if filtered candidates are available
+	 */
+	bool HasFilteredCandidates() const { return bHasFilteredCandidates; }
+
+	//=============================================================================
 	// GPU Particle Spawning (Thread-Safe)
 	// CPU sends spawn requests, GPU creates particles via atomic counter
 	// This eliminates race conditions between game thread and render thread
@@ -450,6 +480,57 @@ private:
 
 	// Flag: spawn requests are pending
 	std::atomic<bool> bHasPendingSpawnRequests{false};
+
+	//=============================================================================
+	// Stream Compaction Buffers (Phase 2 - Per-Polygon Collision)
+	//=============================================================================
+
+	// Marked flags buffer (0 or 1 per particle)
+	FBufferRHIRef MarkedFlagsBufferRHI;
+	FShaderResourceViewRHIRef MarkedFlagsSRV;
+	FUnorderedAccessViewRHIRef MarkedFlagsUAV;
+
+	// Marked AABB index buffer (-1 or interaction index per particle)
+	FBufferRHIRef MarkedAABBIndexBufferRHI;
+	FShaderResourceViewRHIRef MarkedAABBIndexSRV;
+	FUnorderedAccessViewRHIRef MarkedAABBIndexUAV;
+
+	// Prefix sum buffer
+	FBufferRHIRef PrefixSumsBufferRHI;
+	FShaderResourceViewRHIRef PrefixSumsSRV;
+	FUnorderedAccessViewRHIRef PrefixSumsUAV;
+
+	// Block sums buffer for multi-block prefix sum
+	FBufferRHIRef BlockSumsBufferRHI;
+	FShaderResourceViewRHIRef BlockSumsSRV;
+	FUnorderedAccessViewRHIRef BlockSumsUAV;
+
+	// Compacted candidates buffer
+	FBufferRHIRef CompactedCandidatesBufferRHI;
+	FUnorderedAccessViewRHIRef CompactedCandidatesUAV;
+
+	// Total count buffer (single uint)
+	FBufferRHIRef TotalCountBufferRHI;
+	FUnorderedAccessViewRHIRef TotalCountUAV;
+
+	// Filter AABBs buffer (uploaded from CPU each frame)
+	FBufferRHIRef FilterAABBsBufferRHI;
+	FShaderResourceViewRHIRef FilterAABBsSRV;
+
+	// Staging buffers for GPU→CPU readback
+	FBufferRHIRef TotalCountStagingBufferRHI;
+	FBufferRHIRef CandidatesStagingBufferRHI;
+
+	// Stream compaction state
+	int32 FilteredCandidateCount = 0;
+	bool bHasFilteredCandidates = false;
+	int32 CurrentFilterAABBCount = 0;
+	bool bStreamCompactionBuffersAllocated = false;
+
+	// Helper methods for stream compaction
+	void AllocateStreamCompactionBuffers(FRHICommandListImmediate& RHICmdList);
+	void ReleaseStreamCompactionBuffers();
+	void DispatchStreamCompactionShaders(FRHICommandListImmediate& RHICmdList, int32 InParticleCount, int32 InNumAABBs, FShaderResourceViewRHIRef InParticleSRV);
 };
 
 /**

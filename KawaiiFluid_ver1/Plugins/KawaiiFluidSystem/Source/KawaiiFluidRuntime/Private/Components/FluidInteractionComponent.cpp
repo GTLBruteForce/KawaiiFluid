@@ -5,6 +5,8 @@
 #include "Core/SpatialHash.h"
 #include "Collision/MeshFluidCollider.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "DrawDebugHelpers.h"
 
 UFluidInteractionComponent::UFluidInteractionComponent()
 {
@@ -104,6 +106,25 @@ void UFluidInteractionComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	}
 
 	// 본 레벨 추적은 FluidSimulator::UpdateAttachedParticlePositions()에서 처리
+
+	// Per-Polygon Collision AABB 디버그 시각화
+	if (bUsePerPolygonCollision && bDrawPerPolygonAABB)
+	{
+		FBox AABB = GetPerPolygonFilterAABB();
+		if (AABB.IsValid)
+		{
+			DrawDebugBox(
+				GetWorld(),
+				AABB.GetCenter(),
+				AABB.GetExtent(),
+				FColor::Cyan,
+				false,  // bPersistentLines
+				-1.0f,  // LifeTime (매 프레임 갱신)
+				0,      // DepthPriority
+				2.0f    // Thickness
+			);
+		}
+	}
 }
 
 void UFluidInteractionComponent::CreateAutoCollider()
@@ -319,4 +340,34 @@ void UFluidInteractionComponent::DetectCollidingParticles()
 	}
 
 	CollidingParticleCount = Count;
+}
+
+FBox UFluidInteractionComponent::GetPerPolygonFilterAABB() const
+{
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return FBox(ForceInit);
+	}
+
+	FBox ActorBounds(ForceInit);
+
+	// SkeletalMeshComponent가 있으면 그 바운딩 박스 사용 (더 정확함)
+	if (USkeletalMeshComponent* SkelMesh = Owner->FindComponentByClass<USkeletalMeshComponent>())
+	{
+		ActorBounds = SkelMesh->Bounds.GetBox();
+	}
+	else
+	{
+		// 없으면 Actor 전체 바운딩 박스 사용
+		ActorBounds = Owner->GetComponentsBoundingBox(true);
+	}
+
+	// 패딩 적용
+	if (PerPolygonAABBPadding > 0.0f && ActorBounds.IsValid)
+	{
+		ActorBounds = ActorBounds.ExpandBy(PerPolygonAABBPadding);
+	}
+
+	return ActorBounds;
 }

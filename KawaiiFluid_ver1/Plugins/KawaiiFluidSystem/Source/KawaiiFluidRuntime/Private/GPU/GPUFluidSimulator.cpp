@@ -11,6 +11,7 @@
 #include "RenderingThread.h"
 #include "GlobalShader.h"
 #include "ShaderParameterStruct.h"
+#include "PipelineStateCache.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogGPUFluidSimulator, Log, All);
 DEFINE_LOG_CATEGORY(LogGPUFluidSimulator);
@@ -820,8 +821,7 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		CurrentParticleCount = FMath::Min(ExpectedParticleCount, MaxParticleCount);
 		PreviousParticleCount = CurrentParticleCount;
 
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("GPU Buffer: GPU Spawn path - spawned %d particles (existing: %d, total: %d)"),
-			SpawnCount, ExistingCount, CurrentParticleCount);
+		//UE_LOG(LogGPUFluidSimulator, Log, TEXT("GPU Buffer: GPU Spawn path - spawned %d particles (existing: %d, total: %d)"),SpawnCount, ExistingCount, CurrentParticleCount);
 
 		// Clear spawn requests
 		ActiveSpawnRequests.Empty();
@@ -1404,8 +1404,7 @@ void FGPUFluidSimulator::AddSpawnParticlesPass(
 	// Update next particle ID (atomic increment)
 	NextParticleID.fetch_add(SpawnRequests.Num());
 
-	UE_LOG(LogGPUFluidSimulator, Log, TEXT("SpawnParticlesPass: Spawned %d particles (NextID: %d)"),
-		SpawnRequests.Num(), NextParticleID.load());
+	UE_LOG(LogGPUFluidSimulator, Log, TEXT("SpawnParticlesPass: Spawned %d particles (NextID: %d)"), SpawnRequests.Num(), NextParticleID.load());
 }
 
 //=============================================================================
@@ -1432,4 +1431,385 @@ void FGPUFluidSimulationTask::Execute(
 		SubstepParams.SubstepIndex = i;
 		Simulator->SimulateSubstep(SubstepParams);
 	}
+}
+
+//=============================================================================
+// Stream Compaction Implementation (Phase 2 - Per-Polygon Collision)
+//=============================================================================
+
+void FGPUFluidSimulator::AllocateStreamCompactionBuffers(FRHICommandListImmediate& RHICmdList)
+{
+	if (bStreamCompactionBuffersAllocated || MaxParticleCount <= 0)
+	{
+		return;
+	}
+
+	const int32 BlockSize = 256;
+	const int32 NumBlocks = FMath::DivideAndRoundUp(MaxParticleCount, BlockSize);
+
+	// Marked flags buffer (uint per particle)
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("StreamCompaction_MarkedFlags"));
+		MarkedFlagsBufferRHI = RHICmdList.CreateStructuredBuffer(
+			sizeof(uint32), MaxParticleCount * sizeof(uint32),
+			BUF_UnorderedAccess | BUF_ShaderResource, CreateInfo);
+		MarkedFlagsSRV = RHICmdList.CreateShaderResourceView(MarkedFlagsBufferRHI);
+		MarkedFlagsUAV = RHICmdList.CreateUnorderedAccessView(MarkedFlagsBufferRHI, false, false);
+	}
+
+	// Marked AABB index buffer (int per particle)
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("StreamCompaction_MarkedAABBIndex"));
+		MarkedAABBIndexBufferRHI = RHICmdList.CreateStructuredBuffer(
+			sizeof(int32), MaxParticleCount * sizeof(int32),
+			BUF_UnorderedAccess | BUF_ShaderResource, CreateInfo);
+		MarkedAABBIndexSRV = RHICmdList.CreateShaderResourceView(MarkedAABBIndexBufferRHI);
+		MarkedAABBIndexUAV = RHICmdList.CreateUnorderedAccessView(MarkedAABBIndexBufferRHI, false, false);
+	}
+
+	// Prefix sums buffer
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("StreamCompaction_PrefixSums"));
+		PrefixSumsBufferRHI = RHICmdList.CreateStructuredBuffer(
+			sizeof(uint32), MaxParticleCount * sizeof(uint32),
+			BUF_UnorderedAccess | BUF_ShaderResource, CreateInfo);
+		PrefixSumsSRV = RHICmdList.CreateShaderResourceView(PrefixSumsBufferRHI);
+		PrefixSumsUAV = RHICmdList.CreateUnorderedAccessView(PrefixSumsBufferRHI, false, false);
+	}
+
+	// Block sums buffer
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("StreamCompaction_BlockSums"));
+		BlockSumsBufferRHI = RHICmdList.CreateStructuredBuffer(
+			sizeof(uint32), NumBlocks * sizeof(uint32),
+			BUF_UnorderedAccess | BUF_ShaderResource, CreateInfo);
+		BlockSumsSRV = RHICmdList.CreateShaderResourceView(BlockSumsBufferRHI);
+		BlockSumsUAV = RHICmdList.CreateUnorderedAccessView(BlockSumsBufferRHI, false, false);
+	}
+
+	// Compacted candidates buffer (worst case: all particles)
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("StreamCompaction_CompactedCandidates"));
+		CompactedCandidatesBufferRHI = RHICmdList.CreateStructuredBuffer(
+			sizeof(FGPUCandidateParticle), MaxParticleCount * sizeof(FGPUCandidateParticle),
+			BUF_UnorderedAccess | BUF_ShaderResource, CreateInfo);
+		CompactedCandidatesUAV = RHICmdList.CreateUnorderedAccessView(CompactedCandidatesBufferRHI, false, false);
+	}
+
+	// Total count buffer (single uint)
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("StreamCompaction_TotalCount"));
+		TotalCountBufferRHI = RHICmdList.CreateStructuredBuffer(
+			sizeof(uint32), sizeof(uint32),
+			BUF_UnorderedAccess | BUF_ShaderResource, CreateInfo);
+		TotalCountUAV = RHICmdList.CreateUnorderedAccessView(TotalCountBufferRHI, false, false);
+	}
+
+	// Staging buffers for readback
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("StreamCompaction_TotalCountStaging"));
+		TotalCountStagingBufferRHI = RHICmdList.CreateStructuredBuffer(
+			sizeof(uint32), sizeof(uint32),
+			BUF_None, ERHIAccess::CopyDest, CreateInfo);
+	}
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("StreamCompaction_CandidatesStaging"));
+		CandidatesStagingBufferRHI = RHICmdList.CreateStructuredBuffer(
+			sizeof(FGPUCandidateParticle), MaxParticleCount * sizeof(FGPUCandidateParticle),
+			BUF_None, ERHIAccess::CopyDest, CreateInfo);
+	}
+
+	bStreamCompactionBuffersAllocated = true;
+	UE_LOG(LogGPUFluidSimulator, Log, TEXT("Stream Compaction buffers allocated (MaxParticles=%d, NumBlocks=%d)"), MaxParticleCount, NumBlocks);
+}
+
+void FGPUFluidSimulator::ReleaseStreamCompactionBuffers()
+{
+	MarkedFlagsBufferRHI.SafeRelease();
+	MarkedFlagsSRV.SafeRelease();
+	MarkedFlagsUAV.SafeRelease();
+
+	MarkedAABBIndexBufferRHI.SafeRelease();
+	MarkedAABBIndexSRV.SafeRelease();
+	MarkedAABBIndexUAV.SafeRelease();
+
+	PrefixSumsBufferRHI.SafeRelease();
+	PrefixSumsSRV.SafeRelease();
+	PrefixSumsUAV.SafeRelease();
+
+	BlockSumsBufferRHI.SafeRelease();
+	BlockSumsSRV.SafeRelease();
+	BlockSumsUAV.SafeRelease();
+
+	CompactedCandidatesBufferRHI.SafeRelease();
+	CompactedCandidatesUAV.SafeRelease();
+
+	TotalCountBufferRHI.SafeRelease();
+	TotalCountUAV.SafeRelease();
+
+	FilterAABBsBufferRHI.SafeRelease();
+	FilterAABBsSRV.SafeRelease();
+
+	TotalCountStagingBufferRHI.SafeRelease();
+	CandidatesStagingBufferRHI.SafeRelease();
+
+	bStreamCompactionBuffersAllocated = false;
+	bHasFilteredCandidates = false;
+	FilteredCandidateCount = 0;
+}
+
+void FGPUFluidSimulator::ExecuteAABBFiltering(const TArray<FGPUFilterAABB>& FilterAABBs)
+{
+	if (!bIsInitialized || FilterAABBs.Num() == 0 || CurrentParticleCount == 0)
+	{
+		bHasFilteredCandidates = false;
+		FilteredCandidateCount = 0;
+		return;
+	}
+
+	// Make a copy of the filter AABBs for the render thread
+	TArray<FGPUFilterAABB> FilterAABBsCopy = FilterAABBs;
+	FGPUFluidSimulator* Self = this;
+
+	ENQUEUE_RENDER_COMMAND(ExecuteAABBFiltering)(
+		[Self, FilterAABBsCopy](FRHICommandListImmediate& RHICmdList)
+		{
+			// Allocate buffers if needed
+			if (!Self->bStreamCompactionBuffersAllocated)
+			{
+				Self->AllocateStreamCompactionBuffers(RHICmdList);
+			}
+
+			// Upload filter AABBs
+			const int32 NumAABBs = FilterAABBsCopy.Num();
+			if (!Self->FilterAABBsBufferRHI.IsValid() || Self->CurrentFilterAABBCount < NumAABBs)
+			{
+				Self->FilterAABBsBufferRHI.SafeRelease();
+				Self->FilterAABBsSRV.SafeRelease();
+
+				FRHIResourceCreateInfo CreateInfo(TEXT("StreamCompaction_FilterAABBs"));
+				Self->FilterAABBsBufferRHI = RHICmdList.CreateStructuredBuffer(
+					sizeof(FGPUFilterAABB), NumAABBs * sizeof(FGPUFilterAABB),
+					BUF_ShaderResource, CreateInfo);
+				Self->FilterAABBsSRV = RHICmdList.CreateShaderResourceView(Self->FilterAABBsBufferRHI);
+				Self->CurrentFilterAABBCount = NumAABBs;
+			}
+
+			// Upload AABB data
+			void* AABBData = RHICmdList.LockBuffer(Self->FilterAABBsBufferRHI, 0,
+				NumAABBs * sizeof(FGPUFilterAABB), RLM_WriteOnly);
+			FMemory::Memcpy(AABBData, FilterAABBsCopy.GetData(), NumAABBs * sizeof(FGPUFilterAABB));
+			RHICmdList.UnlockBuffer(Self->FilterAABBsBufferRHI);
+
+			// Get the correct particle SRV - use PersistentParticleBuffer if available (GPU simulation mode)
+			FShaderResourceViewRHIRef ParticleSRVToUse = Self->ParticleSRV;
+			if (Self->PersistentParticleBuffer.IsValid())
+			{
+				FBufferRHIRef PersistentRHI = Self->PersistentParticleBuffer->GetRHI();
+				if (PersistentRHI.IsValid())
+				{
+					ParticleSRVToUse = RHICmdList.CreateShaderResourceView(PersistentRHI);
+					UE_LOG(LogGPUFluidSimulator, Log, TEXT("AABB Filtering: Using PersistentParticleBuffer SRV (GPU simulation mode)"));
+				}
+			}
+			else
+			{
+				UE_LOG(LogGPUFluidSimulator, Warning, TEXT("AABB Filtering: PersistentParticleBuffer not valid, using fallback ParticleSRV"));
+			}
+
+			// Execute stream compaction using direct RHI dispatch
+			Self->DispatchStreamCompactionShaders(RHICmdList, Self->CurrentParticleCount, NumAABBs, ParticleSRVToUse);
+		}
+	);
+}
+
+void FGPUFluidSimulator::DispatchStreamCompactionShaders(FRHICommandListImmediate& RHICmdList, int32 ParticleCount, int32 NumAABBs, FShaderResourceViewRHIRef InParticleSRV)
+{
+	const int32 BlockSize = 256;
+	const int32 NumBlocks = FMath::DivideAndRoundUp(ParticleCount, BlockSize);
+
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+
+	// Pass 1: AABB Mark - Mark particles that are inside any AABB
+	{
+		TShaderMapRef<FAABBMarkCS> ComputeShader(ShaderMap);
+		FRHIComputeShader* ShaderRHI = ComputeShader.GetComputeShader();
+		SetComputePipelineState(RHICmdList, ShaderRHI);
+
+		FAABBMarkCS::FParameters Parameters;
+		Parameters.Particles = InParticleSRV;  // Use the passed SRV (from PersistentParticleBuffer)
+		Parameters.FilterAABBs = FilterAABBsSRV;
+		Parameters.MarkedFlags = MarkedFlagsUAV;
+		Parameters.MarkedAABBIndex = MarkedAABBIndexUAV;
+		Parameters.ParticleCount = ParticleCount;
+		Parameters.NumAABBs = NumAABBs;
+		SetShaderParameters(RHICmdList, ComputeShader, ShaderRHI, Parameters);
+
+		const int32 NumGroups = FMath::DivideAndRoundUp(ParticleCount, FAABBMarkCS::ThreadGroupSize);
+		RHICmdList.DispatchComputeShader(NumGroups, 1, 1);
+
+		UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
+	}
+
+	// UAV barrier between passes
+	RHICmdList.Transition(FRHITransitionInfo(MarkedFlagsBufferRHI, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute));
+
+	// Pass 2a: Prefix Sum Block - Blelloch scan within each block
+	{
+		TShaderMapRef<FPrefixSumBlockCS> ComputeShader(ShaderMap);
+		FRHIComputeShader* ShaderRHI = ComputeShader.GetComputeShader();
+		SetComputePipelineState(RHICmdList, ShaderRHI);
+
+		FPrefixSumBlockCS::FParameters Parameters;
+		Parameters.MarkedFlags = MarkedFlagsSRV;
+		Parameters.PrefixSums = PrefixSumsUAV;
+		Parameters.BlockSums = BlockSumsUAV;
+		Parameters.ElementCount = ParticleCount;
+		SetShaderParameters(RHICmdList, ComputeShader, ShaderRHI, Parameters);
+
+		RHICmdList.DispatchComputeShader(NumBlocks, 1, 1);
+
+		UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
+	}
+
+	// UAV barrier
+	RHICmdList.Transition(FRHITransitionInfo(BlockSumsBufferRHI, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute));
+
+	// Pass 2b: Scan Block Sums - Sequential scan of block sums
+	{
+		TShaderMapRef<FScanBlockSumsCS> ComputeShader(ShaderMap);
+		FRHIComputeShader* ShaderRHI = ComputeShader.GetComputeShader();
+		SetComputePipelineState(RHICmdList, ShaderRHI);
+
+		FScanBlockSumsCS::FParameters Parameters;
+		Parameters.BlockSums = BlockSumsUAV;
+		Parameters.BlockCount = NumBlocks;
+		SetShaderParameters(RHICmdList, ComputeShader, ShaderRHI, Parameters);
+
+		RHICmdList.DispatchComputeShader(1, 1, 1);
+
+		UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
+	}
+
+	// UAV barrier
+	RHICmdList.Transition(FRHITransitionInfo(BlockSumsBufferRHI, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute));
+
+	// Pass 2c: Add Block Offsets - Add scanned block sums to each element
+	{
+		TShaderMapRef<FAddBlockOffsetsCS> ComputeShader(ShaderMap);
+		FRHIComputeShader* ShaderRHI = ComputeShader.GetComputeShader();
+		SetComputePipelineState(RHICmdList, ShaderRHI);
+
+		FAddBlockOffsetsCS::FParameters Parameters;
+		Parameters.PrefixSums = PrefixSumsUAV;
+		Parameters.BlockSums = BlockSumsUAV;
+		Parameters.ElementCount = ParticleCount;
+		SetShaderParameters(RHICmdList, ComputeShader, ShaderRHI, Parameters);
+
+		RHICmdList.DispatchComputeShader(NumBlocks, 1, 1);
+
+		UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
+	}
+
+	// UAV barrier
+	RHICmdList.Transition(FRHITransitionInfo(PrefixSumsBufferRHI, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute));
+
+	// Pass 3: Compact - Write marked particles to compacted output
+	{
+		TShaderMapRef<FCompactCS> ComputeShader(ShaderMap);
+		FRHIComputeShader* ShaderRHI = ComputeShader.GetComputeShader();
+		SetComputePipelineState(RHICmdList, ShaderRHI);
+
+		FCompactCS::FParameters Parameters;
+		Parameters.Particles = ParticleSRV;
+		Parameters.MarkedFlags = MarkedFlagsSRV;
+		Parameters.PrefixSums = PrefixSumsSRV;
+		Parameters.MarkedAABBIndex = MarkedAABBIndexSRV;
+		Parameters.CompactedParticles = CompactedCandidatesUAV;
+		Parameters.ParticleCount = ParticleCount;
+		SetShaderParameters(RHICmdList, ComputeShader, ShaderRHI, Parameters);
+
+		const int32 NumGroups = FMath::DivideAndRoundUp(ParticleCount, FCompactCS::ThreadGroupSize);
+		RHICmdList.DispatchComputeShader(NumGroups, 1, 1);
+
+		UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
+	}
+
+	// UAV barrier
+	RHICmdList.Transition(FRHITransitionInfo(CompactedCandidatesBufferRHI, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute));
+
+	// Pass 4: Write Total Count
+	{
+		TShaderMapRef<FWriteTotalCountCS> ComputeShader(ShaderMap);
+		FRHIComputeShader* ShaderRHI = ComputeShader.GetComputeShader();
+		SetComputePipelineState(RHICmdList, ShaderRHI);
+
+		FWriteTotalCountCS::FParameters Parameters;
+		Parameters.MarkedFlagsForCount = MarkedFlagsSRV;
+		Parameters.PrefixSumsForCount = PrefixSumsSRV;
+		Parameters.TotalCount = TotalCountUAV;
+		Parameters.ParticleCount = ParticleCount;
+		SetShaderParameters(RHICmdList, ComputeShader, ShaderRHI, Parameters);
+
+		RHICmdList.DispatchComputeShader(1, 1, 1);
+
+		UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
+	}
+
+	// Readback total count
+	RHICmdList.Transition(FRHITransitionInfo(TotalCountBufferRHI, ERHIAccess::UAVCompute, ERHIAccess::CopySrc));
+	RHICmdList.CopyBufferRegion(TotalCountStagingBufferRHI, 0, TotalCountBufferRHI, 0, sizeof(uint32));
+
+	uint32* CountPtr = (uint32*)RHICmdList.LockBuffer(TotalCountStagingBufferRHI, 0, sizeof(uint32), RLM_ReadOnly);
+	FilteredCandidateCount = static_cast<int32>(*CountPtr);
+	RHICmdList.UnlockBuffer(TotalCountStagingBufferRHI);
+
+	bHasFilteredCandidates = (FilteredCandidateCount > 0);
+
+	UE_LOG(LogGPUFluidSimulator, Log, TEXT("AABB Filtering complete: %d/%d particles matched %d AABBs"),
+		FilteredCandidateCount, ParticleCount, NumAABBs);
+}
+
+bool FGPUFluidSimulator::GetFilteredCandidates(TArray<FGPUCandidateParticle>& OutCandidates)
+{
+	if (!bHasFilteredCandidates || FilteredCandidateCount == 0 || !CompactedCandidatesBufferRHI.IsValid())
+	{
+		OutCandidates.Empty();
+		return false;
+	}
+
+	FGPUFluidSimulator* Self = this;
+	TArray<FGPUCandidateParticle>* OutPtr = &OutCandidates;
+	const int32 Count = FilteredCandidateCount;
+
+	// Synchronous readback (blocks until GPU is ready)
+	ENQUEUE_RENDER_COMMAND(GetFilteredCandidates)(
+		[Self, OutPtr, Count](FRHICommandListImmediate& RHICmdList)
+		{
+			if (!Self->CompactedCandidatesBufferRHI.IsValid())
+			{
+				return;
+			}
+
+			const uint32 CopySize = Count * sizeof(FGPUCandidateParticle);
+
+			// Transition buffer for copy
+			RHICmdList.Transition(FRHITransitionInfo(Self->CompactedCandidatesBufferRHI, ERHIAccess::UAVCompute, ERHIAccess::CopySrc));
+
+			// Copy to staging buffer
+			RHICmdList.CopyBufferRegion(Self->CandidatesStagingBufferRHI, 0, Self->CompactedCandidatesBufferRHI, 0, CopySize);
+
+			// Read back
+			OutPtr->SetNumUninitialized(Count);
+			FGPUCandidateParticle* DataPtr = (FGPUCandidateParticle*)RHICmdList.LockBuffer(
+				Self->CandidatesStagingBufferRHI, 0, CopySize, RLM_ReadOnly);
+			FMemory::Memcpy(OutPtr->GetData(), DataPtr, CopySize);
+			RHICmdList.UnlockBuffer(Self->CandidatesStagingBufferRHI);
+		}
+	);
+
+	// Wait for render command to complete
+	FlushRenderingCommands();
+
+	return OutCandidates.Num() > 0;
 }

@@ -50,10 +50,7 @@ void FKawaiiMetaballRayMarchPipeline::ProcessPendingBoundsReadback()
 
 					// Debug log - every frame for debugging
 					FVector3f Size = ReadMax - ReadMin;
-					UE_LOG(LogTemp, Log, TEXT("[Bounds Readback] Min(%.1f, %.1f, %.1f) Max(%.1f, %.1f, %.1f) Size(%.1f, %.1f, %.1f)"),
-						ReadMin.X, ReadMin.Y, ReadMin.Z,
-						ReadMax.X, ReadMax.Y, ReadMax.Z,
-						Size.X, Size.Y, Size.Z);
+					//UE_LOG(LogTemp, Log, TEXT("[Bounds Readback] Min(%.1f, %.1f, %.1f) Max(%.1f, %.1f, %.1f) Size(%.1f, %.1f, %.1f)"),ReadMin.X, ReadMin.Y, ReadMin.Z,ReadMax.X, ReadMax.Y, ReadMax.Z,Size.X, Size.Y, Size.Z);
 				}
 				else
 				{
@@ -85,7 +82,7 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 	}
 	CallsThisFrame++;
 
-	UE_LOG(LogTemp, Warning, TEXT("=== PrepareParticleBuffer [Frame %llu, Call #%d] ==="), CurrentFrame, CallsThisFrame);
+	//UE_LOG(LogTemp, Warning, TEXT("=== PrepareParticleBuffer [Frame %llu, Call #%d] ==="), CurrentFrame, CallsThisFrame);
 	// ====================================
 
 	// Process readback from previous frame first
@@ -115,8 +112,7 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 			TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer = GPUSimulator->GetPersistentParticleBuffer();
 			const int32 PhysicsParticleCount = GPUSimulator->GetPersistentParticleCount();
 
-			UE_LOG(LogTemp, Warning, TEXT("  GPU Simulator: PooledValid=%d, ParticleCount=%d"),
-				PhysicsPooledBuffer.IsValid() ? 1 : 0, PhysicsParticleCount);
+			//UE_LOG(LogTemp, Warning, TEXT("  GPU Simulator: PooledValid=%d, ParticleCount=%d"),PhysicsPooledBuffer.IsValid() ? 1 : 0, PhysicsParticleCount);
 
 			if (PhysicsPooledBuffer.IsValid() && PhysicsParticleCount > 0)
 			{
@@ -147,8 +143,7 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 				AverageParticleRadius = ParticleRadius;
 				bUsingGPUBuffer = true;
 
-				UE_LOG(LogTemp, Warning, TEXT("  >>> CONVERTED GPU PHYSICS → RENDER (%d particles, radius: %.2f)"),
-					TotalParticleCount, ParticleRadius);
+				//UE_LOG(LogTemp, Warning, TEXT("  >>> CONVERTED GPU PHYSICS → RENDER (%d particles, radius: %.2f)"),TotalParticleCount, ParticleRadius);
 				break; // Use first valid GPU simulator (batching not supported in GPU mode yet)
 			}
 			else

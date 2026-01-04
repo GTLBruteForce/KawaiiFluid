@@ -384,6 +384,53 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 	// Step 4: Run GPU simulation (async - results available next frame)
 	GPUSimulator->SimulateSubstep(GPUParams);
 
+	// =====================================================
+	// Phase 2: AABB Filtering for Per-Polygon Collision
+	// Filter particles inside Per-Polygon Collision enabled AABBs
+	// =====================================================
+	{
+		TArray<FGPUFilterAABB> FilterAABBs;
+
+		for (int32 i = 0; i < Params.InteractionComponents.Num(); ++i)
+		{
+			UFluidInteractionComponent* Interaction = Params.InteractionComponents[i];
+			if (Interaction && Interaction->IsPerPolygonCollisionEnabled())
+			{
+				FBox AABB = Interaction->GetPerPolygonFilterAABB();
+				if (AABB.IsValid)
+				{
+					FGPUFilterAABB FilterAABB;
+					FilterAABB.Min = FVector3f(AABB.Min);
+					FilterAABB.Max = FVector3f(AABB.Max);
+					FilterAABB.InteractionIndex = i;
+					FilterAABBs.Add(FilterAABB);
+				}
+			}
+		}
+
+		if (FilterAABBs.Num() > 0)
+		{
+			// Debug: Log each AABB coordinates (only occasionally to reduce spam)
+			static int32 DebugFrameCounter = 0;
+			if (++DebugFrameCounter % 60 == 0)  // Every 60 frames
+			{
+				for (int32 j = 0; j < FilterAABBs.Num(); ++j)
+				{
+					const FGPUFilterAABB& FAABB = FilterAABBs[j];
+					UE_LOG(LogTemp, Log, TEXT("AABB[%d]: Min=(%.1f, %.1f, %.1f) Max=(%.1f, %.1f, %.1f)"),
+						j,
+						FAABB.Min.X, FAABB.Min.Y, FAABB.Min.Z,
+						FAABB.Max.X, FAABB.Max.Y, FAABB.Max.Z);
+				}
+			}
+
+			GPUSimulator->ExecuteAABBFiltering(FilterAABBs);
+
+			// Note: Results are available on NEXT frame due to async GPU execution
+			// The actual count is logged by GPUFluidSimulator itself after GPU completes
+		}
+	}
+
 	// Note: Attached particles, adhesion, cohesion are handled on CPU
 	// but with 1-frame delay, these would need special handling
 	// For now, skip CPU-only effects in GPU mode
