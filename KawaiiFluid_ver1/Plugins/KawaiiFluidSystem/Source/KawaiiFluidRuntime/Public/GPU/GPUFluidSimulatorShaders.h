@@ -831,3 +831,36 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
 	}
 };
+
+//=============================================================================
+// Apply Attachment Updates Compute Shader
+// Updates positions for particles attached to skeletal mesh surfaces
+//=============================================================================
+
+class FApplyAttachmentUpdatesCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FApplyAttachmentUpdatesCS);
+	SHADER_USE_PARAMETER_STRUCT(FApplyAttachmentUpdatesCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_SRV(StructuredBuffer<FAttachedParticleUpdate>, AttachmentUpdates)
+		SHADER_PARAMETER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER(uint32, UpdateCount)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};

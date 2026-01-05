@@ -570,3 +570,89 @@ struct FParticleCorrection
 	}
 };
 static_assert(sizeof(FParticleCorrection) == 32, "FParticleCorrection must be 32 bytes for GPU alignment");
+
+/**
+ * Particle Attachment Info
+ * Stores barycentric coordinates for particles attached to skeletal mesh triangles
+ * Used for CPU-side attachment tracking and position updates
+ *
+ * Barycentric coordinates: Position = W*V0 + U*V1 + V*V2, where W = 1-U-V
+ */
+struct FParticleAttachmentInfo
+{
+	uint32 ParticleIndex;         // Index in GPU particle buffer
+	int32 InteractionIndex;       // Which FluidInteractionComponent (for BVH lookup)
+	int32 TriangleIndex;          // Triangle index in BVH's SkinnedTriangles array
+	float BarycentricU;           // Barycentric coordinate U
+	float BarycentricV;           // Barycentric coordinate V (W = 1 - U - V)
+	FVector PreviousWorldPosition; // Previous frame's world position (for acceleration)
+	FVector PreviousSurfaceNormal; // Previous frame's surface normal
+	float AttachmentTime;         // World time when attachment started
+	float CurrentAdhesionStrength; // Current adhesion (can decay over time)
+
+	FParticleAttachmentInfo()
+		: ParticleIndex(0)
+		, InteractionIndex(-1)
+		, TriangleIndex(-1)
+		, BarycentricU(0.0f)
+		, BarycentricV(0.0f)
+		, PreviousWorldPosition(FVector::ZeroVector)
+		, PreviousSurfaceNormal(FVector::UpVector)
+		, AttachmentTime(0.0f)
+		, CurrentAdhesionStrength(1.0f)
+	{
+	}
+
+	FParticleAttachmentInfo(uint32 InParticleIndex, int32 InInteractionIndex, int32 InTriangleIndex,
+		float InU, float InV, const FVector& InPosition, const FVector& InNormal, float InTime, float InAdhesion)
+		: ParticleIndex(InParticleIndex)
+		, InteractionIndex(InInteractionIndex)
+		, TriangleIndex(InTriangleIndex)
+		, BarycentricU(InU)
+		, BarycentricV(InV)
+		, PreviousWorldPosition(InPosition)
+		, PreviousSurfaceNormal(InNormal)
+		, AttachmentTime(InTime)
+		, CurrentAdhesionStrength(InAdhesion)
+	{
+	}
+
+	/** Compute position from barycentric coordinates and triangle vertices */
+	FVector ComputePosition(const FVector& V0, const FVector& V1, const FVector& V2) const
+	{
+		const float W = 1.0f - BarycentricU - BarycentricV;
+		return W * V0 + BarycentricU * V1 + BarycentricV * V2;
+	}
+
+	/** Check if attachment info is valid */
+	bool IsValid() const
+	{
+		return InteractionIndex >= 0 && TriangleIndex >= 0;
+	}
+};
+
+/**
+ * Attached Particle Position Update
+ * Sent to GPU to update attached particle positions
+ * 32 bytes, GPU-aligned
+ */
+struct FAttachedParticleUpdate
+{
+	uint32 ParticleIndex;         // 4 bytes
+	uint32 Flags;                 // 4 bytes (1 = position update, 2 = detach)
+	FVector3f NewPosition;        // 12 bytes
+	FVector3f NewVelocity;        // 12 bytes (surface velocity for detached particles)
+
+	static constexpr uint32 FLAG_UPDATE_POSITION = 1 << 0;
+	static constexpr uint32 FLAG_DETACH = 1 << 1;
+	static constexpr uint32 FLAG_SET_VELOCITY = 1 << 2;
+
+	FAttachedParticleUpdate()
+		: ParticleIndex(0)
+		, Flags(0)
+		, NewPosition(FVector3f::ZeroVector)
+		, NewVelocity(FVector3f::ZeroVector)
+	{
+	}
+};
+static_assert(sizeof(FAttachedParticleUpdate) == 32, "FAttachedParticleUpdate must be 32 bytes");

@@ -228,6 +228,14 @@ public:
 	 */
 	void ApplyCorrections(const TArray<FParticleCorrection>& Corrections);
 
+	/**
+	 * Apply attached particle position updates
+	 * Updates positions for particles attached to skeletal mesh surfaces
+	 * Also handles detachment with velocity setting
+	 * @param Updates - Array of position updates from attachment system
+	 */
+	void ApplyAttachmentUpdates(const TArray<FAttachedParticleUpdate>& Updates);
+
 	//=============================================================================
 	// GPU Particle Spawning (Thread-Safe)
 	// CPU sends spawn requests, GPU creates particles via atomic counter

@@ -240,6 +240,8 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 	float DeltaTime,
 	float& AccumulatedTime)
 {
+	
+	
 	TRACE_CPUPROFILER_EVENT_SCOPE(KawaiiFluidContext_SimulateGPU);
 
 	if (!Preset || Particles.Num() == 0)
@@ -288,6 +290,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 	// Cache collider shapes once per frame (required for IsCacheValid() to return true)
 	CacheColliderShapes(Params.Colliders);
 
+	
 	// Collect and upload collision primitives to GPU
 	{
 		FGPUCollisionPrimitives CollisionPrimitives;
@@ -343,7 +346,8 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 			GPUSimulator->UploadCollisionPrimitives(CollisionPrimitives);
 		}
 	}
-
+	
+	
 	// Update attached particle positions (bone tracking - before physics)
 	UpdateAttachedParticlePositions(Particles, Params.InteractionComponents);
 
@@ -402,11 +406,16 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 		UE_LOG(LogTemp, Warning, TEXT("GPU Upload: Particle count reduced %d -> %d (using fallback upload)"),
 			CurrentGPUCount, CurrentCPUCount);
 	}
+	
 	// else: Particle count same - GPU buffer already has simulation results, no upload needed
 
 	// Step 4: Run GPU simulation (async - results available next frame)
+	
+	
 	GPUSimulator->SimulateSubstep(GPUParams);
 
+	
+	
 	// =====================================================
 	// Phase 2: AABB Filtering for Per-Polygon Collision
 	// Filter particles inside Per-Polygon Collision enabled AABBs
@@ -440,10 +449,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 				for (int32 j = 0; j < FilterAABBs.Num(); ++j)
 				{
 					const FGPUFilterAABB& FAABB = FilterAABBs[j];
-					UE_LOG(LogTemp, Log, TEXT("AABB[%d]: Min=(%.1f, %.1f, %.1f) Max=(%.1f, %.1f, %.1f)"),
-						j,
-						FAABB.Min.X, FAABB.Min.Y, FAABB.Min.Z,
-						FAABB.Max.X, FAABB.Max.Y, FAABB.Max.Z);
+					//UE_LOG(LogTemp, Log, TEXT("AABB[%d]: Min=(%.1f, %.1f, %.1f) Max=(%.1f, %.1f, %.1f)"),j,FAABB.Min.X, FAABB.Min.Y, FAABB.Min.Z,FAABB.Max.X, FAABB.Max.Y, FAABB.Max.Z);
 				}
 			}
 
@@ -524,6 +530,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 							Candidates,
 							Params.InteractionComponents,
 							Preset->ParticleRadius,
+							Preset->AdhesionStrength,  // 유체의 접착력
 							Corrections
 						);
 
@@ -556,9 +563,33 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 		}
 	}
 
-	// Note: Attached particles, adhesion, cohesion are handled on CPU
-	// but with 1-frame delay, these would need special handling
-	// For now, skip CPU-only effects in GPU mode
+	//========================================
+	// Phase 2.6: Update Attached Particles
+	// Update positions for particles attached to skeletal mesh surfaces
+	// Check for detachment based on surface acceleration
+	//========================================
+	if (PerPolygonProcessor && PerPolygonProcessor->GetAttachedParticleCount() > 0)
+	{
+		TArray<FAttachedParticleUpdate> AttachmentUpdates;
+		PerPolygonProcessor->UpdateAttachedParticles(
+			Params.InteractionComponents,
+			DeltaTime,
+			AttachmentUpdates
+		);
+
+		if (AttachmentUpdates.Num() > 0)
+		{
+			GPUSimulator->ApplyAttachmentUpdates(AttachmentUpdates);
+
+			static int32 AttachmentDebugCounter = 0;
+			if (++AttachmentDebugCounter % 60 == 1)
+			{
+				UE_LOG(LogTemp, Log, TEXT("Attachment: Updated %d particles (%d attached)"),
+					AttachmentUpdates.Num(),
+					PerPolygonProcessor->GetAttachedParticleCount());
+			}
+		}
+	}
 }
 
 void UKawaiiFluidSimulationContext::Simulate(

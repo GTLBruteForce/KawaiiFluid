@@ -95,6 +95,14 @@ IMPLEMENT_GLOBAL_SHADER(FApplyCorrectionsCS,
 	"ApplyCorrectionsCS", SF_Compute);
 
 //=============================================================================
+// Attachment Updates Shader
+//=============================================================================
+
+IMPLEMENT_GLOBAL_SHADER(FApplyAttachmentUpdatesCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidApplyAttachmentUpdates.usf",
+	"ApplyAttachmentUpdatesCS", SF_Compute);
+
+//=============================================================================
 // Pass Builder Implementation
 //=============================================================================
 

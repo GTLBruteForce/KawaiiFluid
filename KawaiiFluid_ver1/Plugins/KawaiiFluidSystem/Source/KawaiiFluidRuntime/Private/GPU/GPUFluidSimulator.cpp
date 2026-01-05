@@ -858,11 +858,11 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	static int32 SimDebugCounter = 0;
 	if (++SimDebugCounter % 60 == 0)
 	{
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("=== SIMULATION DEBUG ==="));
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("  ParticleCount: %d"), CurrentParticleCount);
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("  Gravity: (%.2f, %.2f, %.2f)"), Params.Gravity.X, Params.Gravity.Y, Params.Gravity.Z);
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("  DeltaTime: %.4f"), Params.DeltaTime);
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("  PersistentBuffer Valid: %s"), PersistentParticleBuffer.IsValid() ? TEXT("YES") : TEXT("NO"));
+		//UE_LOG(LogGPUFluidSimulator, Log, TEXT("=== SIMULATION DEBUG ==="));
+		//UE_LOG(LogGPUFluidSimulator, Log, TEXT("  ParticleCount: %d"), CurrentParticleCount);
+		//UE_LOG(LogGPUFluidSimulator, Log, TEXT("  Gravity: (%.2f, %.2f, %.2f)"), Params.Gravity.X, Params.Gravity.Y, Params.Gravity.Z);
+		//UE_LOG(LogGPUFluidSimulator, Log, TEXT("  DeltaTime: %.4f"), Params.DeltaTime);
+		//UE_LOG(LogGPUFluidSimulator, Log, TEXT("  PersistentBuffer Valid: %s"), PersistentParticleBuffer.IsValid() ? TEXT("YES") : TEXT("NO"));
 	}
 
 	// Pass 1: Predict Positions
@@ -953,8 +953,7 @@ void FGPUFluidSimulator::AddPredictPositionsPass(
 	static int32 DebugCounter = 0;
 	if (++DebugCounter % 60 == 0)
 	{
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("PredictPositions: Gravity=(%.2f, %.2f, %.2f), DeltaTime=%.4f, Particles=%d"),
-			Params.Gravity.X, Params.Gravity.Y, Params.Gravity.Z, Params.DeltaTime, CurrentParticleCount);
+		//UE_LOG(LogGPUFluidSimulator, Log, TEXT("PredictPositions: Gravity=(%.2f, %.2f, %.2f), DeltaTime=%.4f, Particles=%d"),Params.Gravity.X, Params.Gravity.Y, Params.Gravity.Z, Params.DeltaTime, CurrentParticleCount);
 	}
 
 	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FPredictPositionsCS::ThreadGroupSize);
@@ -1337,8 +1336,7 @@ void FGPUFluidSimulator::AddSpawnRequests(const TArray<FGPUSpawnRequest>& Reques
 	PendingSpawnRequests.Append(Requests);
 	bHasPendingSpawnRequests.store(true);
 
-	UE_LOG(LogGPUFluidSimulator, Log, TEXT("AddSpawnRequests: Added %d spawn requests (total pending: %d)"),
-		Requests.Num(), PendingSpawnRequests.Num());
+	//UE_LOG(LogGPUFluidSimulator, Log, TEXT("AddSpawnRequests: Added %d spawn requests (total pending: %d)"),Requests.Num(), PendingSpawnRequests.Num());
 }
 
 void FGPUFluidSimulator::ClearSpawnRequests()
@@ -1404,7 +1402,7 @@ void FGPUFluidSimulator::AddSpawnParticlesPass(
 	// Update next particle ID (atomic increment)
 	NextParticleID.fetch_add(SpawnRequests.Num());
 
-	UE_LOG(LogGPUFluidSimulator, Log, TEXT("SpawnParticlesPass: Spawned %d particles (NextID: %d)"), SpawnRequests.Num(), NextParticleID.load());
+	//UE_LOG(LogGPUFluidSimulator, Log, TEXT("SpawnParticlesPass: Spawned %d particles (NextID: %d)"), SpawnRequests.Num(), NextParticleID.load());
 }
 
 //=============================================================================
@@ -1884,6 +1882,76 @@ void FGPUFluidSimulator::ApplyCorrections(const TArray<FParticleCorrection>& Cor
 			UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
 
 			UE_LOG(LogGPUFluidSimulator, Log, TEXT("ApplyCorrections: Applied %d corrections"), CorrectionCount);
+		}
+	);
+}
+
+void FGPUFluidSimulator::ApplyAttachmentUpdates(const TArray<FAttachedParticleUpdate>& Updates)
+{
+	if (!bIsInitialized || Updates.Num() == 0 || !PersistentParticleBuffer.IsValid())
+	{
+		return;
+	}
+
+	// Make a copy of updates for the render thread
+	TArray<FAttachedParticleUpdate> UpdatesCopy = Updates;
+	FGPUFluidSimulator* Self = this;
+	const int32 UpdateCount = Updates.Num();
+
+	ENQUEUE_RENDER_COMMAND(ApplyAttachmentUpdates)(
+		[Self, UpdatesCopy, UpdateCount](FRHICommandListImmediate& RHICmdList)
+		{
+			if (!Self->PersistentParticleBuffer.IsValid())
+			{
+				UE_LOG(LogGPUFluidSimulator, Warning, TEXT("ApplyAttachmentUpdates: PersistentParticleBuffer not valid"));
+				return;
+			}
+
+			// Create updates buffer
+			FRHIResourceCreateInfo CreateInfo(TEXT("AttachmentUpdates"));
+			FBufferRHIRef UpdatesBufferRHI = RHICmdList.CreateStructuredBuffer(
+				sizeof(FAttachedParticleUpdate),
+				UpdateCount * sizeof(FAttachedParticleUpdate),
+				BUF_ShaderResource,
+				CreateInfo
+			);
+
+			// Upload updates data
+			void* UpdateData = RHICmdList.LockBuffer(UpdatesBufferRHI, 0,
+				UpdateCount * sizeof(FAttachedParticleUpdate), RLM_WriteOnly);
+			FMemory::Memcpy(UpdateData, UpdatesCopy.GetData(), UpdateCount * sizeof(FAttachedParticleUpdate));
+			RHICmdList.UnlockBuffer(UpdatesBufferRHI);
+
+			// Create SRV for updates
+			FShaderResourceViewRHIRef UpdatesSRV = RHICmdList.CreateShaderResourceView(UpdatesBufferRHI);
+
+			// Create UAV for particles from PersistentParticleBuffer
+			FBufferRHIRef ParticleRHI = Self->PersistentParticleBuffer->GetRHI();
+			if (!ParticleRHI.IsValid())
+			{
+				UE_LOG(LogGPUFluidSimulator, Warning, TEXT("ApplyAttachmentUpdates: Failed to get ParticleRHI from PersistentParticleBuffer"));
+				return;
+			}
+			FUnorderedAccessViewRHIRef ParticlesUAV = RHICmdList.CreateUnorderedAccessView(ParticleRHI, false, false);
+
+			// Dispatch ApplyAttachmentUpdates compute shader
+			FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+			TShaderMapRef<FApplyAttachmentUpdatesCS> ComputeShader(ShaderMap);
+			FRHIComputeShader* ShaderRHI = ComputeShader.GetComputeShader();
+			SetComputePipelineState(RHICmdList, ShaderRHI);
+
+			FApplyAttachmentUpdatesCS::FParameters Parameters;
+			Parameters.AttachmentUpdates = UpdatesSRV;
+			Parameters.Particles = ParticlesUAV;
+			Parameters.UpdateCount = UpdateCount;
+			SetShaderParameters(RHICmdList, ComputeShader, ShaderRHI, Parameters);
+
+			const int32 NumGroups = FMath::DivideAndRoundUp(UpdateCount, FApplyAttachmentUpdatesCS::ThreadGroupSize);
+			RHICmdList.DispatchComputeShader(NumGroups, 1, 1);
+
+			UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
+
+			UE_LOG(LogGPUFluidSimulator, Verbose, TEXT("ApplyAttachmentUpdates: Applied %d updates"), UpdateCount);
 		}
 	);
 }

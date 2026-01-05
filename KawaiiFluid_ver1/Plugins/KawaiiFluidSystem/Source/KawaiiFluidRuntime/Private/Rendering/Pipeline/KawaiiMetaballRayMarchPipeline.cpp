@@ -294,10 +294,7 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 
 				// Debug log - every frame
 				FVector3f Size = VolumeMax - VolumeMin;
-				UE_LOG(LogTemp, Log, TEXT("[Bounds Used] Min(%.1f, %.1f, %.1f) Max(%.1f, %.1f, %.1f) Size(%.1f, %.1f, %.1f)"),
-					VolumeMin.X, VolumeMin.Y, VolumeMin.Z,
-					VolumeMax.X, VolumeMax.Y, VolumeMax.Z,
-					Size.X, Size.Y, Size.Z);
+				//UE_LOG(LogTemp, Log, TEXT("[Bounds Used] Min(%.1f, %.1f, %.1f) Max(%.1f, %.1f, %.1f) Size(%.1f, %.1f, %.1f)"),VolumeMin.X, VolumeMin.Y, VolumeMin.Z,VolumeMax.X, VolumeMax.Y, VolumeMax.Z,Size.X, Size.Y, Size.Z);
 			}
 			else
 			{

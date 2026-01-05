@@ -172,6 +172,7 @@ bool FSpatialHashBuilder::CreateAndBuildHash(
     float CellSize,
     FSpatialHashGPUResources& OutResources)
 {
+    
     OutResources = FSpatialHashGPUResources();
 
     if (ParticleCount <= 0 || !ParticlePositionsSRV)

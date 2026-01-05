@@ -175,6 +175,8 @@ void UKawaiiFluidMetaballRenderer::SetEnabled(bool bInEnabled)
 
 void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvider* DataProvider, float DeltaTime)
 {
+	
+	
 	if (!bEnabled || !DataProvider)
 	{
 		bIsRenderingActive = false;
