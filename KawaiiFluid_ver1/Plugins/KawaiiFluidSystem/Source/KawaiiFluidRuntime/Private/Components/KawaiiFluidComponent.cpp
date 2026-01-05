@@ -9,6 +9,7 @@
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/KawaiiFluidISMRenderer.h"
 #include "Rendering/KawaiiFluidMetaballRenderer.h"
+#include "DrawDebugHelpers.h"
 
 UKawaiiFluidComponent::UKawaiiFluidComponent()
 {
@@ -146,10 +147,10 @@ void UKawaiiFluidComponent::BeginPlay()
 	// Module을 Subsystem에 등록 (Component가 아닌 Module!)
 	RegisterToSubsystem();
 
-	// 자동 스폰
-	if (bSpawnOnBeginPlay && AutoSpawnCount > 0 && SimulationModule)
+	// ShapeVolume mode: auto spawn at BeginPlay
+	if (SpawnSettings.IsShapeVolumeMode() && SimulationModule)
 	{
-		SimulationModule->SpawnParticles(GetComponentLocation(), AutoSpawnCount, AutoSpawnRadius);
+		ExecuteAutoSpawn();
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidComponent BeginPlay: %s"), *GetName());
@@ -198,8 +199,8 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 	UWorld* World = GetWorld();
 	const bool bIsGameWorld = World && World->IsGameWorld();
 
-	// 연속 스폰 처리 (게임 월드에서만)
-	if (bIsGameWorld && bContinuousSpawn)
+	// Emitter mode: continuous spawn (Stream, Spray)
+	if (bIsGameWorld && SpawnSettings.IsEmitterMode())
 	{
 		ProcessContinuousSpawn(DeltaTime);
 	}
@@ -209,6 +210,14 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 	{
 		RenderingModule->UpdateRenderers();
 	}
+
+#if WITH_EDITOR
+	// 에디터에서 스폰 영역 시각화 (게임 월드가 아닐 때만)
+	if (!bIsGameWorld)
+	{
+		DrawSpawnAreaVisualization();
+	}
+#endif
 }
 
 //========================================
@@ -217,45 +226,312 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 
 void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 {
-	if (!SimulationModule || ParticlesPerSecond <= 0.0f)
+	if (!SimulationModule || SpawnSettings.ParticlesPerSecond <= 0.0f)
 	{
 		return;
 	}
 
 	// 최대 파티클 수 체크
-	if (MaxParticleCount > 0 && SimulationModule->GetParticleCount() >= MaxParticleCount)
+	if (SpawnSettings.MaxParticleCount > 0 && SimulationModule->GetParticleCount() >= SpawnSettings.MaxParticleCount)
 	{
 		return;
 	}
 
 	SpawnAccumulatedTime += DeltaTime;
-	const float SpawnInterval = 1.0f / ParticlesPerSecond;
+	const float SpawnInterval = 1.0f / SpawnSettings.ParticlesPerSecond;
 
 	while (SpawnAccumulatedTime >= SpawnInterval)
 	{
-		// 스폰 위치 계산 (컴포넌트 위치 기준)
-		FVector SpawnLocation = GetComponentLocation() + SpawnOffset;
-
-		// 반경 내 랜덤 위치
-		if (ContinuousSpawnRadius > 0.0f)
-		{
-			FVector RandomOffset = FMath::VRand() * FMath::FRandRange(0.0f, ContinuousSpawnRadius);
-			SpawnLocation += RandomOffset;
-		}
-
-		// 파티클 스폰
-		SimulationModule->SpawnParticle(SpawnLocation, SpawnVelocity);
-
+		SpawnDirectionalParticle();
 		SpawnAccumulatedTime -= SpawnInterval;
 
 		// 최대 파티클 수 체크
-		if (MaxParticleCount > 0 && SimulationModule->GetParticleCount() >= MaxParticleCount)
+		if (SpawnSettings.MaxParticleCount > 0 && SimulationModule->GetParticleCount() >= SpawnSettings.MaxParticleCount)
 		{
 			SpawnAccumulatedTime = 0.0f;
 			break;
 		}
 	}
 }
+
+void UKawaiiFluidComponent::ExecuteAutoSpawn()
+{
+	if (!SimulationModule)
+	{
+		return;
+	}
+
+	// Emitter mode does not spawn at BeginPlay
+	if (SpawnSettings.SpawnType == EFluidSpawnType::Emitter)
+	{
+		return;
+	}
+
+	const FQuat ComponentQuat = GetComponentQuat();
+	const FVector Location = GetComponentLocation() + ComponentQuat.RotateVector(SpawnSettings.SpawnOffset);
+	const FRotator Rotation = GetComponentRotation();
+
+	if (SpawnSettings.bAutoCalculateParticleCount)
+	{
+		// Auto-calculate mode: use spacing-based spawn
+		switch (SpawnSettings.ShapeType)
+		{
+		case EFluidShapeType::Sphere:
+			SimulationModule->SpawnParticlesSphere(
+				Location,
+				SpawnSettings.SphereRadius,
+				SpawnSettings.ParticleSpacing,
+				SpawnSettings.bUseJitter,
+				SpawnSettings.JitterAmount,
+				SpawnSettings.InitialVelocity,
+				Rotation
+			);
+			break;
+
+		case EFluidShapeType::Box:
+			SimulationModule->SpawnParticlesBox(
+				Location,
+				SpawnSettings.BoxExtent,
+				SpawnSettings.ParticleSpacing,
+				SpawnSettings.bUseJitter,
+				SpawnSettings.JitterAmount,
+				SpawnSettings.InitialVelocity,
+				Rotation
+			);
+			break;
+
+		case EFluidShapeType::Cylinder:
+			SimulationModule->SpawnParticlesCylinder(
+				Location,
+				SpawnSettings.CylinderRadius,
+				SpawnSettings.CylinderHalfHeight,
+				SpawnSettings.ParticleSpacing,
+				SpawnSettings.bUseJitter,
+				SpawnSettings.JitterAmount,
+				SpawnSettings.InitialVelocity,
+				Rotation
+			);
+			break;
+		}
+	}
+	else
+	{
+		// Explicit count mode: use count-based spawn
+		switch (SpawnSettings.ShapeType)
+		{
+		case EFluidShapeType::Sphere:
+			SimulationModule->SpawnParticlesSphereByCount(
+				Location,
+				SpawnSettings.SphereRadius,
+				SpawnSettings.ParticleCount,
+				SpawnSettings.bUseJitter,
+				SpawnSettings.JitterAmount,
+				SpawnSettings.InitialVelocity,
+				Rotation
+			);
+			break;
+
+		case EFluidShapeType::Box:
+			SimulationModule->SpawnParticlesBoxByCount(
+				Location,
+				SpawnSettings.BoxExtent,
+				SpawnSettings.ParticleCount,
+				SpawnSettings.bUseJitter,
+				SpawnSettings.JitterAmount,
+				SpawnSettings.InitialVelocity,
+				Rotation
+			);
+			break;
+
+		case EFluidShapeType::Cylinder:
+			SimulationModule->SpawnParticlesCylinderByCount(
+				Location,
+				SpawnSettings.CylinderRadius,
+				SpawnSettings.CylinderHalfHeight,
+				SpawnSettings.ParticleCount,
+				SpawnSettings.bUseJitter,
+				SpawnSettings.JitterAmount,
+				SpawnSettings.InitialVelocity,
+				Rotation
+			);
+			break;
+		}
+	}
+}
+
+void UKawaiiFluidComponent::SpawnDirectionalParticle()
+{
+	if (!SimulationModule)
+	{
+		return;
+	}
+
+	// Transform offset and direction by component rotation
+	const FQuat Rotation = GetComponentQuat();
+	const FVector Location = GetComponentLocation() + Rotation.RotateVector(SpawnSettings.SpawnOffset);
+	const FVector WorldDirection = Rotation.RotateVector(SpawnSettings.SpawnDirection.GetSafeNormal());
+	const float ConeAngle = (SpawnSettings.EmitterType == EFluidEmitterType::Spray) ? SpawnSettings.ConeAngle : 0.0f;
+
+	SimulationModule->SpawnParticleDirectional(
+		Location,
+		WorldDirection,
+		SpawnSettings.SpawnSpeed,
+		SpawnSettings.StreamRadius,
+		ConeAngle
+	);
+}
+
+//========================================
+// Editor Visualization
+//========================================
+
+#if WITH_EDITOR
+void UKawaiiFluidComponent::DrawSpawnAreaVisualization()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// 액터가 선택된 상태에서만 시각화 표시
+	AActor* Owner = GetOwner();
+	if (!Owner || !Owner->IsSelected())
+	{
+		return;
+	}
+
+	const FQuat Rotation = GetComponentQuat();
+	const FVector Location = GetComponentLocation() + Rotation.RotateVector(SpawnSettings.SpawnOffset);
+	const FColor SpawnColor = FColor::Cyan;
+	const float Duration = -1.0f;  // 영구
+	const uint8 DepthPriority = 0;
+	const float Thickness = 2.0f;
+
+	if (SpawnSettings.SpawnType == EFluidSpawnType::ShapeVolume)
+	{
+		// Shape Volume visualization
+		switch (SpawnSettings.ShapeType)
+		{
+		case EFluidShapeType::Sphere:
+			// Sphere는 회전에 영향받지 않음
+			DrawDebugSphere(World, Location, SpawnSettings.SphereRadius, 24, SpawnColor, false, Duration, DepthPriority, Thickness);
+			break;
+
+		case EFluidShapeType::Box:
+			// Box는 회전 적용
+			DrawDebugBox(World, Location, SpawnSettings.BoxExtent, Rotation, SpawnColor, false, Duration, DepthPriority, Thickness);
+			break;
+
+		case EFluidShapeType::Cylinder:
+			{
+				const float Radius = SpawnSettings.CylinderRadius;
+				const float HalfHeight = SpawnSettings.CylinderHalfHeight;
+
+				// 로컬 좌표로 원기둥 꼭짓점 계산 후 회전 적용
+				const FVector LocalTopCenter = FVector(0, 0, HalfHeight);
+				const FVector LocalBottomCenter = FVector(0, 0, -HalfHeight);
+
+				const int32 NumSegments = 24;
+				for (int32 i = 0; i < NumSegments; ++i)
+				{
+					const float Angle1 = (float)i / NumSegments * 2.0f * PI;
+					const float Angle2 = (float)(i + 1) / NumSegments * 2.0f * PI;
+
+					// 로컬 위치 계산
+					const FVector LocalTopP1 = LocalTopCenter + FVector(FMath::Cos(Angle1), FMath::Sin(Angle1), 0) * Radius;
+					const FVector LocalTopP2 = LocalTopCenter + FVector(FMath::Cos(Angle2), FMath::Sin(Angle2), 0) * Radius;
+					const FVector LocalBottomP1 = LocalBottomCenter + FVector(FMath::Cos(Angle1), FMath::Sin(Angle1), 0) * Radius;
+					const FVector LocalBottomP2 = LocalBottomCenter + FVector(FMath::Cos(Angle2), FMath::Sin(Angle2), 0) * Radius;
+
+					// 회전 적용 후 월드 위치로 변환
+					const FVector TopP1 = Location + Rotation.RotateVector(LocalTopP1);
+					const FVector TopP2 = Location + Rotation.RotateVector(LocalTopP2);
+					const FVector BottomP1 = Location + Rotation.RotateVector(LocalBottomP1);
+					const FVector BottomP2 = Location + Rotation.RotateVector(LocalBottomP2);
+
+					DrawDebugLine(World, TopP1, TopP2, SpawnColor, false, Duration, DepthPriority, Thickness);
+					DrawDebugLine(World, BottomP1, BottomP2, SpawnColor, false, Duration, DepthPriority, Thickness);
+				}
+
+				for (int32 i = 0; i < 4; ++i)
+				{
+					const float Angle = (float)i / 4 * 2.0f * PI;
+					const FVector LocalTopP = LocalTopCenter + FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0) * Radius;
+					const FVector LocalBottomP = LocalBottomCenter + FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0) * Radius;
+
+					const FVector TopP = Location + Rotation.RotateVector(LocalTopP);
+					const FVector BottomP = Location + Rotation.RotateVector(LocalBottomP);
+					DrawDebugLine(World, TopP, BottomP, SpawnColor, false, Duration, DepthPriority, Thickness);
+				}
+			}
+			break;
+		}
+	}
+	else // Emitter mode
+	{
+		// Direction arrow (apply component rotation)
+		const FVector WorldDir = Rotation.RotateVector(SpawnSettings.SpawnDirection.GetSafeNormal());
+		const float ArrowLength = 100.0f;
+		const FVector EndPoint = Location + WorldDir * ArrowLength;
+
+		DrawDebugDirectionalArrow(World, Location, EndPoint, 20.0f, SpawnColor, false, Duration, DepthPriority, Thickness);
+
+		// Stream radius circle
+		if (SpawnSettings.StreamRadius > 0.0f)
+		{
+			FVector Right, Up;
+			WorldDir.FindBestAxisVectors(Right, Up);
+
+			const int32 NumSegments = 24;
+			for (int32 i = 0; i < NumSegments; ++i)
+			{
+				const float Angle1 = (float)i / NumSegments * 2.0f * PI;
+				const float Angle2 = (float)(i + 1) / NumSegments * 2.0f * PI;
+
+				const FVector P1 = Location + (Right * FMath::Cos(Angle1) + Up * FMath::Sin(Angle1)) * SpawnSettings.StreamRadius;
+				const FVector P2 = Location + (Right * FMath::Cos(Angle2) + Up * FMath::Sin(Angle2)) * SpawnSettings.StreamRadius;
+
+				DrawDebugLine(World, P1, P2, SpawnColor, false, Duration, DepthPriority, Thickness);
+			}
+		}
+
+		// Spray emitter: show cone
+		if (SpawnSettings.EmitterType == EFluidEmitterType::Spray && SpawnSettings.ConeAngle > 0.0f)
+		{
+			const float ConeLength = 80.0f;
+			const float HalfAngleRad = FMath::DegreesToRadians(SpawnSettings.ConeAngle * 0.5f);
+			const float ConeRadius = ConeLength * FMath::Tan(HalfAngleRad);
+
+			FVector ConeRight, ConeUp;
+			WorldDir.FindBestAxisVectors(ConeRight, ConeUp);
+
+			// Cone lines from apex to base
+			const int32 NumLines = 8;
+			const FVector ConeCenter = Location + WorldDir * ConeLength;
+
+			for (int32 i = 0; i < NumLines; ++i)
+			{
+				const float Angle = (float)i / NumLines * 2.0f * PI;
+				const FVector ConePoint = ConeCenter + (ConeRight * FMath::Cos(Angle) + ConeUp * FMath::Sin(Angle)) * ConeRadius;
+				DrawDebugLine(World, Location, ConePoint, FColor::Orange, false, Duration, DepthPriority, Thickness * 0.5f);
+			}
+
+			// Cone base circle
+			for (int32 i = 0; i < NumLines; ++i)
+			{
+				const float Angle1 = (float)i / NumLines * 2.0f * PI;
+				const float Angle2 = (float)(i + 1) / NumLines * 2.0f * PI;
+
+				const FVector P1 = ConeCenter + (ConeRight * FMath::Cos(Angle1) + ConeUp * FMath::Sin(Angle1)) * ConeRadius;
+				const FVector P2 = ConeCenter + (ConeRight * FMath::Cos(Angle2) + ConeUp * FMath::Sin(Angle2)) * ConeRadius;
+
+				DrawDebugLine(World, P1, P2, FColor::Orange, false, Duration, DepthPriority, Thickness * 0.5f);
+			}
+		}
+	}
+}
+#endif
 
 //========================================
 // Event System
@@ -451,4 +727,59 @@ TStructOnScope<FActorComponentInstanceData> UKawaiiFluidComponent::GetComponentI
 	}
 
 	return Super::GetComponentInstanceData();
+}
+
+//========================================
+// FFluidSpawnSettings
+//========================================
+
+int32 FFluidSpawnSettings::CalculateExpectedParticleCount() const
+{
+	// Emitter mode doesn't have a predictable count
+	if (SpawnType == EFluidSpawnType::Emitter)
+	{
+		return 0;
+	}
+
+	if (!bAutoCalculateParticleCount)
+	{
+		// Explicit count mode: return specified value
+		return ParticleCount;
+	}
+
+	if (ParticleSpacing <= 0.0f)
+	{
+		return 0;
+	}
+
+	// Auto-calculate mode: calculate from shape volume and spacing
+	float Volume = 0.0f;
+
+	switch (ShapeType)
+	{
+	case EFluidShapeType::Sphere:
+		// Sphere volume: (4/3)πr³
+		Volume = (4.0f / 3.0f) * PI * FMath::Pow(SphereRadius, 3.0f);
+		break;
+
+	case EFluidShapeType::Box:
+		// Box volume: 8 * Extent.X * Extent.Y * Extent.Z
+		Volume = 8.0f * BoxExtent.X * BoxExtent.Y * BoxExtent.Z;
+		break;
+
+	case EFluidShapeType::Cylinder:
+		// Cylinder volume: πr² * 2h
+		Volume = PI * FMath::Pow(CylinderRadius, 2.0f) * CylinderHalfHeight * 2.0f;
+		break;
+	}
+
+	// Volume per particle: spacing³
+	const float ParticleVolume = FMath::Pow(ParticleSpacing, 3.0f);
+
+	if (ParticleVolume <= 0.0f)
+	{
+		return 0;
+	}
+
+	return FMath::CeilToInt(Volume / ParticleVolume);
 }

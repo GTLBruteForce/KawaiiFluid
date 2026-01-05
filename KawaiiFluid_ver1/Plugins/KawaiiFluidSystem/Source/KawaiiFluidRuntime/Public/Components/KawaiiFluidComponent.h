@@ -13,7 +13,7 @@ class UKawaiiFluidRenderingModule;
 class UKawaiiFluidComponent;
 
 /**
- * Re-Construction 시 파티클 데이터 보존을 위한 InstanceData
+ * Instance data for preserving particle data during re-construction
  */
 USTRUCT()
 struct FKawaiiFluidComponentInstanceData : public FActorComponentInstanceData
@@ -26,13 +26,13 @@ public:
 
 	virtual void ApplyToComponent(UActorComponent* Component, const ECacheApplyPhase CacheApplyPhase) override;
 
-	// 보존할 파티클 데이터
+	// Particle data to preserve
 	TArray<FFluidParticle> SavedParticles;
 	int32 SavedNextParticleID = 0;
 };
 
 /**
- * 브러시 모드 타입
+ * Brush mode type
  */
 UENUM(BlueprintType)
 enum class EFluidBrushMode : uint8
@@ -42,7 +42,165 @@ enum class EFluidBrushMode : uint8
 };
 
 /**
- * 브러시 설정 구조체
+ * Top-level spawn type
+ */
+UENUM(BlueprintType)
+enum class EFluidSpawnType : uint8
+{
+	ShapeVolume UMETA(DisplayName = "Shape Volume", ToolTip = "Spawn particles filling a shape volume at BeginPlay"),
+	Emitter     UMETA(DisplayName = "Emitter", ToolTip = "Continuously emit particles from a point"),
+};
+
+/**
+ * Shape type for Shape Volume spawn mode
+ */
+UENUM(BlueprintType)
+enum class EFluidShapeType : uint8
+{
+	Sphere      UMETA(DisplayName = "Sphere", ToolTip = "Spherical volume distribution"),
+	Box         UMETA(DisplayName = "Box", ToolTip = "Box volume distribution"),
+	Cylinder    UMETA(DisplayName = "Cylinder", ToolTip = "Cylindrical volume distribution"),
+};
+
+/**
+ * Emitter type for Emitter spawn mode
+ */
+UENUM(BlueprintType)
+enum class EFluidEmitterType : uint8
+{
+	Stream      UMETA(DisplayName = "Stream", ToolTip = "Straight stream emission (like a faucet)"),
+	Spray       UMETA(DisplayName = "Spray", ToolTip = "Cone-shaped spray emission"),
+};
+
+/**
+ * Fluid spawn settings
+ */
+USTRUCT(BlueprintType)
+struct FFluidSpawnSettings
+{
+	GENERATED_BODY()
+
+	/** Spawn type (Shape Volume or Emitter) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn")
+	EFluidSpawnType SpawnType = EFluidSpawnType::ShapeVolume;
+
+	/** Shape type (when SpawnType is ShapeVolume) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume", EditConditionHides))
+	EFluidShapeType ShapeType = EFluidShapeType::Sphere;
+
+	/** Emitter type (when SpawnType is Emitter) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter", EditConditionHides))
+	EFluidEmitterType EmitterType = EFluidEmitterType::Stream;
+
+	// === Shape Settings (ShapeVolume mode) ===
+	/** Sphere radius */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Shape",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume && ShapeType == EFluidShapeType::Sphere", EditConditionHides, ClampMin = "1.0"))
+	float SphereRadius = 50.0f;
+
+	/** Box size (Half Extent) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Shape",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume && ShapeType == EFluidShapeType::Box", EditConditionHides))
+	FVector BoxExtent = FVector(50, 50, 50);
+
+	/** Cylinder radius */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Shape",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume && ShapeType == EFluidShapeType::Cylinder", EditConditionHides, ClampMin = "1.0"))
+	float CylinderRadius = 30.0f;
+
+	/** Cylinder height (Half Height) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Shape",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume && ShapeType == EFluidShapeType::Cylinder", EditConditionHides, ClampMin = "1.0"))
+	float CylinderHalfHeight = 50.0f;
+
+	// === Distribution Settings (ShapeVolume mode) ===
+	/** Spacing between particles */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Distribution",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume", EditConditionHides, ClampMin = "1.0"))
+	float ParticleSpacing = 10.0f;
+
+	/** Apply random offset to grid positions */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Distribution",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume", EditConditionHides))
+	bool bUseJitter = true;
+
+	/** Random offset ratio (0~0.5) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Distribution",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume && bUseJitter", EditConditionHides, ClampMin = "0.0", ClampMax = "0.5"))
+	float JitterAmount = 0.2f;
+
+	// === Flow Settings (Emitter mode) ===
+	/** Emission direction (normalized) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Flow",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter", EditConditionHides))
+	FVector SpawnDirection = FVector(0, 0, -1);
+
+	/** Initial speed (cm/s) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Flow",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter", EditConditionHides, ClampMin = "0.0"))
+	float SpawnSpeed = 100.0f;
+
+	/** Stream radius (spread range) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Flow",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter", EditConditionHides, ClampMin = "0.0"))
+	float StreamRadius = 5.0f;
+
+	/** Particles spawned per second */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Flow",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter", EditConditionHides, ClampMin = "1.0", ClampMax = "1000.0"))
+	float ParticlesPerSecond = 30.0f;
+
+	/** Cone angle (degrees) - Spray emitter only */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Flow",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter && EmitterType == EFluidEmitterType::Spray", EditConditionHides, ClampMin = "0.0", ClampMax = "90.0"))
+	float ConeAngle = 15.0f;
+
+	// === Count Settings ===
+	/** Auto-calculate particle count from shape size and spacing (ShapeVolume only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Count",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume", EditConditionHides))
+	bool bAutoCalculateParticleCount = true;
+
+	/** Explicit particle count (ShapeVolume only, when bAutoCalculateParticleCount is false) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Count",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume && !bAutoCalculateParticleCount", EditConditionHides, ClampMin = "1", ClampMax = "100000"))
+	int32 ParticleCount = 500;
+
+	/** Maximum particle count - Emitter mode only (0 = unlimited) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Count",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter", EditConditionHides, ClampMin = "0"))
+	int32 MaxParticleCount = 1000;
+
+	// === Common Settings ===
+	/** Initial velocity (ShapeVolume mode only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume", EditConditionHides))
+	FVector InitialVelocity = FVector::ZeroVector;
+
+	/** Spawn position offset */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn")
+	FVector SpawnOffset = FVector::ZeroVector;
+
+	/** Calculate expected particle count (for editor preview) */
+	int32 CalculateExpectedParticleCount() const;
+
+	/** Check if this is a ShapeVolume mode (batch spawn at BeginPlay) */
+	bool IsShapeVolumeMode() const
+	{
+		return SpawnType == EFluidSpawnType::ShapeVolume;
+	}
+
+	/** Check if this is an Emitter mode (continuous spawn) */
+	bool IsEmitterMode() const
+	{
+		return SpawnType == EFluidSpawnType::Emitter;
+	}
+};
+
+/**
+ * Brush settings struct
  */
 USTRUCT(BlueprintType)
 struct FFluidBrushSettings
@@ -82,21 +240,21 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(
 );
 
 /**
- * Kawaii Fluid Component (통합 컴포넌트)
+ * Kawaii Fluid Component (Unified Component)
  *
- * 유체 시뮬레이션을 위한 통합 컴포넌트입니다.
- * 모듈 기반 설계로 시뮬레이션/렌더링/충돌을 분리하여 관리합니다.
+ * Unified component for fluid simulation.
+ * Uses modular design to separate simulation/rendering/collision management.
  *
- * 시뮬레이션 API는 SimulationModule을 통해 직접 접근:
+ * Access simulation API through SimulationModule:
  * - Component->SimulationModule->SpawnParticles(...)
  * - Component->SimulationModule->ApplyExternalForce(...)
  *
- * 사용:
+ * Usage:
  * @code
  * FluidComponent = CreateDefaultSubobject<UKawaiiFluidComponent>(TEXT("FluidComponent"));
  * FluidComponent->Preset = MyPreset;
  *
- * // Blueprint/C++에서 모듈 직접 접근
+ * // Direct module access from Blueprint/C++
  * FluidComponent->SimulationModule->SpawnParticles(Location, 100, 50.0f);
  * @endcode
  */
@@ -123,7 +281,7 @@ public:
 	// Module Accessors
 	//========================================
 
-	/** 시뮬레이션 모듈 반환 - 파티클/콜라이더/외력 등 모든 API 제공 */
+	/** Returns simulation module - provides all APIs for particles/colliders/external forces */
 	UFUNCTION(BlueprintPure, Category = "Fluid")
 	UKawaiiFluidSimulationModule* GetSimulationModule() const { return SimulationModule; }
 
@@ -155,48 +313,12 @@ public:
 	FKawaiiFluidMetaballRendererSettings MetaballSettings;
 
 	//========================================
-	// Auto Spawn
+	// Spawn Settings
 	//========================================
 
-	/** Spawn on begin play */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn")
-	bool bSpawnOnBeginPlay = false;
-
-	/** Auto spawn count */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn", meta = (ClampMin = "1", ClampMax = "5000", EditCondition = "bSpawnOnBeginPlay"))
-	int32 AutoSpawnCount = 100;
-
-	/** Auto spawn radius */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn", meta = (ClampMin = "1.0", ClampMax = "500.0", EditCondition = "bSpawnOnBeginPlay"))
-	float AutoSpawnRadius = 50.0f;
-
-	//========================================
-	// Continuous Spawn
-	//========================================
-
-	/** Enable continuous particle spawning */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn")
-	bool bContinuousSpawn = true;
-
-	/** Particles to spawn per second */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn", meta = (ClampMin = "0.1", ClampMax = "1000.0", EditCondition = "bContinuousSpawn"))
-	float ParticlesPerSecond = 10.0f;
-
-	/** Maximum particle count (0 = unlimited) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn", meta = (ClampMin = "0", EditCondition = "bContinuousSpawn"))
-	int32 MaxParticleCount = 500;
-
-	/** Spawn radius for continuous spawn */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn", meta = (ClampMin = "0.0", ClampMax = "100.0", EditCondition = "bContinuousSpawn"))
-	float ContinuousSpawnRadius = 10.0f;
-
-	/** Spawn offset from component location */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn", meta = (EditCondition = "bContinuousSpawn"))
-	FVector SpawnOffset = FVector::ZeroVector;
-
-	/** Initial velocity for spawned particles */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Spawn", meta = (EditCondition = "bContinuousSpawn"))
-	FVector SpawnVelocity = FVector::ZeroVector;
+	/** Spawn settings (mode, shape, direction, etc.) - displayed expanded via ShowOnlyInnerProperties */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn", meta = (ShowOnlyInnerProperties))
+	FFluidSpawnSettings SpawnSettings;
 
 	//========================================
 	// Events
@@ -207,33 +329,33 @@ public:
 	FOnFluidParticleHitComponent OnParticleHit;
 
 	//========================================
-	// Editor Brush (에디터 전용)
+	// Editor Brush (Editor only)
 	//========================================
 
 #if WITH_EDITORONLY_DATA
-	/** 브러시 설정 */
+	/** Brush settings */
 	UPROPERTY(EditAnywhere, Category = "Brush")
 	FFluidBrushSettings BrushSettings;
 
-	/** 브러시 모드 활성화 여부 (에디터 모드에서 설정) */
+	/** Brush mode active state (set in editor mode) */
 	bool bBrushModeActive = false;
 #endif
 
 	//========================================
-	// Brush API (에디터/런타임 공용)
+	// Brush API (Editor/Runtime shared)
 	//========================================
 
-	/** 반경 내에 파티클 추가 (반구 분포 - 표면 위로만 생성) */
+	/** Add particles within radius (hemisphere distribution - spawns above surface only) */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Brush")
 	void AddParticlesInRadius(const FVector& WorldCenter, float Radius, int32 Count,
 	                          const FVector& Velocity, float Randomness = 0.8f,
 	                          const FVector& SurfaceNormal = FVector::UpVector);
 
-	/** 반경 내 파티클 제거 */
+	/** Remove particles within radius */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Brush")
 	int32 RemoveParticlesInRadius(const FVector& WorldCenter, float Radius);
 
-	/** 모든 파티클 제거 + 렌더링 클리어 */
+	/** Remove all particles + clear rendering */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Brush")
 	void ClearAllParticles();
 
@@ -242,7 +364,7 @@ protected:
 	// Modules
 	//========================================
 
-	/** 시뮬레이션 모듈 - GetSimulationModule()로 접근 */
+	/** Simulation module - access via GetSimulationModule() */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Instanced, Category = "Fluid")
 	TObjectPtr<UKawaiiFluidSimulationModule> SimulationModule;
 
@@ -259,13 +381,32 @@ private:
 	void ProcessContinuousSpawn(float DeltaTime);
 
 	//========================================
+	// Spawn Helpers
+	//========================================
+
+	/** Execute auto spawn (called from BeginPlay) */
+	void ExecuteAutoSpawn();
+
+	/** Spawn single particle for Stream/Jet mode */
+	void SpawnDirectionalParticle();
+
+	//========================================
+	// Editor Visualization
+	//========================================
+
+#if WITH_EDITOR
+	/** Spawn area visualization (called in editor) */
+	void DrawSpawnAreaVisualization();
+#endif
+
+	//========================================
 	// Event System
 	//========================================
 
 	/** Handle collision event from Module callback */
 	void HandleCollisionEvent(const FKawaiiFluidCollisionEvent& Event);
 
-	//=========================`===============
+	//========================================
 	// Subsystem Registration
 	//========================================
 

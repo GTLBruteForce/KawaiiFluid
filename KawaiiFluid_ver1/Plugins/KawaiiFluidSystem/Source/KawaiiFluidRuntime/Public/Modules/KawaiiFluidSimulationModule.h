@@ -121,9 +121,123 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Fluid")
 	int32 SpawnParticle(FVector Position, FVector Velocity = FVector::ZeroVector);
 
-	/** 여러 파티클 스폰 */
+	/** 여러 파티클 랜덤 스폰 (Point 모드용, 기존 호환) */
 	UFUNCTION(BlueprintCallable, Category = "Fluid")
 	void SpawnParticles(FVector Location, int32 Count, float SpawnRadius);
+
+	/** 구형 격자 분포로 파티클 스폰 (Sphere 모드용)
+	 * @param Center 구체 중심
+	 * @param Radius 구체 반경
+	 * @param Spacing 파티클 간격
+	 * @param bJitter 랜덤 오프셋 적용 여부
+	 * @param JitterAmount 랜덤 오프셋 비율 (0~0.5)
+	 * @param Velocity 초기 속도
+	 * @param Rotation 로컬→월드 회전 (Shape는 구형이므로 Velocity에만 적용)
+	 * @return 스폰된 파티클 수
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticlesSphere(FVector Center, float Radius, float Spacing,
+	                           bool bJitter = true, float JitterAmount = 0.2f,
+	                           FVector Velocity = FVector::ZeroVector,
+	                           FRotator Rotation = FRotator::ZeroRotator);
+
+	/** 박스 격자 분포로 파티클 스폰 (Box 모드용)
+	 * @param Center 박스 중심
+	 * @param Extent 박스 Half Extent (X, Y, Z)
+	 * @param Spacing 파티클 간격
+	 * @param bJitter 랜덤 오프셋 적용 여부
+	 * @param JitterAmount 랜덤 오프셋 비율 (0~0.5)
+	 * @param Velocity 초기 속도
+	 * @param Rotation 로컬→월드 회전
+	 * @return 스폰된 파티클 수
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticlesBox(FVector Center, FVector Extent, float Spacing,
+	                        bool bJitter = true, float JitterAmount = 0.2f,
+	                        FVector Velocity = FVector::ZeroVector,
+	                        FRotator Rotation = FRotator::ZeroRotator);
+
+	/** 원기둥 격자 분포로 파티클 스폰 (Cylinder 모드용)
+	 * @param Center 원기둥 중심
+	 * @param Radius 원기둥 반경
+	 * @param HalfHeight 원기둥 반높이 (Z축 기준)
+	 * @param Spacing 파티클 간격
+	 * @param bJitter 랜덤 오프셋 적용 여부
+	 * @param JitterAmount 랜덤 오프셋 비율 (0~0.5)
+	 * @param Velocity 초기 속도
+	 * @param Rotation 로컬→월드 회전
+	 * @return 스폰된 파티클 수
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticlesCylinder(FVector Center, float Radius, float HalfHeight, float Spacing,
+	                             bool bJitter = true, float JitterAmount = 0.2f,
+	                             FVector Velocity = FVector::ZeroVector,
+	                             FRotator Rotation = FRotator::ZeroRotator);
+
+	//========================================
+	// 명시적 개수 지정 스폰 함수
+	//========================================
+
+	/** 구형에 명시적 개수로 파티클 스폰
+	 * @param Center 구체 중심
+	 * @param Radius 구체 반경
+	 * @param Count 스폰할 파티클 개수
+	 * @param bJitter 랜덤 오프셋 적용 여부
+	 * @param JitterAmount 랜덤 오프셋 비율 (0~0.5)
+	 * @param Velocity 초기 속도
+	 * @param Rotation 로컬→월드 회전 (Shape는 구형이므로 Velocity에만 적용)
+	 * @return 실제 스폰된 파티클 수
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticlesSphereByCount(FVector Center, float Radius, int32 Count,
+	                                  bool bJitter = true, float JitterAmount = 0.2f,
+	                                  FVector Velocity = FVector::ZeroVector,
+	                                  FRotator Rotation = FRotator::ZeroRotator);
+
+	/** 박스에 명시적 개수로 파티클 스폰
+	 * @param Center 박스 중심
+	 * @param Extent 박스 Half Extent (X, Y, Z)
+	 * @param Count 스폰할 파티클 개수
+	 * @param bJitter 랜덤 오프셋 적용 여부
+	 * @param JitterAmount 랜덤 오프셋 비율 (0~0.5)
+	 * @param Velocity 초기 속도
+	 * @param Rotation 로컬→월드 회전
+	 * @return 실제 스폰된 파티클 수
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticlesBoxByCount(FVector Center, FVector Extent, int32 Count,
+	                               bool bJitter = true, float JitterAmount = 0.2f,
+	                               FVector Velocity = FVector::ZeroVector,
+	                               FRotator Rotation = FRotator::ZeroRotator);
+
+	/** 원기둥에 명시적 개수로 파티클 스폰
+	 * @param Center 원기둥 중심
+	 * @param Radius 원기둥 반경
+	 * @param HalfHeight 원기둥 반높이 (Z축 기준)
+	 * @param Count 스폰할 파티클 개수
+	 * @param bJitter 랜덤 오프셋 적용 여부
+	 * @param JitterAmount 랜덤 오프셋 비율 (0~0.5)
+	 * @param Velocity 초기 속도
+	 * @param Rotation 로컬→월드 회전
+	 * @return 실제 스폰된 파티클 수
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticlesCylinderByCount(FVector Center, float Radius, float HalfHeight, int32 Count,
+	                                    bool bJitter = true, float JitterAmount = 0.2f,
+	                                    FVector Velocity = FVector::ZeroVector,
+	                                    FRotator Rotation = FRotator::ZeroRotator);
+
+	/** 방향성 파티클 스폰 (Spout/Spray 모드용)
+	 * @param Position 스폰 위치
+	 * @param Direction 방출 방향 (정규화됨)
+	 * @param Speed 초기 속도 크기
+	 * @param Radius 스트림 반경 (분산 범위)
+	 * @param ConeAngle 분사각 (도, 0이면 직선)
+	 * @return 스폰된 파티클 ID
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticleDirectional(FVector Position, FVector Direction, float Speed,
+	                               float Radius = 0.0f, float ConeAngle = 0.0f);
 
 	/** 모든 파티클 제거 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid")
