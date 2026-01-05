@@ -220,12 +220,23 @@ FRayMarchResult RayMarchSDF(float3 ro, float3 rd, float maxDist)
 		float sdf = SampleSDFVolume(p);
 
 	#if USE_SPATIAL_HASH
+		bool bUsedSpatialHash = false;
+
 		// HYBRID MODE: When close to surface, switch to Spatial Hash for precise evaluation
 		// SDF Volume is fast but approximate, Spatial Hash gives accurate surface detection
 		if (sdf < SpatialHashCellSize)
 		{
 			// Phase 2: Precise evaluation using Spatial Hash (O(k) neighbor lookup)
-			sdf = EvaluateMetaballSDFWithSpatialHash(p, RenderParticles, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
+			float hashSdf = EvaluateMetaballSDFWithSpatialHash(p, RenderParticles, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
+
+			// Fallback: If Spatial Hash finds no particles (smin blend surface without nearby particles),
+			// keep SDF Volume value to avoid huge step that would skip the surface
+			if (hashSdf < 1e9)
+			{
+				sdf = hashSdf;
+				bUsedSpatialHash = true;
+			}
+			// else: keep SDF Volume value (sdf) for blend surfaces
 		}
 	#endif
 #else
@@ -245,8 +256,17 @@ FRayMarchResult RayMarchSDF(float3 ro, float3 rd, float maxDist)
 
 #if USE_SDF_VOLUME
 	#if USE_SPATIAL_HASH
-			// OPTIMIZED: Analytic gradient normal (1-Loop instead of 5-Loop)
-			result.Normal = CalculateNormalAnalyticWithSpatialHash(p, sdf, RenderParticles, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
+			// Use appropriate normal calculation based on which SDF source was used
+			if (bUsedSpatialHash)
+			{
+				// Analytic gradient normal from Spatial Hash (1-Loop instead of 5-Loop)
+				result.Normal = CalculateNormalAnalyticWithSpatialHash(p, sdf, RenderParticles, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
+			}
+			else
+			{
+				// Fallback to SDF Volume normal for blend surfaces without nearby particles
+				result.Normal = CalculateSDFNormalFromVolume(p, sdf);
+			}
 	#else
 			// Normal from SDF Volume texture
 			result.Normal = CalculateSDFNormalFromVolume(p, sdf);
