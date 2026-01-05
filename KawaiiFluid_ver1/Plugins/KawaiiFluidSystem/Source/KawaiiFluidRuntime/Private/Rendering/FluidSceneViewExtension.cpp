@@ -182,7 +182,10 @@ static void ApplyFluidShadowReceiver(
 		GFluidVSMTexture_Read.IsValid(), RenderParams.bEnableShadowCasting);
 
 	// Check if we have valid VSM from previous frame (read buffer)
-	if (!GFluidVSMTexture_Read.IsValid() || !RenderParams.bEnableShadowCasting)
+	// Need to check both TRefCountPtr validity AND internal RHI resource
+	if (!GFluidVSMTexture_Read.IsValid() ||
+		!GFluidVSMTexture_Read->GetRHI() ||
+		!RenderParams.bEnableShadowCasting)
 	{
 		UE_LOG(LogTemp, Log, TEXT("FluidShadow: ApplyFluidShadowReceiver early exit - waiting for VSM from previous frame"));
 		return;
@@ -194,6 +197,12 @@ static void ApplyFluidShadowReceiver(
 	FRDGTextureRef VSMTexture = GraphBuilder.RegisterExternalTexture(
 		GFluidVSMTexture_Read,
 		TEXT("FluidVSMTexture"));
+
+	if (!VSMTexture)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FluidShadow: Failed to register external VSM texture"));
+		return;
+	}
 
 	// Setup receiver parameters
 	FFluidShadowReceiverParams ReceiverParams;
