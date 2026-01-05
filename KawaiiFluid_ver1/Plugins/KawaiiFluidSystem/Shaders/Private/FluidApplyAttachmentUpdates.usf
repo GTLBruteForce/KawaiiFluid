@@ -1,0 +1,104 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Apply Attached Particle Position Updates
+// Updates positions for particles attached to skeletal mesh surfaces
+// Handles both position updates and detachment with velocity setting
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// Attached Particle Update Structure (must match FAttachedParticleUpdate in C++)
+// 32 bytes, GPU-aligned
+//
+// Layout:
+//   [0-3]   ParticleIndex (uint)
+//   [4-7]   Flags (uint)
+//   [8-19]  NewPosition (float3)
+//   [20-31] NewVelocity (float3)
+//=============================================================================
+
+struct FAttachedParticleUpdate
+{
+	uint ParticleIndex;          // 4 bytes - Index in GPU particle buffer
+	uint Flags;                  // 4 bytes - Update flags
+	float3 NewPosition;          // 12 bytes - New world position
+	float3 NewVelocity;          // 12 bytes - Velocity for detached particles
+};
+
+// Update flags
+#define ATTACHMENT_FLAG_UPDATE_POSITION (1 << 0)
+#define ATTACHMENT_FLAG_DETACH          (1 << 1)
+#define ATTACHMENT_FLAG_SET_VELOCITY    (1 << 2)
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+StructuredBuffer<FAttachedParticleUpdate> AttachmentUpdates;
+RWStructuredBuffer<FGPUFluidParticle> Particles;
+
+uint UpdateCount;
+
+//=============================================================================
+// Main Compute Shader - Apply Attachment Updates
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 256
+#endif
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void ApplyAttachmentUpdatesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= UpdateCount)
+	{
+		return;
+	}
+
+	FAttachedParticleUpdate update = AttachmentUpdates[idx];
+	uint particleIdx = update.ParticleIndex;
+
+	// Check if this is a detachment
+	if ((update.Flags & ATTACHMENT_FLAG_DETACH) != 0)
+	{
+		// Particle is detaching - clear attached flag
+		Particles[particleIdx].Flags = ClearFlag(Particles[particleIdx].Flags, GPU_PARTICLE_FLAG_IS_ATTACHED);
+
+		// Set the "just detached" flag so physics can apply special behavior
+		Particles[particleIdx].Flags = SetFlag(Particles[particleIdx].Flags, GPU_PARTICLE_FLAG_JUST_DETACHED);
+
+		// Set position to last attached position
+		Particles[particleIdx].Position = update.NewPosition;
+		Particles[particleIdx].PredictedPosition = update.NewPosition;
+
+		// Apply detachment velocity (surface velocity + any additional forces)
+		if ((update.Flags & ATTACHMENT_FLAG_SET_VELOCITY) != 0)
+		{
+			Particles[particleIdx].Velocity = update.NewVelocity;
+		}
+	}
+	else if ((update.Flags & ATTACHMENT_FLAG_UPDATE_POSITION) != 0)
+	{
+		// Particle remains attached - update position to follow surface
+
+		// Calculate surface velocity from position change (for rendering/effects)
+		float3 oldPosition = Particles[particleIdx].Position;
+		float3 surfaceVelocity = update.NewPosition - oldPosition;
+
+		// Update position
+		Particles[particleIdx].Position = update.NewPosition;
+		Particles[particleIdx].PredictedPosition = update.NewPosition;
+
+		// Attached particles have zero relative velocity (they move with surface)
+		// The actual velocity is the surface velocity, which can be used for effects
+		Particles[particleIdx].Velocity = surfaceVelocity;
+
+		// Ensure attached flag is set
+		Particles[particleIdx].Flags = SetFlag(Particles[particleIdx].Flags, GPU_PARTICLE_FLAG_IS_ATTACHED);
+
+		// Clear "just detached" flag if it was set
+		Particles[particleIdx].Flags = ClearFlag(Particles[particleIdx].Flags, GPU_PARTICLE_FLAG_JUST_DETACHED);
+	}
+}
