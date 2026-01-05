@@ -1721,7 +1721,7 @@ void FGPUFluidSimulator::DispatchStreamCompactionShaders(FRHICommandListImmediat
 		SetComputePipelineState(RHICmdList, ShaderRHI);
 
 		FCompactCS::FParameters Parameters;
-		Parameters.Particles = ParticleSRV;
+		Parameters.Particles = InParticleSRV;  // Use same buffer as AABB Mark pass!
 		Parameters.MarkedFlags = MarkedFlagsSRV;
 		Parameters.PrefixSums = PrefixSumsSRV;
 		Parameters.MarkedAABBIndex = MarkedAABBIndexSRV;
@@ -1812,4 +1812,78 @@ bool FGPUFluidSimulator::GetFilteredCandidates(TArray<FGPUCandidateParticle>& Ou
 	FlushRenderingCommands();
 
 	return OutCandidates.Num() > 0;
+}
+
+//=============================================================================
+// Per-Polygon Collision Correction Implementation
+//=============================================================================
+
+void FGPUFluidSimulator::ApplyCorrections(const TArray<FParticleCorrection>& Corrections)
+{
+	if (!bIsInitialized || Corrections.Num() == 0 || !PersistentParticleBuffer.IsValid())
+	{
+		return;
+	}
+
+	// Make a copy of corrections for the render thread
+	TArray<FParticleCorrection> CorrectionsCopy = Corrections;
+	FGPUFluidSimulator* Self = this;
+	const int32 CorrectionCount = Corrections.Num();
+
+	ENQUEUE_RENDER_COMMAND(ApplyPerPolygonCorrections)(
+		[Self, CorrectionsCopy, CorrectionCount](FRHICommandListImmediate& RHICmdList)
+		{
+			if (!Self->PersistentParticleBuffer.IsValid())
+			{
+				UE_LOG(LogGPUFluidSimulator, Warning, TEXT("ApplyCorrections: PersistentParticleBuffer not valid"));
+				return;
+			}
+
+			// Create corrections buffer
+			FRHIResourceCreateInfo CreateInfo(TEXT("PerPolygonCorrections"));
+			FBufferRHIRef CorrectionsBufferRHI = RHICmdList.CreateStructuredBuffer(
+				sizeof(FParticleCorrection),
+				CorrectionCount * sizeof(FParticleCorrection),
+				BUF_ShaderResource,
+				CreateInfo
+			);
+
+			// Upload corrections data
+			void* CorrectionData = RHICmdList.LockBuffer(CorrectionsBufferRHI, 0,
+				CorrectionCount * sizeof(FParticleCorrection), RLM_WriteOnly);
+			FMemory::Memcpy(CorrectionData, CorrectionsCopy.GetData(), CorrectionCount * sizeof(FParticleCorrection));
+			RHICmdList.UnlockBuffer(CorrectionsBufferRHI);
+
+			// Create SRV for corrections
+			FShaderResourceViewRHIRef CorrectionsSRV = RHICmdList.CreateShaderResourceView(CorrectionsBufferRHI);
+
+			// Create UAV for particles from PersistentParticleBuffer
+			FBufferRHIRef ParticleRHI = Self->PersistentParticleBuffer->GetRHI();
+			if (!ParticleRHI.IsValid())
+			{
+				UE_LOG(LogGPUFluidSimulator, Warning, TEXT("ApplyCorrections: Failed to get ParticleRHI from PersistentParticleBuffer"));
+				return;
+			}
+			FUnorderedAccessViewRHIRef ParticlesUAV = RHICmdList.CreateUnorderedAccessView(ParticleRHI, false, false);
+
+			// Dispatch ApplyCorrections compute shader
+			FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+			TShaderMapRef<FApplyCorrectionsCS> ComputeShader(ShaderMap);
+			FRHIComputeShader* ShaderRHI = ComputeShader.GetComputeShader();
+			SetComputePipelineState(RHICmdList, ShaderRHI);
+
+			FApplyCorrectionsCS::FParameters Parameters;
+			Parameters.Corrections = CorrectionsSRV;
+			Parameters.Particles = ParticlesUAV;
+			Parameters.CorrectionCount = CorrectionCount;
+			SetShaderParameters(RHICmdList, ComputeShader, ShaderRHI, Parameters);
+
+			const int32 NumGroups = FMath::DivideAndRoundUp(CorrectionCount, FApplyCorrectionsCS::ThreadGroupSize);
+			RHICmdList.DispatchComputeShader(NumGroups, 1, 1);
+
+			UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
+
+			UE_LOG(LogGPUFluidSimulator, Log, TEXT("ApplyCorrections: Applied %d corrections"), CorrectionCount);
+		}
+	);
 }

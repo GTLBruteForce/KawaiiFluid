@@ -8,6 +8,7 @@
 #include "Physics/AdhesionSolver.h"
 #include "Collision/FluidCollider.h"
 #include "Collision/MeshFluidCollider.h"
+#include "Collision/PerPolygonCollisionProcessor.h"
 #include "Components/FluidInteractionComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Async/Async.h"
@@ -34,6 +35,8 @@ UKawaiiFluidSimulationContext::UKawaiiFluidSimulationContext()
 
 UKawaiiFluidSimulationContext::~UKawaiiFluidSimulationContext()
 {
+	// Explicitly reset to ensure complete type is available for destruction
+	PerPolygonProcessor.Reset();
 	ReleaseGPUSimulator();
 }
 
@@ -291,9 +294,29 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 		const float DefaultFriction = Preset->Friction;
 		const float DefaultRestitution = Preset->Restitution;
 
+		// Build set of actors using Per-Polygon collision (to skip their primitive colliders)
+		TSet<AActor*> PerPolygonActors;
+		for (UFluidInteractionComponent* Interaction : Params.InteractionComponents)
+		{
+			if (Interaction && Interaction->IsPerPolygonCollisionEnabled())
+			{
+				if (AActor* Owner = Interaction->GetOwner())
+				{
+					PerPolygonActors.Add(Owner);
+				}
+			}
+		}
+
 		for (UFluidCollider* Collider : Params.Colliders)
 		{
 			if (!Collider || !Collider->IsColliderEnabled())
+			{
+				continue;
+			}
+
+			// Skip colliders on actors that use Per-Polygon collision
+			AActor* ColliderOwner = Collider->GetOwner();
+			if (ColliderOwner && PerPolygonActors.Contains(ColliderOwner))
 			{
 				continue;
 			}
@@ -428,6 +451,108 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 
 			// Note: Results are available on NEXT frame due to async GPU execution
 			// The actual count is logged by GPUFluidSimulator itself after GPU completes
+		}
+
+		// =====================================================
+		// Phase 2.5: Per-Polygon Collision Processing
+		// CPU processes filtered candidates against skeletal mesh triangles
+		// Results are applied back to GPU via ApplyCorrections
+		// =====================================================
+
+		// DEBUG: Check Per-Polygon status
+		static int32 PerPolygonDebugCounter = 0;
+		const bool bDebugLog = (++PerPolygonDebugCounter % 60 == 0);
+
+		// Collect Per-Polygon enabled interaction components FIRST
+		TArray<UFluidInteractionComponent*> PerPolygonInteractions;
+		for (UFluidInteractionComponent* Interaction : Params.InteractionComponents)
+		{
+			if (Interaction && Interaction->IsPerPolygonCollisionEnabled())
+			{
+				PerPolygonInteractions.Add(Interaction);
+			}
+		}
+
+		if (bDebugLog)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Per-Polygon DEBUG: InteractionComponents=%d, PerPolygonEnabled=%d, HasFilteredCandidates=%d"),
+				Params.InteractionComponents.Num(),
+				PerPolygonInteractions.Num(),
+				GPUSimulator->HasFilteredCandidates() ? 1 : 0);
+		}
+
+		if (PerPolygonInteractions.Num() > 0)
+		{
+			// Initialize Per-Polygon processor if needed
+			if (!PerPolygonProcessor)
+			{
+				PerPolygonProcessor = MakeUnique<FPerPolygonCollisionProcessor>();
+				PerPolygonProcessor->SetCollisionMargin(1.0f);
+				PerPolygonProcessor->SetFriction(Preset->Friction);
+				PerPolygonProcessor->SetRestitution(Preset->Restitution);
+				UE_LOG(LogTemp, Warning, TEXT("Per-Polygon: Processor initialized"));
+			}
+
+			// Update BVH cache (skinned mesh vertex positions)
+			PerPolygonProcessor->UpdateBVHCache(PerPolygonInteractions);
+
+			if (bDebugLog)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Per-Polygon DEBUG: BVH updated, time=%.2fms"),
+					PerPolygonProcessor->GetLastBVHUpdateTimeMs());
+			}
+
+			// Check if we have filtered candidates from PREVIOUS frame
+			if (GPUSimulator->HasFilteredCandidates())
+			{
+				// Get filtered candidates from GPU (this may block for readback)
+				TArray<FGPUCandidateParticle> Candidates;
+				if (GPUSimulator->GetFilteredCandidates(Candidates))
+				{
+					if (bDebugLog)
+					{
+						UE_LOG(LogTemp, Warning, TEXT("Per-Polygon DEBUG: Got %d candidates from GPU"), Candidates.Num());
+					}
+
+					if (Candidates.Num() > 0)
+					{
+						// Process collisions on CPU (parallel)
+						// NOTE: Use original InteractionComponents array, not PerPolygonInteractions
+						// because Candidate.InteractionIndex is based on original array indices
+						TArray<FParticleCorrection> Corrections;
+						PerPolygonProcessor->ProcessCollisions(
+							Candidates,
+							Params.InteractionComponents,
+							Preset->ParticleRadius,
+							Corrections
+						);
+
+						if (bDebugLog)
+						{
+							UE_LOG(LogTemp, Warning, TEXT("Per-Polygon DEBUG: Processed=%d, Collisions=%d, Corrections=%d"),
+								PerPolygonProcessor->GetLastProcessedCount(),
+								PerPolygonProcessor->GetLastCollisionCount(),
+								Corrections.Num());
+						}
+
+						// Apply corrections to GPU particles
+						if (Corrections.Num() > 0)
+						{
+							GPUSimulator->ApplyCorrections(Corrections);
+							UE_LOG(LogTemp, Warning, TEXT("Per-Polygon: Applied %d corrections to GPU"), Corrections.Num());
+
+							// DEBUG: Log first correction details
+							if (Corrections.Num() > 0)
+							{
+								const FParticleCorrection& First = Corrections[0];
+								UE_LOG(LogTemp, Warning, TEXT("  First correction: ParticleIdx=%d, Delta=(%.2f,%.2f,%.2f)"),
+									First.ParticleIndex,
+									First.PositionDelta.X, First.PositionDelta.Y, First.PositionDelta.Z);
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 

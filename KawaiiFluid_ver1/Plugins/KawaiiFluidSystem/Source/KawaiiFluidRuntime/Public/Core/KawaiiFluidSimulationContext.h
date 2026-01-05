@@ -6,8 +6,10 @@
 #include "UObject/NoExportTypes.h"
 #include "Core/FluidParticle.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
+#include "Collision/PerPolygonCollisionProcessor.h"
 #include "KawaiiFluidSimulationContext.generated.h"
 
+// Forward declarations
 class FSpatialHash;
 class FDensityConstraint;
 class FViscositySolver;
@@ -210,6 +212,9 @@ protected:
 
 	/** GPU fluid simulator instance */
 	TSharedPtr<FGPUFluidSimulator> GPUSimulator;
+
+	/** Per-Polygon collision processor for CPU-based skeletal mesh triangle collision */
+	TUniquePtr<FPerPolygonCollisionProcessor> PerPolygonProcessor;
 
 	/**
 	 * Simulate using GPU compute shaders

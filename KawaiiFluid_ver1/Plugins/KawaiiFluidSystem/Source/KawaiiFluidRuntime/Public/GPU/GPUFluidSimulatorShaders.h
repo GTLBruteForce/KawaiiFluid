@@ -798,3 +798,36 @@ public:
 		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 };
+
+//=============================================================================
+// Apply Corrections Compute Shader
+// Applies CPU Per-Polygon collision corrections to GPU particles
+//=============================================================================
+
+class FApplyCorrectionsCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FApplyCorrectionsCS);
+	SHADER_USE_PARAMETER_STRUCT(FApplyCorrectionsCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_SRV(StructuredBuffer<FParticleCorrection>, Corrections)
+		SHADER_PARAMETER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER(uint32, CorrectionCount)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};

@@ -87,6 +87,14 @@ IMPLEMENT_GLOBAL_SHADER(FWriteTotalCountCS,
 	"WriteTotalCountCS", SF_Compute);
 
 //=============================================================================
+// Per-Polygon Collision Correction Shader
+//=============================================================================
+
+IMPLEMENT_GLOBAL_SHADER(FApplyCorrectionsCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidApplyCorrections.usf",
+	"ApplyCorrectionsCS", SF_Compute);
+
+//=============================================================================
 // Pass Builder Implementation
 //=============================================================================
 

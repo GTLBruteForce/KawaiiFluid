@@ -527,3 +527,46 @@ struct FGPUCandidateParticle
 	}
 };
 static_assert(sizeof(FGPUCandidateParticle) == 48, "FGPUCandidateParticle must be 48 bytes for GPU alignment");
+
+/**
+ * Particle Correction Structure
+ * Output of CPU Per-Polygon Collision processing
+ * Applied to GPU particles via ApplyCorrections compute shader
+ * 32 bytes, GPU-aligned
+ *
+ * Layout:
+ *   [0-3]   ParticleIndex (uint32)
+ *   [4-7]   Flags (uint32)
+ *   [8-19]  VelocityDelta (float3) - Velocity correction for collision response
+ *   [20-31] PositionDelta (float3) - Position correction to push out of surface
+ */
+struct FParticleCorrection
+{
+	uint32 ParticleIndex;         // 4 bytes - Index in GPU particle buffer
+	uint32 Flags;                 // 4 bytes - Collision flags
+	FVector3f VelocityDelta;      // 12 bytes - Velocity correction (reflection/damping)
+	FVector3f PositionDelta;      // 12 bytes - Position correction
+
+	// Flag constants
+	static constexpr uint32 FLAG_NONE = 0;
+	static constexpr uint32 FLAG_COLLIDED = 1 << 0;      // Particle collided with triangle
+	static constexpr uint32 FLAG_ATTACHED = 1 << 1;      // Particle should attach to surface
+	static constexpr uint32 FLAG_VELOCITY_CORRECTED = 1 << 2;  // Velocity was corrected
+
+	FParticleCorrection()
+		: ParticleIndex(0)
+		, Flags(FLAG_NONE)
+		, VelocityDelta(FVector3f::ZeroVector)
+		, PositionDelta(FVector3f::ZeroVector)
+	{
+	}
+
+	FParticleCorrection(uint32 InIndex, const FVector3f& InPosDelta, const FVector3f& InVelDelta, uint32 InFlags = FLAG_COLLIDED)
+		: ParticleIndex(InIndex)
+		, Flags(InFlags)
+		, VelocityDelta(InVelDelta)
+		, PositionDelta(InPosDelta)
+	{
+	}
+};
+static_assert(sizeof(FParticleCorrection) == 32, "FParticleCorrection must be 32 bytes for GPU alignment");

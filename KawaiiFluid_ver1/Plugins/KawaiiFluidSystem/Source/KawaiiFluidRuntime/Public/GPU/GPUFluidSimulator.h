@@ -221,6 +221,13 @@ public:
 	 */
 	bool HasFilteredCandidates() const { return bHasFilteredCandidates; }
 
+	/**
+	 * Apply particle corrections from CPU Per-Polygon collision processing
+	 * Uploads corrections to GPU and applies them via compute shader
+	 * @param Corrections - Array of position corrections from Per-Polygon collision
+	 */
+	void ApplyCorrections(const TArray<FParticleCorrection>& Corrections);
+
 	//=============================================================================
 	// GPU Particle Spawning (Thread-Safe)
 	// CPU sends spawn requests, GPU creates particles via atomic counter
