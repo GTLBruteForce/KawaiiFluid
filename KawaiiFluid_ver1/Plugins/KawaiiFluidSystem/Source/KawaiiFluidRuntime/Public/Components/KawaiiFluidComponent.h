@@ -74,6 +74,16 @@ enum class EFluidEmitterType : uint8
 };
 
 /**
+ * Layer spawn rate mode for Hexagonal Stream
+ */
+UENUM(BlueprintType)
+enum class EStreamLayerMode : uint8
+{
+	VelocityBased     UMETA(DisplayName = "Velocity Based", ToolTip = "Spawn rate automatically adjusts to velocity for continuous stream"),
+	FixedRate         UMETA(DisplayName = "Fixed Rate", ToolTip = "Spawn fixed number of layers per second"),
+};
+
+/**
  * Fluid spawn settings
  */
 USTRUCT(BlueprintType)
@@ -153,9 +163,14 @@ struct FFluidSpawnSettings
 	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter && EmitterType == EFluidEmitterType::HexagonalStream", EditConditionHides, ClampMin = "0.0"))
 	float StreamParticleSpacing = 0.0f;
 
-	/** Number of hexagonal layers spawned per second - Hexagonal Stream only. Higher = denser stream */
+	/** Layer spawn rate mode - Hexagonal Stream only */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Flow",
-	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter && EmitterType == EFluidEmitterType::HexagonalStream", EditConditionHides, ClampMin = "1.0", ClampMax = "500.0"))
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter && EmitterType == EFluidEmitterType::HexagonalStream", EditConditionHides))
+	EStreamLayerMode StreamLayerMode = EStreamLayerMode::VelocityBased;
+
+	/** Number of hexagonal layers spawned per second - Fixed Rate mode only */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Flow",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter && EmitterType == EFluidEmitterType::HexagonalStream && StreamLayerMode == EStreamLayerMode::FixedRate", EditConditionHides, ClampMin = "1.0", ClampMax = "500.0"))
 	float StreamLayersPerSecond = 60.0f;
 
 	/** Random position jitter for hexagonal packing (0 = perfect grid, 0.5 = max natural look) - Hexagonal Stream only */

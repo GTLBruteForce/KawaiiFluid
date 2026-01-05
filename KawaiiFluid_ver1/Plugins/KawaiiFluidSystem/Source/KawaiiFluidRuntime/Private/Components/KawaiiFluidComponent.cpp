@@ -274,8 +274,30 @@ void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 	// Hexagonal Stream 모드: Hexagonal Packing 레이어 기반 스폰
 	if (SpawnSettings.EmitterType == EFluidEmitterType::HexagonalStream)
 	{
-		// 레이어 간격 = 1 / LayersPerSecond (직접 설정)
-		const float LayerInterval = 1.0f / FMath::Max(SpawnSettings.StreamLayersPerSecond, 1.0f);
+		float LayerInterval;
+
+		if (SpawnSettings.StreamLayerMode == EStreamLayerMode::VelocityBased)
+		{
+			// Velocity-based: LayerInterval = Spacing / Speed
+			// 파티클이 Spacing만큼 이동하는 시간에 맞춰 새 레이어 생성
+			float Spacing = SpawnSettings.StreamParticleSpacing;
+			if (Spacing <= 0.0f && SimulationModule && SimulationModule->Preset)
+			{
+				Spacing = SimulationModule->Preset->SmoothingRadius * 0.5f;
+			}
+			if (Spacing <= 0.0f)
+			{
+				Spacing = 10.0f;  // fallback
+			}
+
+			const float Speed = FMath::Max(SpawnSettings.SpawnSpeed, 1.0f);
+			LayerInterval = Spacing / Speed;
+		}
+		else  // FixedRate
+		{
+			// 고정 레이어/초 모드
+			LayerInterval = 1.0f / FMath::Max(SpawnSettings.StreamLayersPerSecond, 1.0f);
+		}
 
 		SpawnAccumulatedTime += DeltaTime;
 
