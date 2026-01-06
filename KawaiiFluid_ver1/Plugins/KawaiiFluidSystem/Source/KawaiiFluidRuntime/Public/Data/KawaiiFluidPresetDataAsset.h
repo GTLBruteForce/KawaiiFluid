@@ -70,6 +70,45 @@ public:
 	int32 SolverIterations = 3;
 
 	//========================================
+	// Tensile Instability Correction (PBF Eq.13-14)
+	//========================================
+
+	/**
+	 * Enable artificial pressure (scorr) for surface tension
+	 * Prevents particle clustering at low-density regions (splash, surface)
+	 * Based on PBF paper Section 4 (Macklin & Müller, 2013)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Tensile Instability")
+	bool bEnableTensileInstabilityCorrection = true;
+
+	/**
+	 * Artificial pressure strength (k in paper)
+	 * Higher values create stronger repulsion at surface
+	 * Typical: 0.1 for water-like, 0.01 for viscous fluids
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Tensile Instability",
+		meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bEnableTensileInstabilityCorrection"))
+	float TensileInstabilityK = 0.1f;
+
+	/**
+	 * Artificial pressure exponent (n in paper)
+	 * Higher values make the correction more localized
+	 * Typical: 4
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Tensile Instability",
+		meta = (ClampMin = "1", ClampMax = "8", EditCondition = "bEnableTensileInstabilityCorrection"))
+	int32 TensileInstabilityN = 4;
+
+	/**
+	 * Reference distance as fraction of smoothing radius (Δq/h)
+	 * scorr uses W(r)/W(Δq) ratio
+	 * Typical: 0.2 (20% of h)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Tensile Instability",
+		meta = (ClampMin = "0.01", ClampMax = "0.5", EditCondition = "bEnableTensileInstabilityCorrection"))
+	float TensileInstabilityDeltaQ = 0.2f;
+
+	//========================================
 	// Viscosity Parameters
 	//========================================
 

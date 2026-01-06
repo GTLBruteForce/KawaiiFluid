@@ -6,6 +6,20 @@
 #include "Core/FluidParticle.h"
 
 /**
+ * Tensile Instability Correction Parameters (PBF Eq.13-14)
+ * s_corr = -k * (W(r)/W(Δq))^n
+ * Prevents particle clustering at surface/splash regions
+ */
+struct FTensileInstabilityParams
+{
+	bool bEnabled = false;     // Enable scorr
+	float K = 0.1f;            // Strength coefficient (default 0.1)
+	int32 N = 4;               // Exponent (default 4)
+	float DeltaQ = 0.2f;       // Reference distance ratio (Δq/h)
+	float W_DeltaQ = 0.0f;     // Precomputed W(Δq, h) for efficiency
+};
+
+/**
  * SPH 커널 계수 (사전 계산)
  * Pow() 호출 제거를 위해 미리 계산된 값들
  */
@@ -17,6 +31,9 @@ struct FSPHKernelCoeffs
 	float SpikyCoeff;     // -45 / (πh⁶)
 	float InvRestDensity; // 1 / ρ₀
 	float SmoothingRadiusSq; // h² (cm²)
+
+	// Tensile Instability Correction (PBF Section 4)
+	FTensileInstabilityParams TensileParams;
 };
 
 /**
@@ -33,6 +50,15 @@ public:
 
 	/** 밀도 제약 해결 (한 번의 반복) - XPBD */
 	void Solve(TArray<FFluidParticle>& Particles, float InSmoothingRadius, float InRestDensity, float InCompliance, float DeltaTime);
+
+	/** 밀도 제약 해결 (Tensile Instability 보정 포함) - XPBD + scorr */
+	void SolveWithTensileCorrection(
+		TArray<FFluidParticle>& Particles,
+		float InSmoothingRadius,
+		float InRestDensity,
+		float InCompliance,
+		float DeltaTime,
+		const FTensileInstabilityParams& TensileParams);
 
 	/** 파라미터 설정 */
 	void SetRestDensity(float NewRestDensity);

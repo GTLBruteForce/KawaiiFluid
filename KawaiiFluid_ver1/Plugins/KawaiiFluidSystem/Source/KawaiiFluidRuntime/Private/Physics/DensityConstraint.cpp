@@ -126,6 +126,65 @@ void FDensityConstraint::Solve(TArray<FFluidParticle>& Particles, float InSmooth
 }
 
 //========================================
+// 메인 솔버 (Tensile Instability 보정 포함)
+//========================================
+void FDensityConstraint::SolveWithTensileCorrection(
+	TArray<FFluidParticle>& Particles,
+	float InSmoothingRadius,
+	float InRestDensity,
+	float InCompliance,
+	float DeltaTime,
+	const FTensileInstabilityParams& TensileParams)
+{
+	SmoothingRadius = InSmoothingRadius;
+	RestDensity = InRestDensity;
+
+	// XPBD: α̃ = α / dt²
+	const float DtSq = DeltaTime * DeltaTime;
+	Epsilon = InCompliance / FMath::Max(DtSq, 1e-8f);
+
+	const int32 NumParticles = Particles.Num();
+	if (NumParticles == 0) return;
+
+	// 1. SoA 준비
+	ResizeSoAArrays(NumParticles);
+	CopyToSoA(Particles);
+
+	// 2. 커널 계수 계산
+	const float h = SmoothingRadius * CM_TO_M;
+	const float h2 = h * h;
+	const float h6 = h2 * h2 * h2;
+	const float h9 = h6 * h2 * h;
+
+	FSPHKernelCoeffs Coeffs;
+	Coeffs.h = h;
+	Coeffs.h2 = h2;
+	Coeffs.Poly6Coeff = 315.0f / (64.0f * PI * h9);
+	Coeffs.SpikyCoeff = -45.0f / (PI * h6);
+	Coeffs.InvRestDensity = 1.0f / RestDensity;
+	Coeffs.SmoothingRadiusSq = SmoothingRadius * SmoothingRadius;
+
+	// 3. Tensile Instability 파라미터 설정
+	Coeffs.TensileParams = TensileParams;
+	if (TensileParams.bEnabled)
+	{
+		// W(Δq, h) 사전 계산 - Poly6 커널 사용
+		// Δq = DeltaQ * h (미터 단위)
+		const float DeltaQ_m = TensileParams.DeltaQ * h;
+		const float DeltaQ2 = DeltaQ_m * DeltaQ_m;
+		const float Diff = h2 - DeltaQ2;
+		Coeffs.TensileParams.W_DeltaQ = Coeffs.Poly6Coeff * Diff * Diff * Diff;
+	}
+
+	// 4. SIMD 계산
+	ComputeDensityAndLambda_SIMD(Particles, Coeffs);
+	ComputeDeltaP_SIMD(Particles, Coeffs);
+
+	// 5. 결과 적용
+	ApplyFromSoA(Particles);
+}
+
+//========================================
 // 1단계: Density + Lambda (SIMD)
 //========================================
 void FDensityConstraint::ComputeDensityAndLambda_SIMD(
@@ -320,7 +379,7 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 }
 
 //========================================
-// 2단계: DeltaP (SIMD)
+// 2단계: DeltaP (SIMD) - Tensile Instability (scorr) 보정 포함
 //========================================
 void FDensityConstraint::ComputeDeltaP_SIMD(
 	const TArray<FFluidParticle>& Particles,
@@ -337,12 +396,23 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 	float* RESTRICT DeltaPZPtr = DeltaPZ.GetData();
 
 	const VectorRegister4Float VecH = VectorSetFloat1(Coeffs.h);
+	const VectorRegister4Float VecH2 = VectorSetFloat1(Coeffs.h2);
 	const VectorRegister4Float VecCmToM = VectorSetFloat1(CM_TO_M);
+	const VectorRegister4Float VecCmToMSq = VectorSetFloat1(CM_TO_M_SQ);
 	const VectorRegister4Float VecSpikyCoeff = VectorSetFloat1(Coeffs.SpikyCoeff);
+	const VectorRegister4Float VecPoly6Coeff = VectorSetFloat1(Coeffs.Poly6Coeff);
 	const VectorRegister4Float VecInvRestDensity = VectorSetFloat1(Coeffs.InvRestDensity);
 	const VectorRegister4Float VecSmoothingRadiusSq = VectorSetFloat1(Coeffs.SmoothingRadiusSq);
 	const VectorRegister4Float VecZero = VectorZeroFloat();
 	const VectorRegister4Float VecMinR2 = VectorSetFloat1(KINDA_SMALL_NUMBER);
+
+	// Tensile Instability 파라미터
+	const bool bUseTensileCorrection = Coeffs.TensileParams.bEnabled && Coeffs.TensileParams.W_DeltaQ > KINDA_SMALL_NUMBER;
+	const float TensileK = Coeffs.TensileParams.K;
+	const int32 TensileN = Coeffs.TensileParams.N;
+	const float InvW_DeltaQ = bUseTensileCorrection ? (1.0f / Coeffs.TensileParams.W_DeltaQ) : 0.0f;
+	const VectorRegister4Float VecNegK = VectorSetFloat1(-TensileK);
+	const VectorRegister4Float VecInvW_DeltaQ = VectorSetFloat1(InvW_DeltaQ);
 
 	ParallelFor(NumParticles, [&](int32 i)
 	{
@@ -408,7 +478,36 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 			VectorRegister4Float VecGradWY = VectorSelect(VecValidMask, VectorMultiply(VecCoeff, VecDY), VecZero);
 			VectorRegister4Float VecGradWZ = VectorSelect(VecValidMask, VectorMultiply(VecCoeff, VecDZ), VecZero);
 
-			const VectorRegister4Float VecLambdaSum = VectorAdd(VecLambda_i, VecLambda_j);
+			// Lambda 합 계산 (기본)
+			VectorRegister4Float VecLambdaSum = VectorAdd(VecLambda_i, VecLambda_j);
+
+			// Tensile Instability 보정 (scorr) 추가
+			// PBF Eq.13: scorr = -k * (W(r) / W(Δq))^n
+			if (bUseTensileCorrection)
+			{
+				// W(r) = Poly6(r, h)
+				const VectorRegister4Float VecR2_m = VectorMultiply(VecR2, VecCmToMSq);
+				VectorRegister4Float VecDiff_Poly6 = VectorSubtract(VecH2, VecR2_m);
+				VecDiff_Poly6 = VectorMax(VecDiff_Poly6, VecZero);  // h² - r² >= 0
+				const VectorRegister4Float VecDiff3 = VectorMultiply(VecDiff_Poly6, VectorMultiply(VecDiff_Poly6, VecDiff_Poly6));
+				const VectorRegister4Float VecW_r = VectorMultiply(VecPoly6Coeff, VecDiff3);
+
+				// W(r) / W(Δq)
+				VectorRegister4Float VecRatio = VectorMultiply(VecW_r, VecInvW_DeltaQ);
+				VecRatio = VectorSelect(VecValidMask, VecRatio, VecZero);
+
+				// (W(r) / W(Δq))^n - SIMD에서 정수 거듭제곱
+				VectorRegister4Float VecRatioPowN = VecRatio;
+				for (int32 p = 1; p < TensileN; ++p)
+				{
+					VecRatioPowN = VectorMultiply(VecRatioPowN, VecRatio);
+				}
+
+				// scorr = -k * ratio^n
+				const VectorRegister4Float VecScorr = VectorMultiply(VecNegK, VecRatioPowN);
+				VecLambdaSum = VectorAdd(VecLambdaSum, VecScorr);
+			}
+
 			VecDeltaX = VectorMultiplyAdd(VecLambdaSum, VecGradWX, VecDeltaX);
 			VecDeltaY = VectorMultiplyAdd(VecLambdaSum, VecGradWY, VecDeltaY);
 			VecDeltaZ = VectorMultiplyAdd(VecLambdaSum, VecGradWZ, VecDeltaZ);
@@ -445,7 +544,20 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 				const float diff = Coeffs.h - rLen_m;
 				const float coeff = Coeffs.SpikyCoeff * diff * diff * CM_TO_M / rLen;
 
-				const float LambdaSum = Lambda_i + LambdaPtr[NeighborIdx];
+				float LambdaSum = Lambda_i + LambdaPtr[NeighborIdx];
+
+				// Tensile Instability 보정 (scorr) - 스칼라 경로
+				if (bUseTensileCorrection)
+				{
+					const float r2_m = r2_cm * CM_TO_M_SQ;
+					const float diff_poly6 = FMath::Max(0.0f, Coeffs.h2 - r2_m);
+					const float diff3 = diff_poly6 * diff_poly6 * diff_poly6;
+					const float W_r = Coeffs.Poly6Coeff * diff3;
+					const float ratio = W_r * InvW_DeltaQ;
+					const float scorr = -TensileK * FMath::Pow(ratio, static_cast<float>(TensileN));
+					LambdaSum += scorr;
+				}
+
 				DeltaX += LambdaSum * coeff * dx;
 				DeltaY += LambdaSum * coeff * dy;
 				DeltaZ += LambdaSum * coeff * dz;

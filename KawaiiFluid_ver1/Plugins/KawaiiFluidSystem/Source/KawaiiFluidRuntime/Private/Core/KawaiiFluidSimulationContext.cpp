@@ -819,17 +819,42 @@ void UKawaiiFluidSimulationContext::SolveDensityConstraints(
 		Particles[i].Lambda = 0.0f;
 	});
 
+	// Tensile Instability 파라미터 설정 (PBF Eq.13-14)
+	const bool bUseTensileCorrection = Preset->bEnableTensileInstabilityCorrection;
+
 	// XPBD 반복 솔버 (점성 유체: 2-3회, 물: 4-6회)
 	const int32 SolverIterations = Preset->SolverIterations;
 	for (int32 Iter = 0; Iter < SolverIterations; ++Iter)
 	{
-		DensityConstraint->Solve(
-			Particles,
-			Preset->SmoothingRadius,
-			Preset->RestDensity,
-			Preset->Compliance,
-			DeltaTime
-		);
+		if (bUseTensileCorrection)
+		{
+			// Tensile Instability 보정 포함 솔버
+			FTensileInstabilityParams TensileParams;
+			TensileParams.bEnabled = true;
+			TensileParams.K = Preset->TensileInstabilityK;
+			TensileParams.N = Preset->TensileInstabilityN;
+			TensileParams.DeltaQ = Preset->TensileInstabilityDeltaQ;
+
+			DensityConstraint->SolveWithTensileCorrection(
+				Particles,
+				Preset->SmoothingRadius,
+				Preset->RestDensity,
+				Preset->Compliance,
+				DeltaTime,
+				TensileParams
+			);
+		}
+		else
+		{
+			// 기본 솔버
+			DensityConstraint->Solve(
+				Particles,
+				Preset->SmoothingRadius,
+				Preset->RestDensity,
+				Preset->Compliance,
+				DeltaTime
+			);
+		}
 	}
 }
 
