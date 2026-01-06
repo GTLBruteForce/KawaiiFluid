@@ -69,16 +69,20 @@ void UFluidCollider::ResolveParticleCollision(FFluidParticle& Particle)
 		// 표면 바깥쪽으로 밀어냄
 		FVector CollisionPos = ClosestPoint + Normal * (CollisionMargin + 0.01f);
 
-		// Position도 함께 업데이트 (튀어오름 방지)
 		Particle.PredictedPosition = CollisionPos;
 		Particle.Position = CollisionPos;
 
-		// 점성 유체: 수직 성분 제거 (표면에 달라붙음)
 		float VelDotNormal = FVector::DotProduct(Particle.Velocity, Normal);
 
 		if (VelDotNormal < 0.0f)
 		{
-			Particle.Velocity -= VelDotNormal * Normal;
+			// 속도를 수직/수평 성분으로 분해
+			FVector VelNormal = Normal * VelDotNormal;
+			FVector VelTangent = Particle.Velocity - VelNormal;
+
+			// 수직 성분: Restitution으로 반사 (0 = 붙음, 1 = 완전 반사)
+			// 수평 성분: Friction으로 감쇠 (0 = 미끄러움, 1 = 완전 정지)
+			Particle.Velocity = VelTangent * (1.0f - Friction) - VelNormal * Restitution;
 		}
 	}
 }

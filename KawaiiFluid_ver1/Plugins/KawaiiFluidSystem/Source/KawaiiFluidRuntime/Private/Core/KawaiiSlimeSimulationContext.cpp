@@ -81,10 +81,12 @@ void UKawaiiSlimeSimulationContext::SimulateSubstep(
 	}
 
 	// 8. World collision
-	if (Params.bUseWorldCollision && Params.World)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(KawaiiSlimeContext_WorldCollision);
-		HandleWorldCollision(Particles, Params, SpatialHash, Params.ParticleRadius);
+		if (Params.bUseWorldCollision && Params.World)
+		{
+			HandleWorldCollision(Particles, Params, SpatialHash, Preset->SmoothingRadius * 0.5f, SubstepDT, Preset->Friction, Preset->Restitution);
+		}
 	}
 
 	// 9. Finalize positions and update velocities

@@ -143,7 +143,10 @@ protected:
 		TArray<FFluidParticle>& Particles,
 		const FKawaiiFluidSimulationParams& Params,
 		FSpatialHash& SpatialHash,
-		float ParticleRadius
+		float ParticleRadius,
+		float SubstepDT,
+		float Friction = 0.5f,
+		float Restitution = 0.0f
 	);
 
 	/** 6. Finalize positions and update velocities */

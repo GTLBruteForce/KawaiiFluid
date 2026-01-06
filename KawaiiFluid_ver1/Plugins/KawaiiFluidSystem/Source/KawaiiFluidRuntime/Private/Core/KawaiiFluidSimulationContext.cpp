@@ -696,10 +696,12 @@ void UKawaiiFluidSimulationContext::SimulateSubstep(
 	}
 
 	// 5. World collision
-	if (Params.bUseWorldCollision && Params.World)
 	{
 		SCOPE_CYCLE_COUNTER(STAT_ContextWorldCollision);
-		HandleWorldCollision(Particles, Params, SpatialHash, Params.ParticleRadius);
+		if (Params.bUseWorldCollision && Params.World)
+		{
+			HandleWorldCollision(Particles, Params, SpatialHash, Params.ParticleRadius, SubstepDT, Preset->Friction, Preset->Restitution);
+		}
 	}
 
 	// 6. Finalize positions
@@ -865,7 +867,10 @@ void UKawaiiFluidSimulationContext::HandleWorldCollision(
 	TArray<FFluidParticle>& Particles,
 	const FKawaiiFluidSimulationParams& Params,
 	FSpatialHash& SpatialHash,
-	float ParticleRadius)
+	float ParticleRadius,
+	float SubstepDT,
+	float Friction,
+	float Restitution)
 {
 	UWorld* World = Params.World;
 	if (!World || Particles.Num() == 0)
@@ -958,6 +963,7 @@ void UKawaiiFluidSimulationContext::HandleWorldCollision(
 				LocalParams.AddIgnoredActor(Params.IgnoreActor.Get());
 			}
 
+			// Sweep from Position to PredictedPosition
 			FHitResult HitResult;
 			bool bHit = World->SweepSingleByChannel(
 				HitResult,
@@ -972,14 +978,20 @@ void UKawaiiFluidSimulationContext::HandleWorldCollision(
 			if (bHit && HitResult.bBlockingHit)
 			{
 				FVector CollisionPos = HitResult.Location + HitResult.ImpactNormal * 0.01f;
+				float VelDotNormal = FVector::DotProduct(Particle.Velocity, HitResult.ImpactNormal);
 
 				Particle.PredictedPosition = CollisionPos;
 				Particle.Position = CollisionPos;
 
-				float VelDotNormal = FVector::DotProduct(Particle.Velocity, HitResult.ImpactNormal);
 				if (VelDotNormal < 0.0f)
 				{
-					Particle.Velocity -= VelDotNormal * HitResult.ImpactNormal;
+					// Decompose velocity into normal and tangent components
+					FVector VelNormal = HitResult.ImpactNormal * VelDotNormal;
+					FVector VelTangent = Particle.Velocity - VelNormal;
+
+					// Normal: reflect with Restitution (0 = stick, 1 = perfect bounce)
+					// Tangent: dampen with Friction (0 = slide, 1 = stop)
+					Particle.Velocity = VelTangent * (1.0f - Friction) - VelNormal * Restitution;
 				}
 
 				// Fire collision event if enabled
