@@ -13,6 +13,19 @@ class UKawaiiFluidComponent;
 class UKawaiiFluidSimulationModule;
 
 /**
+ * World collision detection method
+ */
+UENUM(BlueprintType)
+enum class EWorldCollisionMethod : uint8
+{
+	/** Legacy sweep-based collision (SweepSingleByChannel) */
+	Sweep UMETA(DisplayName = "Sweep (Legacy)"),
+
+	/** SDF-based collision using Overlap + ClosestPoint */
+	SDF UMETA(DisplayName = "SDF (Distance-based)")
+};
+
+/**
  * Collision event data
  */
 struct FKawaiiFluidCollisionEvent
@@ -59,6 +72,10 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSimulationParams
 	/** Use world collision */
 	UPROPERTY(BlueprintReadWrite, Category = "Simulation")
 	bool bUseWorldCollision = true;
+
+	/** World collision detection method */
+	UPROPERTY(BlueprintReadWrite, Category = "Simulation")
+	EWorldCollisionMethod WorldCollisionMethod = EWorldCollisionMethod::Sweep;
 
 	/** Collision channel for world collision */
 	UPROPERTY(BlueprintReadWrite, Category = "Simulation")

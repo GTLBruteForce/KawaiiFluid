@@ -37,6 +37,26 @@ bool USphereFluidCollider::IsPointInside(const FVector& Point) const
 	return DistanceSq <= Radius * Radius;
 }
 
+float USphereFluidCollider::GetSignedDistance(const FVector& Point, FVector& OutGradient) const
+{
+	FVector Center = GetSphereCenter();
+	FVector ToPoint = Point - Center;
+	float DistanceToCenter = ToPoint.Size();
+
+	if (DistanceToCenter < KINDA_SMALL_NUMBER)
+	{
+		// At center: gradient points up, distance is -Radius (deepest inside)
+		OutGradient = FVector::UpVector;
+		return -Radius;
+	}
+
+	// Gradient always points outward from center
+	OutGradient = ToPoint / DistanceToCenter;
+
+	// Signed distance: positive outside, negative inside
+	return DistanceToCenter - Radius;
+}
+
 FVector USphereFluidCollider::GetSphereCenter() const
 {
 	AActor* Owner = GetOwner();

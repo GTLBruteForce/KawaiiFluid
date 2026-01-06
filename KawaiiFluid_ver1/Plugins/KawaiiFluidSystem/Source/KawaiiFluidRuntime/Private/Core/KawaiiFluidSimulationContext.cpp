@@ -15,6 +15,8 @@
 #include "RenderingThread.h"
 #include "GPU/GPUFluidSimulator.h"
 #include "GPU/GPUFluidParticle.h"
+#include "Engine/EngineTypes.h"
+#include "Engine/OverlapResult.h"
 
 // Profiling
 DECLARE_STATS_GROUP(TEXT("KawaiiFluidContext"), STATGROUP_KawaiiFluidContext, STATCAT_Advanced);
@@ -692,7 +694,7 @@ void UKawaiiFluidSimulationContext::SimulateSubstep(
 	// 4. Handle collisions
 	{
 		SCOPE_CYCLE_COUNTER(STAT_ContextHandleCollisions);
-		HandleCollisions(Particles, Params.Colliders);
+		HandleCollisions(Particles, Params.Colliders, SubstepDT);
 	}
 
 	// 5. World collision
@@ -852,18 +854,46 @@ void UKawaiiFluidSimulationContext::CacheColliderShapes(const TArray<UFluidColli
 
 void UKawaiiFluidSimulationContext::HandleCollisions(
 	TArray<FFluidParticle>& Particles,
-	const TArray<UFluidCollider*>& Colliders)
+	const TArray<UFluidCollider*>& Colliders,
+	float SubstepDT)
 {
 	for (UFluidCollider* Collider : Colliders)
 	{
 		if (Collider && Collider->IsColliderEnabled())
 		{
-			Collider->ResolveCollisions(Particles);
+			Collider->ResolveCollisions(Particles, SubstepDT);
 		}
 	}
 }
 
 void UKawaiiFluidSimulationContext::HandleWorldCollision(
+	TArray<FFluidParticle>& Particles,
+	const FKawaiiFluidSimulationParams& Params,
+	FSpatialHash& SpatialHash,
+	float ParticleRadius,
+	float SubstepDT,
+	float Friction,
+	float Restitution)
+{
+	// Dispatch to appropriate method based on WorldCollisionMethod
+	switch (Params.WorldCollisionMethod)
+	{
+	case EWorldCollisionMethod::SDF:
+		HandleWorldCollision_SDF(Particles, Params, SpatialHash, ParticleRadius, SubstepDT, Friction, Restitution);
+		break;
+
+	case EWorldCollisionMethod::Sweep:
+	default:
+		HandleWorldCollision_Sweep(Particles, Params, SpatialHash, ParticleRadius, SubstepDT, Friction, Restitution);
+		break;
+	}
+}
+
+//========================================
+// Legacy Sweep-based World Collision
+//========================================
+
+void UKawaiiFluidSimulationContext::HandleWorldCollision_Sweep(
 	TArray<FFluidParticle>& Particles,
 	const FKawaiiFluidSimulationParams& Params,
 	FSpatialHash& SpatialHash,
@@ -978,21 +1008,46 @@ void UKawaiiFluidSimulationContext::HandleWorldCollision(
 			if (bHit && HitResult.bBlockingHit)
 			{
 				FVector CollisionPos = HitResult.Location + HitResult.ImpactNormal * 0.01f;
-				float VelDotNormal = FVector::DotProduct(Particle.Velocity, HitResult.ImpactNormal);
+				const FVector& Normal = HitResult.ImpactNormal;
 
+				// Only modify PredictedPosition
 				Particle.PredictedPosition = CollisionPos;
-				Particle.Position = CollisionPos;
+
+				// Calculate desired velocity after collision response
+				// Initialize to zero - particle stops on surface by default
+				FVector DesiredVelocity = FVector::ZeroVector;
+				float VelDotNormal = FVector::DotProduct(Particle.Velocity, Normal);
+
+				// Minimum velocity threshold for applying restitution bounce
+				// Prevents "popcorn" oscillation for particles resting on surfaces
+				const float MinBounceVelocity = 50.0f;  // cm/s
 
 				if (VelDotNormal < 0.0f)
 				{
-					// Decompose velocity into normal and tangent components
-					FVector VelNormal = HitResult.ImpactNormal * VelDotNormal;
+					// Particle moving INTO surface - apply collision response
+					FVector VelNormal = Normal * VelDotNormal;
 					FVector VelTangent = Particle.Velocity - VelNormal;
 
-					// Normal: reflect with Restitution (0 = stick, 1 = perfect bounce)
-					// Tangent: dampen with Friction (0 = slide, 1 = stop)
-					Particle.Velocity = VelTangent * (1.0f - Friction) - VelNormal * Restitution;
+					if (VelDotNormal < -MinBounceVelocity)
+					{
+						// Significant impact - apply full collision response
+						// Normal: reflect with Restitution (0 = stick, 1 = perfect bounce)
+						// Tangent: dampen with Friction (0 = slide, 1 = stop)
+						DesiredVelocity = VelTangent * (1.0f - Friction) - VelNormal * Restitution;
+					}
+					else
+					{
+						// Low velocity contact (resting on surface) - no bounce, just slide
+						DesiredVelocity = VelTangent * (1.0f - Friction);
+					}
 				}
+				// else: VelDotNormal >= 0 means particle moving AWAY from surface
+				// DesiredVelocity stays zero - particle stops on surface (same as OLD behavior)
+
+				// Back-calculate Position so FinalizePositions derives DesiredVelocity
+				// FinalizePositions: Velocity = (PredictedPosition - Position) / dt
+				// Therefore: Position = PredictedPosition - DesiredVelocity * dt
+				Particle.Position = Particle.PredictedPosition - DesiredVelocity * SubstepDT;
 
 				// Fire collision event if enabled
 				if (Params.bEnableCollisionEvents && Params.OnCollisionEvent.IsBound() && Params.EventCountPtr)
@@ -1094,6 +1149,352 @@ void UKawaiiFluidSimulationContext::HandleWorldCollision(
 	});
 
 	// Floor detachment check
+	const float FloorDetachDistance = 5.0f;
+	const float FloorNearDistance = 20.0f;
+
+	for (FFluidParticle& Particle : Particles)
+	{
+		if (!Particle.bIsAttached)
+		{
+			Particle.bNearGround = false;
+			continue;
+		}
+
+		FCollisionQueryParams FloorQueryParams;
+		FloorQueryParams.bTraceComplex = false;
+		if (Params.IgnoreActor.IsValid())
+		{
+			FloorQueryParams.AddIgnoredActor(Params.IgnoreActor.Get());
+		}
+		if (Particle.AttachedActor.IsValid())
+		{
+			FloorQueryParams.AddIgnoredActor(Particle.AttachedActor.Get());
+		}
+
+		FHitResult FloorHit;
+		bool bNearFloor = World->LineTraceSingleByChannel(
+			FloorHit,
+			Particle.Position,
+			Particle.Position - FVector(0, 0, FloorNearDistance),
+			Params.CollisionChannel,
+			FloorQueryParams
+		);
+
+		Particle.bNearGround = bNearFloor;
+
+		if (bNearFloor && FloorHit.Distance <= FloorDetachDistance)
+		{
+			Particle.bIsAttached = false;
+			Particle.AttachedActor.Reset();
+			Particle.AttachedBoneName = NAME_None;
+			Particle.AttachedLocalOffset = FVector::ZeroVector;
+			Particle.AttachedSurfaceNormal = FVector::UpVector;
+			Particle.bJustDetached = true;
+		}
+	}
+}
+
+//========================================
+// SDF-based World Collision (Overlap + ClosestPoint)
+//========================================
+
+void UKawaiiFluidSimulationContext::HandleWorldCollision_SDF(
+	TArray<FFluidParticle>& Particles,
+	const FKawaiiFluidSimulationParams& Params,
+	FSpatialHash& SpatialHash,
+	float ParticleRadius,
+	float SubstepDT,
+	float Friction,
+	float Restitution)
+{
+	UWorld* World = Params.World;
+	if (!World || Particles.Num() == 0)
+	{
+		return;
+	}
+
+	const float CellSize = SpatialHash.GetCellSize();
+	const auto& Grid = SpatialHash.GetGrid();
+
+	FCollisionQueryParams QueryParams;
+	QueryParams.bTraceComplex = false;
+	QueryParams.bReturnPhysicalMaterial = false;
+	if (Params.IgnoreActor.IsValid())
+	{
+		QueryParams.AddIgnoredActor(Params.IgnoreActor.Get());
+	}
+
+	// Cell-based broad-phase (same as Sweep method)
+	struct FCellQueryData
+	{
+		FVector CellCenter;
+		FVector CellExtent;
+		TArray<int32> ParticleIndices;
+	};
+
+	TArray<FCellQueryData> CellQueries;
+	CellQueries.Reserve(Grid.Num());
+
+	for (const auto& Pair : Grid)
+	{
+		FCellQueryData CellData;
+		CellData.CellCenter = FVector(Pair.Key) * CellSize + FVector(CellSize * 0.5f);
+		CellData.CellExtent = FVector(CellSize * 0.5f);
+		CellData.ParticleIndices = Pair.Value;
+		CellQueries.Add(MoveTemp(CellData));
+	}
+
+	// Cell overlap check - parallel
+	TArray<uint8> CellCollisionResults;
+	CellCollisionResults.SetNumZeroed(CellQueries.Num());
+
+	ParallelFor(CellQueries.Num(), [&](int32 CellIdx)
+	{
+		const FCellQueryData& CellData = CellQueries[CellIdx];
+		if (World->OverlapBlockingTestByChannel(
+			CellData.CellCenter, FQuat::Identity, Params.CollisionChannel,
+			FCollisionShape::MakeBox(CellData.CellExtent), QueryParams))
+		{
+			CellCollisionResults[CellIdx] = 1;
+		}
+	});
+
+	// Collect collision candidates
+	TArray<int32> CollisionParticleIndices;
+	CollisionParticleIndices.Reserve(Particles.Num());
+
+	for (int32 CellIdx = 0; CellIdx < CellQueries.Num(); ++CellIdx)
+	{
+		if (CellCollisionResults[CellIdx])
+		{
+			CollisionParticleIndices.Append(CellQueries[CellIdx].ParticleIndices);
+		}
+	}
+
+	if (CollisionParticleIndices.Num() == 0)
+	{
+		return;
+	}
+
+	// Collision margin (particle radius + safety margin)
+	const float CollisionMargin = ParticleRadius * 1.1f;
+
+	// Physics scene read lock
+	FPhysScene* PhysScene = World->GetPhysicsScene();
+	if (!PhysScene)
+	{
+		return;
+	}
+
+	FPhysicsCommand::ExecuteRead(PhysScene, [&]()
+	{
+		ParallelFor(CollisionParticleIndices.Num(), [&](int32 j)
+		{
+			const int32 i = CollisionParticleIndices[j];
+			FFluidParticle& Particle = Particles[i];
+
+			FCollisionQueryParams LocalParams;
+			LocalParams.bTraceComplex = false;
+			LocalParams.bReturnPhysicalMaterial = false;
+			if (Params.IgnoreActor.IsValid())
+			{
+				LocalParams.AddIgnoredActor(Params.IgnoreActor.Get());
+			}
+
+			// SDF approach: Overlap + ClosestPoint
+			TArray<FOverlapResult> Overlaps;
+			bool bOverlapped = World->OverlapMultiByChannel(
+				Overlaps,
+				Particle.PredictedPosition,
+				FQuat::Identity,
+				Params.CollisionChannel,
+				FCollisionShape::MakeSphere(CollisionMargin),
+				LocalParams
+			);
+
+			if (!bOverlapped || Overlaps.Num() == 0)
+			{
+				return;
+			}
+
+			// Find closest collision among all overlapping primitives
+			float MinSignedDistance = MAX_FLT;
+			FVector BestNormal = FVector::UpVector;
+			FVector BestClosestPoint = Particle.PredictedPosition;
+			AActor* HitActor = nullptr;
+
+			for (const FOverlapResult& Overlap : Overlaps)
+			{
+				UPrimitiveComponent* Comp = Overlap.GetComponent();
+				if (!Comp)
+				{
+					continue;
+				}
+
+				FVector ClosestPoint;
+				float DistToSurface = Comp->GetClosestPointOnCollision(
+					Particle.PredictedPosition, ClosestPoint);
+
+				if (DistToSurface < 0.0f)
+				{
+					// GetClosestPointOnCollision returns -1 on failure
+					continue;
+				}
+
+				// Calculate signed distance and normal
+				FVector ToParticle = Particle.PredictedPosition - ClosestPoint;
+				float Dist = ToParticle.Size();
+				FVector Normal;
+
+				if (Dist > KINDA_SMALL_NUMBER)
+				{
+					Normal = ToParticle / Dist;
+				}
+				else
+				{
+					// Particle is exactly on or inside surface
+					// Use velocity direction to determine push direction
+					Normal = -Particle.Velocity.GetSafeNormal();
+					if (Normal.IsNearlyZero())
+					{
+						Normal = FVector::UpVector;
+					}
+					Dist = 0.0f;
+				}
+
+				// Convert to signed distance (negative if inside)
+				// Since we're overlapping, if Dist is very small, we're likely inside
+				float SignedDist = Dist;
+				if (Dist < CollisionMargin * 0.5f)
+				{
+					// Treat as being inside or very close to surface
+					SignedDist = Dist - CollisionMargin;
+				}
+
+				if (SignedDist < MinSignedDistance)
+				{
+					MinSignedDistance = SignedDist;
+					BestNormal = Normal;
+					BestClosestPoint = ClosestPoint;
+					HitActor = Overlap.GetActor();
+				}
+			}
+
+			// Apply collision response if within margin
+			if (MinSignedDistance < CollisionMargin)
+			{
+				// Push particle to surface + margin
+				float Penetration = CollisionMargin - MinSignedDistance;
+				FVector CollisionPos = Particle.PredictedPosition + BestNormal * Penetration;
+
+				// Only modify PredictedPosition
+				Particle.PredictedPosition = CollisionPos;
+
+				// Calculate desired velocity after collision response
+				// Initialize to zero - particle stops on surface by default
+				FVector DesiredVelocity = FVector::ZeroVector;
+				float VelDotNormal = FVector::DotProduct(Particle.Velocity, BestNormal);
+
+				// Minimum velocity threshold for applying restitution bounce
+				// Prevents "popcorn" oscillation for particles resting on surfaces
+				const float MinBounceVelocity = 50.0f;  // cm/s
+
+				if (VelDotNormal < 0.0f)
+				{
+					// Particle moving INTO surface - apply collision response
+					FVector VelNormal = BestNormal * VelDotNormal;
+					FVector VelTangent = Particle.Velocity - VelNormal;
+
+					if (VelDotNormal < -MinBounceVelocity)
+					{
+						// Significant impact - apply full collision response
+						// Normal: reflect with Restitution (0 = stick, 1 = perfect bounce)
+						// Tangent: dampen with Friction (0 = slide, 1 = stop)
+						DesiredVelocity = VelTangent * (1.0f - Friction) - VelNormal * Restitution;
+					}
+					else
+					{
+						// Low velocity contact (resting on surface) - no bounce, just slide
+						DesiredVelocity = VelTangent * (1.0f - Friction);
+					}
+				}
+				// else: VelDotNormal >= 0 means particle moving AWAY from surface
+				// DesiredVelocity stays zero - particle stops on surface (same as OLD behavior)
+
+				// Back-calculate Position so FinalizePositions derives DesiredVelocity
+				Particle.Position = Particle.PredictedPosition - DesiredVelocity * SubstepDT;
+
+				// Fire collision event if enabled
+				if (Params.bEnableCollisionEvents && Params.OnCollisionEvent.IsBound() && Params.EventCountPtr)
+				{
+					const float Speed = Particle.Velocity.Size();
+					const int32 CurrentEventCount = Params.EventCountPtr->load(std::memory_order_relaxed);
+					if (Speed >= Params.MinVelocityForEvent &&
+					    CurrentEventCount < Params.MaxEventsPerFrame)
+					{
+						bool bCanEmitEvent = true;
+						if (Params.EventCooldownPerParticle > 0.0f && Params.ParticleLastEventTimePtr)
+						{
+							const float* LastEventTime = Params.ParticleLastEventTimePtr->Find(Particle.ParticleID);
+							if (LastEventTime && (Params.CurrentGameTime - *LastEventTime) < Params.EventCooldownPerParticle)
+							{
+								bCanEmitEvent = false;
+							}
+						}
+
+						if (bCanEmitEvent)
+						{
+							FKawaiiFluidCollisionEvent Event(
+								Particle.ParticleID,
+								HitActor,
+								BestClosestPoint,
+								BestNormal,
+								Speed
+							);
+
+							TWeakObjectPtr<UWorld> WeakWorld(Params.World);
+							FOnFluidCollisionEvent Callback = Params.OnCollisionEvent;
+							TMap<int32, float>* CooldownMapPtr = Params.ParticleLastEventTimePtr;
+							const int32 ParticleID = Particle.ParticleID;
+							const float CooldownValue = Params.EventCooldownPerParticle;
+							AsyncTask(ENamedThreads::GameThread, [WeakWorld, Callback, Event, CooldownMapPtr, ParticleID, CooldownValue]()
+							{
+								if (!WeakWorld.IsValid())
+								{
+									return;
+								}
+								if (Callback.IsBound())
+								{
+									Callback.Execute(Event);
+								}
+								if (CooldownMapPtr && CooldownValue > 0.0f)
+								{
+									if (UWorld* W = WeakWorld.Get())
+									{
+										CooldownMapPtr->Add(ParticleID, W->GetTimeSeconds());
+									}
+								}
+							});
+
+							Params.EventCountPtr->fetch_add(1, std::memory_order_relaxed);
+						}
+					}
+				}
+
+				// Detach from character if hitting different surface
+				if (Particle.bIsAttached && HitActor != Particle.AttachedActor.Get())
+				{
+					Particle.bIsAttached = false;
+					Particle.AttachedActor.Reset();
+					Particle.AttachedBoneName = NAME_None;
+					Particle.AttachedLocalOffset = FVector::ZeroVector;
+					Particle.AttachedSurfaceNormal = FVector::UpVector;
+				}
+			}
+		});
+	});
+
+	// Floor detachment check (same as Sweep method)
 	const float FloorDetachDistance = 5.0f;
 	const float FloorNearDistance = 20.0f;
 

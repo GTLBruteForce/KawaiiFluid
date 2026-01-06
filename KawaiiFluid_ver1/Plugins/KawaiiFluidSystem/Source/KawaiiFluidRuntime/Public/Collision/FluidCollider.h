@@ -43,7 +43,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Fluid Collider")
 	bool IsColliderEnabled() const { return bColliderEnabled; }
 
-	virtual void ResolveCollisions(TArray<FFluidParticle>& Particles);
+	/**
+	 * Resolve collisions for all particles
+	 * @param Particles - Particle array
+	 * @param SubstepDT - Substep delta time (for Position back-calculation)
+	 */
+	virtual void ResolveCollisions(TArray<FFluidParticle>& Particles, float SubstepDT);
 
 	/** 충돌 형상 캐싱 (프레임당 한 번 호출) */
 	virtual void CacheCollisionShapes() {}
@@ -57,6 +62,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Fluid Collider")
 	virtual bool GetClosestPoint(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance) const;
 
+	/**
+	 * Get Signed Distance to the collider surface
+	 * Positive = outside, Negative = inside, Zero = on surface
+	 * @param Point - Query point in world space
+	 * @param OutGradient - Gradient (surface normal pointing outward)
+	 * @return Signed distance to surface
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid Collider")
+	virtual float GetSignedDistance(const FVector& Point, FVector& OutGradient) const;
+
 	/** 최근접점과 함께 해당 본 이름, 본 트랜스폼도 반환 (스켈레탈 메시용) */
 	UFUNCTION(BlueprintCallable, Category = "Fluid Collider")
 	virtual bool GetClosestPointWithBone(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance, FName& OutBoneName, FTransform& OutBoneTransform) const;
@@ -66,5 +81,11 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
-	virtual void ResolveParticleCollision(FFluidParticle& Particle);
+
+	/**
+	 * Resolve collision for a single particle using SDF
+	 * @param Particle - Particle to resolve
+	 * @param SubstepDT - Substep delta time (for Position back-calculation)
+	 */
+	virtual void ResolveParticleCollision(FFluidParticle& Particle, float SubstepDT);
 };

@@ -19,7 +19,7 @@ void UFluidCollider::BeginPlay()
 	Super::BeginPlay();
 }
 
-void UFluidCollider::ResolveCollisions(TArray<FFluidParticle>& Particles)
+void UFluidCollider::ResolveCollisions(TArray<FFluidParticle>& Particles, float SubstepDT)
 {
 	if (!bColliderEnabled)
 	{
@@ -28,13 +28,37 @@ void UFluidCollider::ResolveCollisions(TArray<FFluidParticle>& Particles)
 
 	ParallelFor(Particles.Num(), [&](int32 i)
 	{
-		ResolveParticleCollision(Particles[i]);
+		ResolveParticleCollision(Particles[i], SubstepDT);
 	});
 }
 
 bool UFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance) const
 {
 	return false;
+}
+
+float UFluidCollider::GetSignedDistance(const FVector& Point, FVector& OutGradient) const
+{
+	// Default implementation using GetClosestPoint
+	FVector ClosestPoint;
+	FVector Normal;
+	float Distance;
+
+	if (!GetClosestPoint(Point, ClosestPoint, Normal, Distance))
+	{
+		OutGradient = FVector::UpVector;
+		return MAX_FLT;
+	}
+
+	OutGradient = Normal;
+
+	// Check if inside (IsPointInside) to return negative distance
+	if (IsPointInside(Point))
+	{
+		return -Distance;
+	}
+
+	return Distance;
 }
 
 bool UFluidCollider::GetClosestPointWithBone(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance, FName& OutBoneName, FTransform& OutBoneTransform) const
@@ -50,39 +74,59 @@ bool UFluidCollider::IsPointInside(const FVector& Point) const
 	return false;
 }
 
-void UFluidCollider::ResolveParticleCollision(FFluidParticle& Particle)
+void UFluidCollider::ResolveParticleCollision(FFluidParticle& Particle, float SubstepDT)
 {
-	FVector ClosestPoint;
-	FVector Normal;
-	float Distance;
+	// Use SDF-based collision
+	FVector Gradient;
+	float SignedDistance = GetSignedDistance(Particle.PredictedPosition, Gradient);
 
-	if (!GetClosestPoint(Particle.PredictedPosition, ClosestPoint, Normal, Distance))
+	// Collision margin (particle radius + safety margin)
+	const float CollisionMargin = 5.0f;  // 5cm
+
+	// Collision detected if inside or within margin
+	if (SignedDistance < CollisionMargin)
 	{
-		return;
-	}
+		// Push particle to surface + margin
+		float Penetration = CollisionMargin - SignedDistance;
+		FVector CollisionPos = Particle.PredictedPosition + Gradient * Penetration;
 
-	// 충돌 마진: 입자가 표면에 가까워지면 미리 충돌 처리 (터널링 방지)
-	const float CollisionMargin = 5.0f;  // 5cm 마진
-
-	if (Distance <= CollisionMargin)
-	{
-		// 표면 바깥쪽으로 밀어냄
-		FVector CollisionPos = ClosestPoint + Normal * (CollisionMargin + 0.01f);
-
+		// Only modify PredictedPosition
 		Particle.PredictedPosition = CollisionPos;
-		Particle.Position = CollisionPos;
 
-		float VelDotNormal = FVector::DotProduct(Particle.Velocity, Normal);
+		// Calculate desired velocity after collision response
+		// Initialize to zero - particle stops on surface by default
+		FVector DesiredVelocity = FVector::ZeroVector;
+		float VelDotNormal = FVector::DotProduct(Particle.Velocity, Gradient);
+
+		// Minimum velocity threshold for applying restitution bounce
+		// Prevents "popcorn" oscillation for particles resting on surfaces
+		const float MinBounceVelocity = 50.0f;  // cm/s
 
 		if (VelDotNormal < 0.0f)
 		{
-			// 속도를 수직/수평 성분으로 분해
-			FVector VelNormal = Normal * VelDotNormal;
+			// Particle moving INTO surface - apply collision response
+			FVector VelNormal = Gradient * VelDotNormal;
 			FVector VelTangent = Particle.Velocity - VelNormal;
 
-			// 수직 성분: Restitution으로 반사 (0 = 붙음, 1 = 완전 반사)
-			// 수평 성분: Friction으로 감쇠 (0 = 미끄러움, 1 = 완전 정지)
-			Particle.Velocity = VelTangent * (1.0f - Friction) - VelNormal * Restitution;
+			if (VelDotNormal < -MinBounceVelocity)
+			{
+				// Significant impact - apply full collision response
+				// Normal: Restitution (0 = stick, 1 = full bounce)
+				// Tangent: Friction (0 = slide, 1 = stop)
+				DesiredVelocity = VelTangent * (1.0f - Friction) - VelNormal * Restitution;
+			}
+			else
+			{
+				// Low velocity contact (resting on surface) - no bounce, just slide
+				DesiredVelocity = VelTangent * (1.0f - Friction);
+			}
 		}
+		// else: VelDotNormal >= 0 means particle moving AWAY from surface
+		// DesiredVelocity stays zero - particle stops on surface (same as OLD behavior)
+
+		// Back-calculate Position so FinalizePositions derives DesiredVelocity
+		// FinalizePositions: Velocity = (PredictedPosition - Position) / dt
+		// Therefore: Position = PredictedPosition - DesiredVelocity * dt
+		Particle.Position = Particle.PredictedPosition - DesiredVelocity * SubstepDT;
 	}
 }

@@ -135,10 +135,11 @@ protected:
 	/** 4. Handle collisions with registered colliders */
 	virtual void HandleCollisions(
 		TArray<FFluidParticle>& Particles,
-		const TArray<UFluidCollider*>& Colliders
+		const TArray<UFluidCollider*>& Colliders,
+		float SubstepDT
 	);
 
-	/** 5. Handle world geometry collision */
+	/** 5. Handle world geometry collision (dispatches to Sweep or SDF based on Params) */
 	virtual void HandleWorldCollision(
 		TArray<FFluidParticle>& Particles,
 		const FKawaiiFluidSimulationParams& Params,
@@ -147,6 +148,28 @@ protected:
 		float SubstepDT,
 		float Friction = 0.5f,
 		float Restitution = 0.0f
+	);
+
+	/** 5a. Legacy sweep-based world collision (SweepSingleByChannel) */
+	virtual void HandleWorldCollision_Sweep(
+		TArray<FFluidParticle>& Particles,
+		const FKawaiiFluidSimulationParams& Params,
+		FSpatialHash& SpatialHash,
+		float ParticleRadius,
+		float SubstepDT,
+		float Friction,
+		float Restitution
+	);
+
+	/** 5b. SDF-based world collision (Overlap + ClosestPoint) */
+	virtual void HandleWorldCollision_SDF(
+		TArray<FFluidParticle>& Particles,
+		const FKawaiiFluidSimulationParams& Params,
+		FSpatialHash& SpatialHash,
+		float ParticleRadius,
+		float SubstepDT,
+		float Friction,
+		float Restitution
 	);
 
 	/** 6. Finalize positions and update velocities */

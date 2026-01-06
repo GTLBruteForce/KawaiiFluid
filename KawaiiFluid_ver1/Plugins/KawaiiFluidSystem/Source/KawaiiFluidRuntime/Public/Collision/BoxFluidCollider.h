@@ -26,6 +26,9 @@ public:
 	virtual bool GetClosestPoint(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance) const override;
 	virtual bool IsPointInside(const FVector& Point) const override;
 
+	/** Optimized Signed Distance function for box */
+	virtual float GetSignedDistance(const FVector& Point, FVector& OutGradient) const override;
+
 private:
 	FVector WorldToLocal(const FVector& WorldPoint) const;
 	FVector LocalToWorld(const FVector& LocalPoint) const;

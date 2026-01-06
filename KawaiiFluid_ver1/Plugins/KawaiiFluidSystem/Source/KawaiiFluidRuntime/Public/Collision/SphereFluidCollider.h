@@ -26,6 +26,9 @@ public:
 	virtual bool GetClosestPoint(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance) const override;
 	virtual bool IsPointInside(const FVector& Point) const override;
 
+	/** Optimized Signed Distance function for sphere */
+	virtual float GetSignedDistance(const FVector& Point, FVector& OutGradient) const override;
+
 private:
 	FVector GetSphereCenter() const;
 };

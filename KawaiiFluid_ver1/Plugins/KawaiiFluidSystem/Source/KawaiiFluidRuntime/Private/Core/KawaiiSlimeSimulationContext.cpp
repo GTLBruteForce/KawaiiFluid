@@ -77,7 +77,7 @@ void UKawaiiSlimeSimulationContext::SimulateSubstep(
 	// 7. Handle collisions with registered colliders
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(KawaiiSlimeContext_HandleCollisions);
-		HandleCollisions(Particles, Params.Colliders);
+		HandleCollisions(Particles, Params.Colliders, SubstepDT);
 	}
 
 	// 8. World collision
