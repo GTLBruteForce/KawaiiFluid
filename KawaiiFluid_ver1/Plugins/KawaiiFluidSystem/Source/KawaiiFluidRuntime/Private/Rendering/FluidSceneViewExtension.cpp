@@ -25,14 +25,6 @@
 
 static TRefCountPtr<IPooledRenderTarget> GFluidCompositeDebug_KeepAlive;
 
-// Double-buffered VSM textures (current frame writes, previous frame reads)
-static TRefCountPtr<IPooledRenderTarget> GFluidVSMTexture_Write;  // Written to this frame
-static TRefCountPtr<IPooledRenderTarget> GFluidVSMTexture_Read;   // Used for shadow receiving
-
-// Cached Light View Projection matrix for shadow receiving (also double-buffered)
-static FMatrix44f GFluidLightViewProjectionMatrix_Write = FMatrix44f::Identity;
-static FMatrix44f GFluidLightViewProjectionMatrix_Read = FMatrix44f::Identity;
-
 // ==============================================================================
 // Shadow Projection Helper
 // ==============================================================================
@@ -148,10 +140,10 @@ static void ExecuteFluidShadowProjection(
 	// Extract VSM to pooled render target for persistence (write buffer)
 	if (BlurredVSM)
 	{
-		GraphBuilder.QueueTextureExtraction(BlurredVSM, &GFluidVSMTexture_Write);
+		GraphBuilder.QueueTextureExtraction(BlurredVSM, Subsystem->GetVSMTextureWritePtr());
 
 		// Store light matrix for shadow receiving (write buffer)
-		GFluidLightViewProjectionMatrix_Write = LightParams.LightViewProjectionMatrix;
+		Subsystem->SetLightVPMatrixWrite(LightParams.LightViewProjectionMatrix);
 
 		UE_LOG(LogTemp, Log, TEXT("FluidShadow: VSM texture queued for extraction"));
 	}
@@ -165,6 +157,7 @@ static void ExecuteFluidShadowProjection(
  * @brief Apply fluid shadows to the scene using the cached VSM.
  * @param GraphBuilder RDG builder.
  * @param View Scene view.
+ * @param Subsystem Fluid renderer subsystem (for per-world VSM access).
  * @param RenderParams Rendering parameters.
  * @param SceneColorTexture Input scene color.
  * @param SceneDepthTexture Scene depth texture.
@@ -173,19 +166,25 @@ static void ExecuteFluidShadowProjection(
 static void ApplyFluidShadowReceiver(
 	FRDGBuilder& GraphBuilder,
 	const FSceneView& View,
+	UFluidRendererSubsystem* Subsystem,
 	const FFluidRenderingParameters& RenderParams,
 	FRDGTextureRef SceneColorTexture,
 	FRDGTextureRef SceneDepthTexture,
 	FScreenPassRenderTarget& Output)
 {
+	if (!Subsystem || !RenderParams.bEnableShadowCasting)
+	{
+		return;
+	}
+
+	TRefCountPtr<IPooledRenderTarget>& VSMTextureRead = Subsystem->GetVSMTextureRead();
+
 	UE_LOG(LogTemp, Log, TEXT("FluidShadow: ApplyFluidShadowReceiver called - VSMTexture_Read=%d, ShadowCasting=%d"),
-		GFluidVSMTexture_Read.IsValid(), RenderParams.bEnableShadowCasting);
+		VSMTextureRead.IsValid(), RenderParams.bEnableShadowCasting);
 
 	// Check if we have valid VSM from previous frame (read buffer)
 	// Need to check both TRefCountPtr validity AND internal RHI resource
-	if (!GFluidVSMTexture_Read.IsValid() ||
-		!GFluidVSMTexture_Read->GetRHI() ||
-		!RenderParams.bEnableShadowCasting)
+	if (!VSMTextureRead.IsValid() || !VSMTextureRead->GetRHI())
 	{
 		UE_LOG(LogTemp, Log, TEXT("FluidShadow: ApplyFluidShadowReceiver early exit - waiting for VSM from previous frame"));
 		return;
@@ -195,7 +194,7 @@ static void ApplyFluidShadowReceiver(
 
 	// Import cached VSM texture into RDG (from read buffer - previous frame)
 	FRDGTextureRef VSMTexture = GraphBuilder.RegisterExternalTexture(
-		GFluidVSMTexture_Read,
+		VSMTextureRead,
 		TEXT("FluidVSMTexture"));
 
 	if (!VSMTexture)
@@ -219,7 +218,7 @@ static void ApplyFluidShadowReceiver(
 		SceneColorTexture,
 		SceneDepthTexture,
 		VSMTexture,
-		GFluidLightViewProjectionMatrix_Read,
+		Subsystem->GetLightVPMatrixRead(),
 		ReceiverParams,
 		Output);
 
@@ -248,11 +247,23 @@ FFluidSceneViewExtension::~FFluidSceneViewExtension()
 void FFluidSceneViewExtension::SetupViewFamily(FSceneViewFamily& InViewFamily)
 {
 	UFluidRendererSubsystem* SubsystemPtr = Subsystem.Get();
-	if (SubsystemPtr)
+	if (!SubsystemPtr)
 	{
-		// Update cached light direction on game thread (safe to use TActorIterator here)
-		SubsystemPtr->UpdateCachedLightDirection();
+		return;
 	}
+
+	// World filtering: Only process ViewFamily from our World
+	if (InViewFamily.Scene)
+	{
+		UWorld* ViewWorld = InViewFamily.Scene->GetWorld();
+		if (ViewWorld != SubsystemPtr->GetWorld())
+		{
+			return;  // Skip ViewFamily from other World
+		}
+	}
+
+	// Update cached light direction on game thread (safe to use TActorIterator here)
+	SubsystemPtr->UpdateCachedLightDirection();
 }
 
 /**
@@ -267,10 +278,19 @@ void FFluidSceneViewExtension::BeginRenderViewFamily(FSceneViewFamily& InViewFam
 		return;
 	}
 
-	// Swap VSM buffers: previous frame's write buffer becomes current frame's read buffer
-	// This ensures ApplyFluidShadowReceiver uses the fully extracted texture from last frame
-	GFluidVSMTexture_Read = GFluidVSMTexture_Write;
-	GFluidLightViewProjectionMatrix_Read = GFluidLightViewProjectionMatrix_Write;
+	// World filtering: Only process ViewFamily from our World
+	// This prevents multiple extensions from competing over the same resources
+	if (InViewFamily.Scene)
+	{
+		UWorld* ViewWorld = InViewFamily.Scene->GetWorld();
+		if (ViewWorld != SubsystemPtr->GetWorld())
+		{
+			return;  // Skip ViewFamily from other World
+		}
+	}
+
+	// Swap VSM buffers through Subsystem (per-world isolation)
+	SubsystemPtr->SwapVSMBuffers();
 
 	// Swap history buffers at the start of each frame
 	if (FFluidShadowHistoryManager* HistoryManager = SubsystemPtr->GetShadowHistoryManager())
@@ -585,6 +605,7 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 					ApplyFluidShadowReceiver(
 						GraphBuilder,
 						View,
+						SubsystemPtr,
 						*ShadowRenderParams,
 						ShadowInputCopy,
 						SceneDepthTexture,

@@ -6,6 +6,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "FluidRenderingParameters.h"
 #include "FluidShadowHistoryManager.h"
+#include "RenderGraphResources.h"
 #include "FluidRendererSubsystem.generated.h"
 
 class FFluidSceneViewExtension;
@@ -74,6 +75,25 @@ public:
 	/** Check if cached light data is valid */
 	bool HasValidCachedLightData() const { return bHasCachedLightData; }
 
+	//========================================
+	// VSM (Variance Shadow Map) Textures - Per-World
+	//========================================
+
+	/** Swap VSM buffers (call at BeginRenderViewFamily) */
+	void SwapVSMBuffers();
+
+	/** Get VSM read texture */
+	TRefCountPtr<IPooledRenderTarget>& GetVSMTextureRead() { return VSMTexture_Read; }
+
+	/** Get VSM write texture reference for extraction */
+	TRefCountPtr<IPooledRenderTarget>* GetVSMTextureWritePtr() { return &VSMTexture_Write; }
+
+	/** Get light VP matrix for reading */
+	FMatrix44f GetLightVPMatrixRead() const { return LightVPMatrix_Read; }
+
+	/** Set light VP matrix for writing */
+	void SetLightVPMatrixWrite(const FMatrix44f& Matrix) { LightVPMatrix_Write = Matrix; }
+
 private:
 	/** 등록된 RenderingModule들 */
 	UPROPERTY(Transient)
@@ -97,4 +117,20 @@ private:
 
 	/** Whether cached light data is valid */
 	bool bHasCachedLightData = false;
+
+	//========================================
+	// VSM Textures (Per-World, double-buffered)
+	//========================================
+
+	/** VSM texture for writing (current frame) */
+	TRefCountPtr<IPooledRenderTarget> VSMTexture_Write;
+
+	/** VSM texture for reading (previous frame) */
+	TRefCountPtr<IPooledRenderTarget> VSMTexture_Read;
+
+	/** Light view-projection matrix for writing */
+	FMatrix44f LightVPMatrix_Write = FMatrix44f::Identity;
+
+	/** Light view-projection matrix for reading */
+	FMatrix44f LightVPMatrix_Read = FMatrix44f::Identity;
 };

@@ -157,3 +157,14 @@ void UFluidRendererSubsystem::UpdateCachedLightDirection()
 	bHasCachedLightData = true;
 }
 
+//========================================
+// VSM Buffer Management
+//========================================
+
+void UFluidRendererSubsystem::SwapVSMBuffers()
+{
+	// Swap VSM buffers: previous frame's write buffer becomes current frame's read buffer
+	VSMTexture_Read = VSMTexture_Write;
+	LightVPMatrix_Read = LightVPMatrix_Write;
+}
+
