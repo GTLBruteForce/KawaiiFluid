@@ -163,31 +163,33 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 
 				// Store bounds buffer SRV for SDF baking and ray marching
 				CachedGPUBoundsBufferSRV = GraphBuilder.CreateSRV(GPUBoundsBuffer);
-				// Get SoA pooled buffers from RenderResource (populated by UpdateFromGPUBuffer)
-				FKawaiiFluidRenderResource* RenderResourceSoA = Renderer->GetFluidRenderResource();
-				if (RenderResourceSoA && RenderResourceSoA->HasValidSoABuffers())
-				{
-					TRefCountPtr<FRDGPooledBuffer> PositionPooled = RenderResourceSoA->GetPooledPositionBuffer();
-					TRefCountPtr<FRDGPooledBuffer> VelocityPooled = RenderResourceSoA->GetPooledVelocityBuffer();
 
-					if (PositionPooled.IsValid())
-					{
-						FRDGBufferRef PositionBuffer = GraphBuilder.RegisterExternalBuffer(
-							PositionPooled, TEXT("RenderPositionsSoA"));
-						CachedPipelineData.PositionBufferSRV = GraphBuilder.CreateSRV(PositionBuffer);
-					}
-					if (VelocityPooled.IsValid())
-					{
-						FRDGBufferRef VelocityBuffer = GraphBuilder.RegisterExternalBuffer(
-							VelocityPooled, TEXT("RenderVelocitiesSoA"));
-						CachedPipelineData.VelocityBufferSRV = GraphBuilder.CreateSRV(VelocityBuffer);
-					}
-					CachedPipelineData.bUseSoABuffers = PositionPooled.IsValid();
+				// Create SoA Position buffer and extract directly (GPU mode optimization)
+				FRDGBufferRef PositionSoABuffer = GraphBuilder.CreateBuffer(
+					FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), PhysicsParticleCount),
+					TEXT("RenderPositionsSoA"));
+				FRDGBufferUAVRef PositionSoAUAV = GraphBuilder.CreateUAV(PositionSoABuffer);
 
-					UE_LOG(LogTemp, Verbose, TEXT("  >>> SoA Buffers enabled (Position: %s, Velocity: %s)"),
-						PositionPooled.IsValid() ? TEXT("Valid") : TEXT("Invalid"),
-						VelocityPooled.IsValid() ? TEXT("Valid") : TEXT("Invalid"));
-				}
+				// Velocity dummy buffer (required by AddExtractRenderDataSoAPass)
+				FRDGBufferRef VelocitySoABuffer = GraphBuilder.CreateBuffer(
+					FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), PhysicsParticleCount),
+					TEXT("RenderVelocitiesSoA"));
+				FRDGBufferUAVRef VelocitySoAUAV = GraphBuilder.CreateUAV(VelocitySoABuffer);
+
+				// Extract SoA data directly from Physics buffer (62% bandwidth reduction)
+				FGPUFluidSimulatorPassBuilder::AddExtractRenderDataSoAPass(
+					GraphBuilder,
+					PhysicsBufferSRV,
+					PositionSoAUAV,
+					VelocitySoAUAV,
+					PhysicsParticleCount,
+					ParticleRadius);
+
+				CachedPipelineData.PositionBufferSRV = GraphBuilder.CreateSRV(PositionSoABuffer);
+				CachedPipelineData.bUseSoABuffers = true;
+
+				UE_LOG(LogTemp, Verbose, TEXT("  >>> SoA Buffers extracted directly (GPU mode, %d particles)"),
+					PhysicsParticleCount);
 
 				UE_LOG(LogTemp, Verbose, TEXT("  >>> GPU MODE: ExtractRenderData+Bounds MERGED (%d particles, radius: %.2f)"),
 					TotalParticleCount, ParticleRadius);

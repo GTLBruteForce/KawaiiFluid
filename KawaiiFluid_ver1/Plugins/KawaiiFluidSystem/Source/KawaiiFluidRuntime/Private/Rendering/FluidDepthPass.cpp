@@ -5,6 +5,8 @@
 #include "Rendering/KawaiiFluidRenderResource.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
 #include "Rendering/KawaiiFluidMetaballRenderer.h"
+#include "GPU/GPUFluidSimulator.h"
+#include "GPU/GPUFluidSimulatorShaders.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "SceneView.h"
@@ -68,40 +70,92 @@ void RenderFluidDepthPass(
 		FKawaiiFluidRenderResource* RR = Renderer->GetFluidRenderResource();
 		if (!RR || !RR->IsValid()) continue;
 
-		// Thread-safe local copy to avoid race condition with UpdateGPUResources()
-		TArray<FKawaiiRenderParticle> CachedParticlesCopy = RR->GetCachedParticles();
+		FRDGBufferSRVRef ParticleBufferSRV = nullptr;
+		int32 ParticleCount = 0;
 
-		if (CachedParticlesCopy.Num() == 0)
+		// GPU 모드: GPUSimulator에서 직접 버퍼 접근 후 Position 추출
+		FGPUFluidSimulator* GPUSimulator = Renderer->GetGPUSimulator();
+		if (GPUSimulator && GPUSimulator->GetPersistentParticleBuffer().IsValid())
+		{
+			TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer = GPUSimulator->GetPersistentParticleBuffer();
+			ParticleCount = GPUSimulator->GetParticleCount();
+
+			if (ParticleCount > 0)
+			{
+				// Physics 버퍼 등록
+				FRDGBufferRef PhysicsBuffer = GraphBuilder.RegisterExternalBuffer(
+					PhysicsPooledBuffer,
+					TEXT("SSFRPhysicsParticles_GPU"));
+				FRDGBufferSRVRef PhysicsBufferSRV = GraphBuilder.CreateSRV(PhysicsBuffer);
+
+				// Position 전용 버퍼 생성
+				FRDGBufferRef PositionBuffer = GraphBuilder.CreateBuffer(
+					FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), ParticleCount),
+					TEXT("SSFRParticlePositions_GPU"));
+				FRDGBufferUAVRef PositionBufferUAV = GraphBuilder.CreateUAV(PositionBuffer);
+
+				// Velocity 더미 버퍼 (ExtractRenderDataSoAPass 요구사항)
+				FRDGBufferRef VelocityBuffer = GraphBuilder.CreateBuffer(
+					FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), ParticleCount),
+					TEXT("SSFRParticleVelocities_GPU"));
+				FRDGBufferUAVRef VelocityBufferUAV = GraphBuilder.CreateUAV(VelocityBuffer);
+
+				// ExtractRenderDataSoAPass로 Position/Velocity 추출
+				FGPUFluidSimulatorPassBuilder::AddExtractRenderDataSoAPass(
+					GraphBuilder,
+					PhysicsBufferSRV,
+					PositionBufferUAV,
+					VelocityBufferUAV,
+					ParticleCount,
+					ParticleRadius);
+
+				ParticleBufferSRV = GraphBuilder.CreateSRV(PositionBuffer);
+			}
+		}
+		// CPU 모드: 캐시에서 업로드
+		else
+		{
+			TArray<FKawaiiRenderParticle> CachedParticlesCopy = RR->GetCachedParticles();
+
+			if (CachedParticlesCopy.Num() == 0)
+			{
+				continue;
+			}
+
+			ParticleCount = CachedParticlesCopy.Num();
+
+			UE_LOG(LogTemp, Log, TEXT("DepthPass (CPU Mode): Renderer with %d particles"), ParticleCount);
+
+			// Position만 추출
+			TArray<FVector3f> ParticlePositions;
+			ParticlePositions.Reserve(ParticleCount);
+			for (const FKawaiiRenderParticle& Particle : CachedParticlesCopy)
+			{
+				ParticlePositions.Add(Particle.Position);
+			}
+
+			// RDG 버퍼 생성 및 업로드
+			const uint32 BufferSize = ParticlePositions.Num() * sizeof(FVector3f);
+			FRDGBufferDesc BufferDesc = FRDGBufferDesc::CreateStructuredDesc(
+				sizeof(FVector3f), ParticlePositions.Num());
+			FRDGBufferRef ParticleBuffer = GraphBuilder.CreateBuffer(
+				BufferDesc, TEXT("SSFRParticlePositions_CPU"));
+
+			GraphBuilder.QueueBufferUpload(ParticleBuffer, ParticlePositions.GetData(), BufferSize);
+			ParticleBufferSRV = GraphBuilder.CreateSRV(ParticleBuffer);
+		}
+
+		// 유효한 파티클이 없으면 스킵
+		if (!ParticleBufferSRV || ParticleCount == 0)
 		{
 			continue;
 		}
-
-		UE_LOG(LogTemp, Log, TEXT("DepthPass (Batched): Renderer with %d particles"),
-		       CachedParticlesCopy.Num());
-
-		// Position만 추출
-		TArray<FVector3f> ParticlePositions;
-		ParticlePositions.Reserve(CachedParticlesCopy.Num());
-		for (const FKawaiiRenderParticle& Particle : CachedParticlesCopy)
-		{
-			ParticlePositions.Add(Particle.Position);
-		}
-
-		// RDG 버퍼 생성 및 업로드
-		const uint32 BufferSize = ParticlePositions.Num() * sizeof(FVector3f);
-		FRDGBufferDesc BufferDesc = FRDGBufferDesc::CreateStructuredDesc(
-			sizeof(FVector3f), ParticlePositions.Num());
-		FRDGBufferRef ParticleBuffer = GraphBuilder.CreateBuffer(
-			BufferDesc, TEXT("SSFRParticlePositions"));
-
-		GraphBuilder.QueueBufferUpload(ParticleBuffer, ParticlePositions.GetData(), BufferSize);
-		FRDGBufferSRVRef ParticleBufferSRV = GraphBuilder.CreateSRV(ParticleBuffer);
 
 		// View matrices
 		FMatrix ViewMatrix = View.ViewMatrices.GetViewMatrix();
 		FMatrix ProjectionMatrix = View.ViewMatrices.GetProjectionNoAAMatrix();
 		FMatrix ViewProjectionMatrix = View.ViewMatrices.GetViewProjectionMatrix();
-
+		
 		// Shader Parameters
 		auto* PassParameters = GraphBuilder.AllocParameters<FFluidDepthParameters>();
 		PassParameters->ParticlePositions = ParticleBufferSRV;
@@ -142,7 +196,7 @@ void RenderFluidDepthPass(
 			RDG_EVENT_NAME("DepthDraw_Batched"),
 			PassParameters,
 			ERDGPassFlags::Raster,
-			[VertexShader, PixelShader, PassParameters, ParticleCount = CachedParticlesCopy.Num()](
+			[VertexShader, PixelShader, PassParameters, ParticleCount](
 			FRHICommandList& RHICmdList)
 			{
 				FGraphicsPipelineStateInitializer GraphicsPSOInit;
