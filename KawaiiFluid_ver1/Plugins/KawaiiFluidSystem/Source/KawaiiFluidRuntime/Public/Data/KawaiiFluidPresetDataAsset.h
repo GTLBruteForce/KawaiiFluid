@@ -41,13 +41,47 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "0.1"))
 	float RestDensity = 1200.0f;
 
-	/** Particle mass */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "0.01"))
-	float ParticleMass = 1.0f;
-
 	/** Smoothing radius (kernel radius h, cm) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "1.0"))
 	float SmoothingRadius = 20.0f;
+
+	//========================================
+	// Particle Size Parameters (Auto-calculated)
+	//========================================
+
+	/**
+	 * Spacing ratio relative to SmoothingRadius (d/h)
+	 * Recommended: 0.5 (yields ~33 neighbors in 3D)
+	 * Range: 0.3 (dense, ~124 neighbors) to 0.7 (sparse, ~15 neighbors)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Particle Size",
+		meta = (ClampMin = "0.3", ClampMax = "0.7"))
+	float SpacingRatio = 0.5f;
+
+	/**
+	 * Particle spacing (cm) - distance between particles when spawned
+	 * Auto-calculated: SmoothingRadius * SpacingRatio
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Fluid|Particle Size")
+	float ParticleSpacing = 10.0f;
+
+	/**
+	 * Particle mass (kg)
+	 * Auto-calculated: RestDensity * (Spacing_m)³
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Fluid|Particle Size")
+	float ParticleMass = 1.0f;
+
+	/**
+	 * Particle render radius (cm)
+	 * Auto-calculated: ParticleSpacing * 0.5
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Fluid|Particle Size")
+	float ParticleRadius = 5.0f;
+
+	/** Estimated neighbor count based on spacing ratio */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Fluid|Particle Size")
+	int32 EstimatedNeighborCount = 33;
 
 	/** Substep target dt (seconds) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "0.001", ClampMax = "0.05"))
@@ -184,10 +218,6 @@ public:
 	// Rendering Parameters
 	//========================================
 
-	/** Particle render radius (cm) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering", meta = (ClampMin = "0.1", ClampMax = "50.0"))
-	float ParticleRadius = 5.0f;
-
 	/** Fluid color */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering")
 	FLinearColor Color = FLinearColor(0.2f, 0.5f, 1.0f, 0.8f);
@@ -199,6 +229,10 @@ public:
 	/** Maximum particle count */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Limits", meta = (ClampMin = "1"))
 	int32 MaxParticles = 10000;
+
+	/** Recalculate derived particle parameters (mass, spacing, radius) based on SmoothingRadius and RestDensity */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	void RecalculateDerivedParameters();
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
