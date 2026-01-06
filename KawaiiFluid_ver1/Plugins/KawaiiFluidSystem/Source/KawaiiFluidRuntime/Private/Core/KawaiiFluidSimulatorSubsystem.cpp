@@ -230,21 +230,27 @@ int32 UKawaiiFluidSimulatorSubsystem::GetTotalParticleCount() const
 
 UKawaiiFluidSimulationContext* UKawaiiFluidSimulatorSubsystem::GetOrCreateContext(const UKawaiiFluidPresetDataAsset* Preset)
 {
-	if (!Preset || !Preset->ContextClass)
+	if (!Preset)
 	{
 		return DefaultContext;
 	}
 
-	// Check cache
-	if (UKawaiiFluidSimulationContext** Found = ContextCache.Find(Preset->ContextClass))
+	// Check cache - keyed by Preset (each Preset gets its own Context/GPUSimulator)
+	if (TObjectPtr<UKawaiiFluidSimulationContext>* Found = ContextCache.Find(Preset))
 	{
 		return *Found;
 	}
 
-	// Create new context
-	UKawaiiFluidSimulationContext* NewContext = NewObject<UKawaiiFluidSimulationContext>(this, Preset->ContextClass);
+	// Create new context - use ContextClass if specified, otherwise default class
+	TSubclassOf<UKawaiiFluidSimulationContext> ContextClass = Preset->ContextClass;
+	if (!ContextClass)
+	{
+		ContextClass = UKawaiiFluidSimulationContext::StaticClass();
+	}
+
+	UKawaiiFluidSimulationContext* NewContext = NewObject<UKawaiiFluidSimulationContext>(this, ContextClass);
 	NewContext->InitializeSolvers(Preset);
-	ContextCache.Add(Preset->ContextClass, NewContext);
+	ContextCache.Add(Preset, NewContext);
 
 	return NewContext;
 }

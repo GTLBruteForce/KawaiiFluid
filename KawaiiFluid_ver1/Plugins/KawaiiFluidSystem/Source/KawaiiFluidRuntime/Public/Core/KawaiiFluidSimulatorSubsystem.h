@@ -149,9 +149,9 @@ private:
 	UPROPERTY()
 	TArray<UFluidInteractionComponent*> GlobalInteractionComponents;
 
-	/** Context cache (ContextClass -> Instance) */
+	/** Context cache (Preset -> Instance) - each Preset gets its own Context/GPUSimulator */
 	UPROPERTY()
-	TMap<TSubclassOf<UKawaiiFluidSimulationContext>, UKawaiiFluidSimulationContext*> ContextCache;
+	TMap<TObjectPtr<const UKawaiiFluidPresetDataAsset>, TObjectPtr<UKawaiiFluidSimulationContext>> ContextCache;
 
 	/** Default context for presets without custom context */
 	UPROPERTY()
