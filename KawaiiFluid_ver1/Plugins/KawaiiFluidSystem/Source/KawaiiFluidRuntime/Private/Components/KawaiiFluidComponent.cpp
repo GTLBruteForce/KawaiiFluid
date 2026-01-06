@@ -353,6 +353,13 @@ void UKawaiiFluidComponent::ExecuteAutoSpawn()
 		return;
 	}
 
+	// Get ParticleSpacing from Preset (auto-calculated based on SmoothingRadius)
+	float ParticleSpacing = 10.0f;  // fallback
+	if (SimulationModule->Preset)
+	{
+		ParticleSpacing = SimulationModule->Preset->ParticleSpacing;
+	}
+
 	const FQuat ComponentQuat = GetComponentQuat();
 	const FVector Location = GetComponentLocation() + ComponentQuat.RotateVector(SpawnSettings.SpawnOffset);
 	const FRotator Rotation = GetComponentRotation();
@@ -366,7 +373,7 @@ void UKawaiiFluidComponent::ExecuteAutoSpawn()
 			SimulationModule->SpawnParticlesSphere(
 				Location,
 				SpawnSettings.SphereRadius,
-				SpawnSettings.ParticleSpacing,
+				ParticleSpacing,
 				SpawnSettings.bUseJitter,
 				SpawnSettings.JitterAmount,
 				SpawnSettings.InitialVelocity,
@@ -378,7 +385,7 @@ void UKawaiiFluidComponent::ExecuteAutoSpawn()
 			SimulationModule->SpawnParticlesBox(
 				Location,
 				SpawnSettings.BoxExtent,
-				SpawnSettings.ParticleSpacing,
+				ParticleSpacing,
 				SpawnSettings.bUseJitter,
 				SpawnSettings.JitterAmount,
 				SpawnSettings.InitialVelocity,
@@ -391,7 +398,7 @@ void UKawaiiFluidComponent::ExecuteAutoSpawn()
 				Location,
 				SpawnSettings.CylinderRadius,
 				SpawnSettings.CylinderHalfHeight,
-				SpawnSettings.ParticleSpacing,
+				ParticleSpacing,
 				SpawnSettings.bUseJitter,
 				SpawnSettings.JitterAmount,
 				SpawnSettings.InitialVelocity,
@@ -841,7 +848,7 @@ TStructOnScope<FActorComponentInstanceData> UKawaiiFluidComponent::GetComponentI
 // FFluidSpawnSettings
 //========================================
 
-int32 FFluidSpawnSettings::CalculateExpectedParticleCount() const
+int32 FFluidSpawnSettings::CalculateExpectedParticleCount(float InParticleSpacing) const
 {
 	// Emitter mode doesn't have a predictable count
 	if (SpawnType == EFluidSpawnType::Emitter)
@@ -855,7 +862,7 @@ int32 FFluidSpawnSettings::CalculateExpectedParticleCount() const
 		return ParticleCount;
 	}
 
-	if (ParticleSpacing <= 0.0f)
+	if (InParticleSpacing <= 0.0f)
 	{
 		return 0;
 	}
@@ -882,7 +889,7 @@ int32 FFluidSpawnSettings::CalculateExpectedParticleCount() const
 	}
 
 	// Volume per particle: spacing³
-	const float ParticleVolume = FMath::Pow(ParticleSpacing, 3.0f);
+	const float ParticleVolume = FMath::Pow(InParticleSpacing, 3.0f);
 
 	if (ParticleVolume <= 0.0f)
 	{

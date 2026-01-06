@@ -127,11 +127,6 @@ struct FFluidSpawnSettings
 	float CylinderHalfHeight = 50.0f;
 
 	// === Distribution Settings (ShapeVolume mode) ===
-	/** Spacing between particles */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Distribution",
-	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume", EditConditionHides, ClampMin = "1.0"))
-	float ParticleSpacing = 10.0f;
-
 	/** Apply random offset to grid positions */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Distribution",
 	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume", EditConditionHides))
@@ -214,8 +209,10 @@ struct FFluidSpawnSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn")
 	FVector SpawnOffset = FVector::ZeroVector;
 
-	/** Calculate expected particle count (for editor preview) */
-	int32 CalculateExpectedParticleCount() const;
+	/** Calculate expected particle count (for editor preview)
+	 * @param InParticleSpacing Particle spacing from Preset (auto-calculated)
+	 */
+	int32 CalculateExpectedParticleCount(float InParticleSpacing) const;
 
 	/** Check if this is a ShapeVolume mode (batch spawn at BeginPlay) */
 	bool IsShapeVolumeMode() const

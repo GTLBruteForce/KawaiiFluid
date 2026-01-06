@@ -45,6 +45,10 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidISMRendererSettings
 	/** Particle scale multiplier */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Configuration", meta = (EditCondition = "bEnabled", ClampMin = "0.01", ClampMax = "10.0"))
 	float ParticleScale = 1.0f;
+
+	/** Particle color */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (EditCondition = "bEnabled"))
+	FLinearColor ParticleColor = FLinearColor(0.2f, 0.5f, 1.0f, 0.8f);
 };
 
 /**

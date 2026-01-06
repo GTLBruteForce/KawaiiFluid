@@ -87,6 +87,9 @@ void UKawaiiFluidISMRenderer::ApplySettings(const FKawaiiFluidISMRendererSetting
 			ISMComponent->SetMaterial(0, ParticleMaterial);
 		}
 
+		// Apply color
+		SetFluidColor(Settings.ParticleColor);
+
 		UE_LOG(LogTemp, Log, TEXT("ISMRenderer: Applied settings to existing ISMComponent (Mesh: %s, Material: %s)"),
 			ParticleMesh ? *ParticleMesh->GetName() : TEXT("None"),
 			ParticleMaterial ? *ParticleMaterial->GetName() : TEXT("None"));

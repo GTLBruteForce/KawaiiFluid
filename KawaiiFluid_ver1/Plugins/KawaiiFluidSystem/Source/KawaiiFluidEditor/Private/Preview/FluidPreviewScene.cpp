@@ -186,19 +186,17 @@ void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 
 		CachedParticleRadius = CurrentPreset->ParticleRadius;
 
-		// Update rendering module with preset settings
+		// Update particle scale from preset (color comes from PreviewSettings)
 		if (RenderingModule)
 		{
 			if (UKawaiiFluidISMRenderer* ISM = RenderingModule->GetISMRenderer())
 			{
 				ISM->ParticleScale = CachedParticleRadius / 5.0f;
-				ISM->SetFluidColor(CurrentPreset->Color);
-			}
-			if (UKawaiiFluidMetaballRenderer* Metaball = RenderingModule->GetMetaballRenderer())
-			{
-				Metaball->LocalParameters.FluidColor = CurrentPreset->Color;
 			}
 		}
+
+		// Apply rendering settings (includes color from PreviewSettings)
+		ApplyPreviewSettings();
 	}
 
 	// Reset simulation
@@ -226,19 +224,17 @@ void FFluidPreviewScene::RefreshFromPreset()
 
 	CachedParticleRadius = CurrentPreset->ParticleRadius;
 
-	// Update rendering module with preset settings
+	// Update particle scale from preset (color comes from PreviewSettings)
 	if (RenderingModule)
 	{
 		if (UKawaiiFluidISMRenderer* ISM = RenderingModule->GetISMRenderer())
 		{
 			ISM->ParticleScale = CachedParticleRadius / 5.0f;
-			ISM->SetFluidColor(CurrentPreset->Color);
-		}
-		if (UKawaiiFluidMetaballRenderer* Metaball = RenderingModule->GetMetaballRenderer())
-		{
-			Metaball->LocalParameters.FluidColor = CurrentPreset->Color;
 		}
 	}
+
+	// Apply rendering settings (includes color from PreviewSettings)
+	ApplyPreviewSettings();
 }
 
 void FFluidPreviewScene::StartSimulation()

@@ -215,14 +215,6 @@ public:
 	float DFCollisionFriction = 0.1f;
 
 	//========================================
-	// Rendering Parameters
-	//========================================
-
-	/** Fluid color */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering")
-	FLinearColor Color = FLinearColor(0.2f, 0.5f, 1.0f, 0.8f);
-
-	//========================================
 	// Limits
 	//========================================
 
