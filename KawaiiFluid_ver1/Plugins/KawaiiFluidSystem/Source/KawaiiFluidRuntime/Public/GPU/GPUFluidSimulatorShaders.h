@@ -392,6 +392,52 @@ public:
 };
 
 //=============================================================================
+// Extract Render Data With Bounds Compute Shader (Optimized - Merged Pass)
+// Combines ExtractRenderData + CalculateBounds into single pass
+// Eliminates separate bounds calculation and reduces GPU dispatch overhead
+//=============================================================================
+
+class FExtractRenderDataWithBoundsCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FExtractRenderDataWithBoundsCS);
+	SHADER_USE_PARAMETER_STRUCT(FExtractRenderDataWithBoundsCS, FGlobalShader);
+
+	// Render particle structure (must match FKawaiiRenderParticle - 32 bytes)
+	struct FRenderParticle
+	{
+		FVector3f Position;
+		FVector3f Velocity;
+		float Radius;
+		float Padding;
+	};
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, PhysicsParticles)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FRenderParticle>, RenderParticles)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FVector3f>, OutputBounds)
+		SHADER_PARAMETER(int32, ParticleCount)
+		SHADER_PARAMETER(float, ParticleRadius)
+		SHADER_PARAMETER(float, BoundsMargin)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};
+
+//=============================================================================
 // Copy Particles Compute Shader
 // Utility: Copy particles from source buffer to destination buffer
 // Used for preserving existing GPU simulation results when appending new particles
@@ -602,6 +648,16 @@ public:
 		FRDGBufferUAVRef RenderParticlesUAV,
 		int32 ParticleCount,
 		float ParticleRadius);
+
+	/** Add merged extract render data + bounds calculation pass (Optimized) */
+	static void AddExtractRenderDataWithBoundsPass(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferSRVRef PhysicsParticlesSRV,
+		FRDGBufferUAVRef RenderParticlesUAV,
+		FRDGBufferUAVRef BoundsBufferUAV,
+		int32 ParticleCount,
+		float ParticleRadius,
+		float BoundsMargin);
 };
 
 //=============================================================================

@@ -55,10 +55,16 @@ struct FSDFVolumeData
 	/** Whether to use SDF Volume optimization */
 	bool bUseSDFVolume = false;
 
+	/** Whether to use GPU bounds buffer (eliminates CPU readback) */
+	bool bUseGPUBounds = false;
+
 	/** SDF Volume texture SRV */
 	FRDGTextureSRVRef SDFVolumeTextureSRV = nullptr;
 
-	/** Volume bounds in world space */
+	/** GPU Bounds buffer SRV (when bUseGPUBounds=true) */
+	FRDGBufferSRVRef BoundsBufferSRV = nullptr;
+
+	/** Volume bounds in world space (when bUseGPUBounds=false) */
 	FVector3f VolumeMin = FVector3f::ZeroVector;
 	FVector3f VolumeMax = FVector3f::ZeroVector;
 
@@ -73,7 +79,9 @@ struct FSDFVolumeData
 	void Reset()
 	{
 		bUseSDFVolume = false;
+		bUseGPUBounds = false;
 		SDFVolumeTextureSRV = nullptr;
+		BoundsBufferSRV = nullptr;
 		VolumeMin = FVector3f::ZeroVector;
 		VolumeMax = FVector3f::ZeroVector;
 		VolumeResolution = FIntVector(64, 64, 64);

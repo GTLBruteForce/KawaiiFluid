@@ -1,0 +1,101 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// SDF Volume Bake Compute Shader - Reads bounds from GPU buffer
+// Eliminates 1-frame latency by reading bounds calculated in same frame
+// This is the optimized version that avoids CPU readback
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+
+//=============================================================================
+// Render Particle Structure (must match FKawaiiRenderParticle - 32 bytes)
+//=============================================================================
+
+struct FRenderParticle
+{
+	float3 Position;   // 12 bytes
+	float3 Velocity;   // 12 bytes
+	float Radius;      // 4 bytes
+	float Padding;     // 4 bytes
+};
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+// Particle Data (Input)
+StructuredBuffer<FRenderParticle> RenderParticles;
+int ParticleCount;
+float ParticleRadius;
+float SDFSmoothness;
+
+// Volume Parameters - Bounds read from GPU buffer instead of uniforms
+StructuredBuffer<float3> BoundsBuffer; // [0] = Min, [1] = Max
+int3 VolumeResolution;
+
+// Output SDF Volume (3D Texture UAV)
+RWTexture3D<float> SDFVolume;
+
+//=============================================================================
+// SDF Functions
+//=============================================================================
+
+// Sphere SDF
+float sdSphere(float3 p, float3 center, float radius)
+{
+	return length(p - center) - radius;
+}
+
+// Smooth minimum (polynomial smooth min)
+float smin(float a, float b, float k)
+{
+	float h = max(k - abs(a - b), 0.0) / k;
+	return min(a, b) - h * h * k * 0.25;
+}
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(8, 8, 8)]
+void SDFBakeWithGPUBoundsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	// Check bounds
+	if (any(DispatchThreadId >= uint3(VolumeResolution)))
+		return;
+
+	// Read bounds from GPU buffer (calculated in same frame)
+	float3 VolumeMin = BoundsBuffer[0];
+	float3 VolumeMax = BoundsBuffer[1];
+
+	// Validate bounds - if invalid, fill with large distance
+	float3 boundsSize = VolumeMax - VolumeMin;
+	if (boundsSize.x <= 0 || boundsSize.y <= 0 || boundsSize.z <= 0)
+	{
+		SDFVolume[DispatchThreadId] = 1e10;
+		return;
+	}
+
+	// Convert voxel coordinates to world position
+	// Add 0.5 to sample at voxel center
+	float3 uvw = (float3(DispatchThreadId) + 0.5) / float3(VolumeResolution);
+	float3 worldPos = lerp(VolumeMin, VolumeMax, uvw);
+
+	// Early out if no particles
+	if (ParticleCount <= 0)
+	{
+		SDFVolume[DispatchThreadId] = 1e10;
+		return;
+	}
+
+	// Evaluate metaball SDF at this position
+	float sdf = sdSphere(worldPos, RenderParticles[0].Position, ParticleRadius);
+
+	for (int i = 1; i < ParticleCount; ++i)
+	{
+		float d = sdSphere(worldPos, RenderParticles[i].Position, ParticleRadius);
+		sdf = smin(sdf, d, SDFSmoothness);
+	}
+
+	// Store SDF value in volume texture
+	SDFVolume[DispatchThreadId] = sdf;
+}

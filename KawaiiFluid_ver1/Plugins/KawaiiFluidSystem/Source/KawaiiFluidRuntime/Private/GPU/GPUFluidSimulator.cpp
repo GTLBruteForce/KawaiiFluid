@@ -120,6 +120,11 @@ void FGPUFluidSimulator::ReleaseRHI()
 
 	CachedGPUParticles.Empty();
 
+	// Release persistent pooled buffers
+	PersistentParticleBuffer.SafeRelease();
+	PersistentCellCountsBuffer.SafeRelease();
+	PersistentParticleIndicesBuffer.SafeRelease();
+
 	// Clear collision primitives
 	CachedSpheres.Empty();
 	CachedCapsules.Empty();
@@ -871,38 +876,95 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	// Pass 2: Extract positions for spatial hash (use predicted positions)
 	AddExtractPositionsPass(GraphBuilder, ParticlesSRVLocal, PositionsUAVLocal, CurrentParticleCount, true);
 
-	// Pass 3: Build Spatial Hash using CreateAndBuildHash (atomic operation)
+	// Pass 3: Build Spatial Hash using Persistent Buffers (GPU clear + build, no CPU upload)
 	if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Building with ParticleCount=%d, Radius=%.2f, CellSize=%.2f"),
 		CurrentParticleCount, Params.ParticleRadius, Params.CellSize);
 
-	FSpatialHashGPUResources HashResources;
-	bool bHashBuilt = FSpatialHashBuilder::CreateAndBuildHash(
-		GraphBuilder,
-		PositionsSRVLocal,
-		CurrentParticleCount,
-		Params.ParticleRadius,
-		Params.CellSize,
-		HashResources
-	);
+	FRDGBufferRef CellCountsBuffer;
+	FRDGBufferRef ParticleIndicesBuffer;
 
-	if (!bHashBuilt)
+	if (!PersistentCellCountsBuffer.IsValid())
 	{
-		UE_LOG(LogGPUFluidSimulator, Error, TEXT(">>> SPATIAL HASH FAILED! SIMULATION ABORTED! ParticleCount=%d"), CurrentParticleCount);
-		return;
+		// First frame: create buffers
+		FRDGBufferDesc CellCountsDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_SPATIAL_HASH_SIZE);
+		CellCountsBuffer = GraphBuilder.CreateBuffer(CellCountsDesc, TEXT("SpatialHash.CellCounts"));
+
+		const uint32 TotalSlots = GPU_SPATIAL_HASH_SIZE * GPU_MAX_PARTICLES_PER_CELL;
+		FRDGBufferDesc ParticleIndicesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), TotalSlots);
+		ParticleIndicesBuffer = GraphBuilder.CreateBuffer(ParticleIndicesDesc, TEXT("SpatialHash.ParticleIndices"));
+
+		if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Created new persistent buffers"));
 	}
-	if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Build succeeded"));
+	else
+	{
+		// Subsequent frames: reuse persistent buffers
+		CellCountsBuffer = GraphBuilder.RegisterExternalBuffer(PersistentCellCountsBuffer, TEXT("SpatialHash.CellCounts"));
+		ParticleIndicesBuffer = GraphBuilder.RegisterExternalBuffer(PersistentParticleIndicesBuffer, TEXT("SpatialHash.ParticleIndices"));
+
+		if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Reusing persistent buffers"));
+	}
+
+	FRDGBufferSRVRef CellCountsSRVLocal = GraphBuilder.CreateSRV(CellCountsBuffer);
+	FRDGBufferUAVRef CellCountsUAVLocal = GraphBuilder.CreateUAV(CellCountsBuffer);
+	FRDGBufferSRVRef ParticleIndicesSRVLocal = GraphBuilder.CreateSRV(ParticleIndicesBuffer);
+	FRDGBufferUAVRef ParticleIndicesUAVLocal = GraphBuilder.CreateUAV(ParticleIndicesBuffer);
+
+	// GPU Clear pass - clears CellCounts to 0 entirely on GPU
+	{
+		FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+		TShaderMapRef<FClearCellDataCS> ClearShader(ShaderMap);
+
+		FClearCellDataCS::FParameters* ClearParams = GraphBuilder.AllocParameters<FClearCellDataCS::FParameters>();
+		ClearParams->CellCounts = CellCountsUAVLocal;
+
+		const uint32 NumGroups = FMath::DivideAndRoundUp<uint32>(GPU_SPATIAL_HASH_SIZE, SPATIAL_HASH_THREAD_GROUP_SIZE);
+
+		FComputeShaderUtils::AddPass(
+			GraphBuilder,
+			RDG_EVENT_NAME("SpatialHash::GPUClear"),
+			ClearShader,
+			ClearParams,
+			FIntVector(NumGroups, 1, 1)
+		);
+	}
+
+	// GPU Build pass - writes particle indices into hash grid
+	{
+		FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+		TShaderMapRef<FBuildSpatialHashSimpleCS> BuildShader(ShaderMap);
+
+		FBuildSpatialHashSimpleCS::FParameters* BuildParams = GraphBuilder.AllocParameters<FBuildSpatialHashSimpleCS::FParameters>();
+		BuildParams->ParticlePositions = PositionsSRVLocal;
+		BuildParams->ParticleCount = CurrentParticleCount;
+		BuildParams->ParticleRadius = Params.ParticleRadius;
+		BuildParams->CellSize = Params.CellSize;
+		BuildParams->CellCounts = CellCountsUAVLocal;
+		BuildParams->ParticleIndices = ParticleIndicesUAVLocal;
+
+		const uint32 NumGroups = FMath::DivideAndRoundUp<uint32>(CurrentParticleCount, SPATIAL_HASH_THREAD_GROUP_SIZE);
+
+		FComputeShaderUtils::AddPass(
+			GraphBuilder,
+			RDG_EVENT_NAME("SpatialHash::GPUBuild"),
+			BuildShader,
+			BuildParams,
+			FIntVector(NumGroups, 1, 1)
+		);
+	}
+
+	if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: GPU clear+build completed"));
 
 	// Pass 4: Compute Density and Lambda
-	AddComputeDensityPass(GraphBuilder, ParticlesUAVLocal, HashResources.CellCountsSRV, HashResources.ParticleIndicesSRV, Params);
+	AddComputeDensityPass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
 
 	// Pass 5: Solve Pressure (multiple iterations if needed)
 	for (int32 i = 0; i < Params.PressureIterations; ++i)
 	{
-		AddSolvePressurePass(GraphBuilder, ParticlesUAVLocal, HashResources.CellCountsSRV, HashResources.ParticleIndicesSRV, Params);
+		AddSolvePressurePass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
 	}
 
 	// Pass 6: Apply Viscosity
-	AddApplyViscosityPass(GraphBuilder, ParticlesUAVLocal, HashResources.CellCountsSRV, HashResources.ParticleIndicesSRV, Params);
+	AddApplyViscosityPass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
 
 	// Pass 7: Bounds Collision
 	AddBoundsCollisionPass(GraphBuilder, ParticlesUAVLocal, Params);
@@ -919,14 +981,29 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	// Debug: log that we reached the end of simulation
 	if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SIMULATION COMPLETE: All passes added for %d particles"), CurrentParticleCount);
 
-	// Phase 2: Extract buffer to persistent storage for next frame reuse
+	// Phase 2: Extract buffers to persistent storage for next frame reuse
 	// This keeps simulation results on GPU without CPU readback
 	if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> EXTRACTION: Queuing buffer extraction..."));
+
+	// Extract particle buffer
 	GraphBuilder.QueueBufferExtraction(
 		ParticleBuffer,
 		&PersistentParticleBuffer,
 		ERHIAccess::UAVCompute  // Ready for next frame's compute passes
 	);
+
+	// Extract spatial hash buffers for reuse next frame
+	GraphBuilder.QueueBufferExtraction(
+		CellCountsBuffer,
+		&PersistentCellCountsBuffer,
+		ERHIAccess::UAVCompute
+	);
+	GraphBuilder.QueueBufferExtraction(
+		ParticleIndicesBuffer,
+		&PersistentParticleIndicesBuffer,
+		ERHIAccess::UAVCompute
+	);
+
 	if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> EXTRACTION: Buffer extraction queued successfully"));
 }
 

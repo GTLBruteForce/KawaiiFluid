@@ -1,0 +1,139 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Merged Extract Render Data + Calculate Bounds Pass
+// Converts physics particle buffer to render particle buffer AND calculates bounds in single pass
+// Eliminates the need for separate CalculateGPUBounds pass
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// Render Particle Structure (must match FKawaiiRenderParticle - 32 bytes)
+//=============================================================================
+
+struct FRenderParticle
+{
+	float3 Position;
+	float3 Velocity;
+	float Radius;
+	float Padding;
+};
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> PhysicsParticles;
+RWStructuredBuffer<FRenderParticle> RenderParticles;
+RWStructuredBuffer<float3> OutputBounds; // [0] = Min, [1] = Max
+int ParticleCount;
+float ParticleRadius;
+float BoundsMargin;
+
+// Shared memory for bounds reduction (256 threads per group)
+#define BOUNDS_THREAD_GROUP_SIZE 256
+groupshared float3 SharedMin[BOUNDS_THREAD_GROUP_SIZE];
+groupshared float3 SharedMax[BOUNDS_THREAD_GROUP_SIZE];
+
+//=============================================================================
+// Main Compute Shader - Grid-stride loop with bounds reduction
+// Dispatch: (1, 1, 1) - single group of 256 threads (same as BoundsReduction)
+//=============================================================================
+
+[numthreads(BOUNDS_THREAD_GROUP_SIZE, 1, 1)]
+void ExtractRenderDataWithBoundsCS(uint3 GroupId : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint GI : SV_GroupIndex)
+{
+	// Initialize bounds with extreme values
+	float3 localMin = float3(1e10, 1e10, 1e10);
+	float3 localMax = float3(-1e10, -1e10, -1e10);
+
+	// Handle empty particle case
+	if (ParticleCount == 0)
+	{
+		if (GI == 0)
+		{
+			OutputBounds[0] = float3(0, 0, 0);
+			OutputBounds[1] = float3(0, 0, 0);
+		}
+		return;
+	}
+
+	// Grid-stride loop: each thread processes particles at indices GI, GI+256, GI+512, ...
+	const float MAX_VALID_COORD = 100000.0f;
+
+	for (uint i = GI; i < (uint)ParticleCount; i += BOUNDS_THREAD_GROUP_SIZE)
+	{
+		FGPUFluidParticle physics = PhysicsParticles[i];
+		float3 pos = physics.Position;
+
+		// Validate position
+		bool bValidPosition = !any(isnan(pos)) && !any(isinf(pos)) &&
+							  abs(pos.x) < MAX_VALID_COORD &&
+							  abs(pos.y) < MAX_VALID_COORD &&
+							  abs(pos.z) < MAX_VALID_COORD;
+
+		// Create render particle
+		FRenderParticle render;
+		if (bValidPosition)
+		{
+			render.Position = pos;
+			render.Velocity = physics.Velocity;
+
+			// Update local bounds
+			localMin = min(localMin, pos);
+			localMax = max(localMax, pos);
+		}
+		else
+		{
+			// Invalid particle - place at infinity so it won't be rendered
+			render.Position = float3(1e20, 1e20, 1e20);
+			render.Velocity = float3(0, 0, 0);
+		}
+		render.Radius = ParticleRadius;
+		render.Padding = 0.0f;
+
+		// Write render particle
+		RenderParticles[i] = render;
+	}
+
+	// Store local bounds in shared memory
+	SharedMin[GI] = localMin;
+	SharedMax[GI] = localMax;
+
+	GroupMemoryBarrierWithGroupSync();
+
+	// Parallel reduction within work group (log2(256) = 8 iterations)
+	[unroll]
+	for (uint s = BOUNDS_THREAD_GROUP_SIZE / 2; s > 0; s >>= 1)
+	{
+		if (GI < s)
+		{
+			SharedMin[GI] = min(SharedMin[GI], SharedMin[GI + s]);
+			SharedMax[GI] = max(SharedMax[GI], SharedMax[GI + s]);
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+
+	// Thread 0 writes final result with margin expansion
+	if (GI == 0)
+	{
+		float3 finalMin = SharedMin[0];
+		float3 finalMax = SharedMax[0];
+
+		// Check if we found any valid particles
+		bool hasValidBounds = (finalMin.x < 1e9) && (finalMax.x > -1e9);
+
+		if (hasValidBounds)
+		{
+			float expansion = ParticleRadius + BoundsMargin;
+			OutputBounds[0] = finalMin - float3(expansion, expansion, expansion);
+			OutputBounds[1] = finalMax + float3(expansion, expansion, expansion);
+		}
+		else
+		{
+			// No valid particles found
+			OutputBounds[0] = float3(0, 0, 0);
+			OutputBounds[1] = float3(0, 0, 0);
+		}
+	}
+}

@@ -85,6 +85,37 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 	if (Module && !AllModules.Contains(Module))
 	{
 		AllModules.Add(Module);
+
+		// Early GPU setup: Initialize GPU state at registration time
+		// so spawn calls before first Tick use the correct path
+		UKawaiiFluidPresetDataAsset* Preset = Module->GetEffectivePreset();
+
+		// Check GPU setting from owner component (not preset)
+		bool bWantsGPUSimulation = false;
+		if (UKawaiiFluidComponent* OwnerComp = Cast<UKawaiiFluidComponent>(Module->GetOuter()))
+		{
+			bWantsGPUSimulation = OwnerComp->bUseGPUSimulation;
+		}
+
+		if (Preset && bWantsGPUSimulation)
+		{
+			UKawaiiFluidSimulationContext* Context = GetOrCreateContext(Preset);
+			if (Context)
+			{
+				if (!Context->IsGPUSimulatorReady())
+				{
+					Context->InitializeGPUSimulator(Preset->MaxParticles);
+				}
+
+				if (Context->IsGPUSimulatorReady())
+				{
+					Module->SetGPUSimulator(Context->GetGPUSimulator());
+					Module->SetGPUSimulationActive(true);
+					UE_LOG(LogTemp, Log, TEXT("SimulationModule: GPU simulation initialized at registration"));
+				}
+			}
+		}
+
 		UE_LOG(LogTemp, Verbose, TEXT("SimulationModule registered"));
 	}
 }
@@ -275,6 +306,27 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 		Params.Colliders.Append(GlobalColliders);
 		Params.InteractionComponents.Append(GlobalInteractionComponents);
 
+		// Phase 1: Setup GPU state BEFORE Simulate so spawn calls go to GPU
+		// This ensures SpawnParticle() during this frame will use GPU path
+		if (Params.bUseGPUSimulation)
+		{
+			// Initialize GPU simulator if needed (before any spawning)
+			if (!Context->IsGPUSimulatorReady())
+			{
+				Context->InitializeGPUSimulator(EffectivePreset->MaxParticles);
+			}
+
+			if (Context->IsGPUSimulatorReady())
+			{
+				Module->SetGPUSimulator(Context->GetGPUSimulator());
+				Module->SetGPUSimulationActive(true);
+			}
+		}
+		else
+		{
+			Module->SetGPUSimulationActive(false);
+		}
+
 		// Simulate
 		TArray<FFluidParticle>& Particles = Module->GetParticlesMutable();
 		float AccumulatedTime = Module->GetAccumulatedTime();
@@ -287,17 +339,6 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 		}
 
 		Context->Simulate(Particles, EffectivePreset, Params, *SpatialHash, DeltaTime, AccumulatedTime);
-
-		// Phase 2: Update Module's GPU state for renderers
-		if (Params.bUseGPUSimulation && Context->IsGPUSimulatorReady())
-		{
-			Module->SetGPUSimulator(Context->GetGPUSimulator());
-			Module->SetGPUSimulationActive(true);
-		}
-		else
-		{
-			Module->SetGPUSimulationActive(false);
-		}
 
 		Module->SetAccumulatedTime(AccumulatedTime);
 		Module->ResetExternalForce();
@@ -343,6 +384,39 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaT
 		Params.Colliders.Append(GlobalColliders);
 		Params.InteractionComponents.Append(GlobalInteractionComponents);
 
+		// Phase 1: Setup GPU state BEFORE Simulate so spawn calls go to GPU
+		if (Params.bUseGPUSimulation)
+		{
+			// Initialize GPU simulator if needed (before any spawning)
+			if (!Context->IsGPUSimulatorReady())
+			{
+				Context->InitializeGPUSimulator(Preset->MaxParticles);
+			}
+
+			if (Context->IsGPUSimulatorReady())
+			{
+				FGPUFluidSimulator* BatchGPUSimulator = Context->GetGPUSimulator();
+				for (UKawaiiFluidSimulationModule* Module : Modules)
+				{
+					if (Module)
+					{
+						Module->SetGPUSimulator(BatchGPUSimulator);
+						Module->SetGPUSimulationActive(true);
+					}
+				}
+			}
+		}
+		else
+		{
+			for (UKawaiiFluidSimulationModule* Module : Modules)
+			{
+				if (Module)
+				{
+					Module->SetGPUSimulationActive(false);
+				}
+			}
+		}
+
 		// Simulate merged buffer
 		float AccumulatedTime = 0.0f;
 		if (Modules.Num() > 0 && Modules[0])
@@ -352,26 +426,11 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaT
 
 		Context->Simulate(MergedFluidParticleBuffer, Preset, Params, *SharedSpatialHash, DeltaTime, AccumulatedTime);
 
-		// Phase 2: Determine GPU state once for the batch
-		const bool bBatchGPUActive = Params.bUseGPUSimulation && Context->IsGPUSimulatorReady();
-		FGPUFluidSimulator* BatchGPUSimulator = bBatchGPUActive ? Context->GetGPUSimulator() : nullptr;
-
 		// Update accumulated time and reset external force for all modules
 		for (UKawaiiFluidSimulationModule* Module : Modules)
 		{
 			if (Module)
 			{
-				// Phase 2: Update GPU state for renderers
-				if (bBatchGPUActive)
-				{
-					Module->SetGPUSimulator(BatchGPUSimulator);
-					Module->SetGPUSimulationActive(true);
-				}
-				else
-				{
-					Module->SetGPUSimulationActive(false);
-				}
-
 				Module->SetAccumulatedTime(AccumulatedTime);
 				Module->ResetExternalForce();
 			}

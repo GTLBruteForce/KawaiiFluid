@@ -45,10 +45,10 @@ public:
 		float Margin);
 
 	/**
-	 * @brief Bake SDF volume using pre-calculated GPU bounds
+	 * @brief Bake SDF volume using pre-calculated GPU bounds (legacy - uses cached bounds)
 	 *
 	 * Uses bounds from CalculateGPUBounds() to create accurate SDF volume.
-	 * This is the preferred method when using GPU particle buffers.
+	 * NOTE: This method still uses 1-frame latency cached bounds.
 	 *
 	 * @param GraphBuilder - RDG graph builder
 	 * @param ParticleBufferSRV - Structured buffer containing particle positions
@@ -65,6 +65,28 @@ public:
 		float ParticleRadius,
 		float SDFSmoothness,
 		FRDGBufferRef BoundsBuffer);
+
+	/**
+	 * @brief Bake SDF volume reading bounds directly from GPU buffer (Optimized - no readback)
+	 *
+	 * Reads bounds from GPU buffer in same frame, eliminating 1-frame latency.
+	 * This is the preferred method for GPU simulation mode.
+	 *
+	 * @param GraphBuilder - RDG graph builder
+	 * @param ParticleBufferSRV - Structured buffer containing particle positions
+	 * @param ParticleCount - Number of particles
+	 * @param ParticleRadius - Radius of each particle
+	 * @param SDFSmoothness - Smooth minimum factor for metaball blending
+	 * @param BoundsBufferSRV - SRV for GPU buffer containing [Min, Max]
+	 * @return Created SDF volume texture SRV for use in ray marching
+	 */
+	FRDGTextureSRVRef BakeSDFVolumeWithGPUBoundsDirect(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferSRVRef ParticleBufferSRV,
+		int32 ParticleCount,
+		float ParticleRadius,
+		float SDFSmoothness,
+		FRDGBufferSRVRef BoundsBufferSRV);
 
 	/**
 	 * @brief Bake SDF volume from particle positions (legacy - CPU bounds)

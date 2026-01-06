@@ -244,7 +244,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 	
 	TRACE_CPUPROFILER_EVENT_SCOPE(KawaiiFluidContext_SimulateGPU);
 
-	if (!Preset || Particles.Num() == 0)
+	if (!Preset)
 	{
 		return;
 	}
@@ -255,23 +255,45 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 		InitializeGPUSimulator(Preset->MaxParticles);
 		if (!IsGPUSimulatorReady())
 		{
-			// Fall back to CPU simulation with modified params to avoid recursion
-			UE_LOG(LogTemp, Warning, TEXT("GPU Simulator not ready, falling back to CPU simulation"));
-			//FKawaiiFluidSimulationParams CPUParams = Params;
-			//CPUParams.bUseGPUSimulation = false;
-			//Simulate(Particles, Preset, CPUParams, SpatialHash, DeltaTime, AccumulatedTime);
+			UE_LOG(LogTemp, Warning, TEXT("GPU Simulator not ready"));
 			return;
 		}
 	}
 
-	EnsureSolversInitialized(Preset);
+	// =====================================================
+	// GPU-Only Mode: No CPU Particles array dependency
+	// - Spawning: Handled directly by SpawnParticle() → GPUSimulator->AddSpawnRequest()
+	// - Physics: GPU handles everything
+	// - Rendering: GPU buffer is source of truth
+	// =====================================================
+
+	// Check if we have any particles (either existing GPU particles or pending spawns)
+	const int32 CurrentGPUCount = GPUSimulator->GetParticleCount();
+	const int32 PendingSpawnCount = GPUSimulator->GetPendingSpawnCount();
+
+	static int32 SimGPULogCounter = 0;
+	if (++SimGPULogCounter % 60 == 1)
+	{
+		UE_LOG(LogTemp, Log, TEXT("SimulateGPU: GPUCount=%d, PendingSpawn=%d, GPUSimulator=%p"),
+			CurrentGPUCount, PendingSpawnCount, GPUSimulator.Get());
+	}
+
+	if (CurrentGPUCount == 0 && PendingSpawnCount == 0)
+	{
+		return;  // Nothing to simulate
+	}
+
+	// Build GPU simulation parameters
+	const float SubstepDT = Preset->SubstepDeltaTime;
+	FGPUFluidSimulationParams GPUParams = BuildGPUSimParams(Preset, Params, SubstepDT);
+
+	// ParticleCount will be updated by GPU after spawn processing
+	// Use current GPU count + pending spawns as estimate
+	GPUParams.ParticleCount = CurrentGPUCount + PendingSpawnCount;
 
 	// =====================================================
-	// Phase 2: No CPU readback - GPU buffer is source of truth
-	// Rendering should read directly from GPU buffer
-	//
-	// OLD (Phase 1): Download → Upload → Simulate → Readback
-	// NEW (Phase 2): Upload → Simulate (GPU keeps results)
+	// Collision Primitives Upload (optimized - upload when dirty)
+	// TODO: Add dirty flag check for further optimization
 	// =====================================================
 
 	// Phase 2: Skip readback to avoid CPU-GPU sync stall
@@ -326,92 +348,34 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 
 			// Check if this is a MeshFluidCollider (has ExportToGPUPrimitives)
 			UMeshFluidCollider* MeshCollider = Cast<UMeshFluidCollider>(Collider);
-			if (MeshCollider && MeshCollider->IsCacheValid())
+			if (MeshCollider)
 			{
-				MeshCollider->ExportToGPUPrimitives(
-					CollisionPrimitives.Spheres,
-					CollisionPrimitives.Capsules,
-					CollisionPrimitives.Boxes,
-					CollisionPrimitives.Convexes,
-					CollisionPrimitives.ConvexPlanes,
-					DefaultFriction,
-					DefaultRestitution
-				);
+				// Cache collider shape if needed
+				MeshCollider->CacheCollisionShapes();
+
+				if (MeshCollider->IsCacheValid())
+				{
+					MeshCollider->ExportToGPUPrimitives(
+						CollisionPrimitives.Spheres,
+						CollisionPrimitives.Capsules,
+						CollisionPrimitives.Boxes,
+						CollisionPrimitives.Convexes,
+						CollisionPrimitives.ConvexPlanes,
+						DefaultFriction,
+						DefaultRestitution
+					);
+				}
 			}
 		}
 
-		// Upload to GPU
+		// Upload to GPU only if we have primitives
 		if (!CollisionPrimitives.IsEmpty())
 		{
 			GPUSimulator->UploadCollisionPrimitives(CollisionPrimitives);
 		}
 	}
-	
-	
-	// Update attached particle positions (bone tracking - before physics)
-	UpdateAttachedParticlePositions(Particles, Params.InteractionComponents);
 
-	// Step 2: Build GPU simulation parameters for this frame
-	// Use fixed DeltaTime for stability (GPU handles its own substeps internally)
-	const float SubstepDT = Preset->SubstepDeltaTime;
-	FGPUFluidSimulationParams GPUParams = BuildGPUSimParams(Preset, Params, SubstepDT);
-	GPUParams.ParticleCount = Particles.Num();
-
-	// =====================================================
-	// Phase 3: GPU-based particle spawning (eliminates race condition)
-	// - New particles: Use AddSpawnRequests (GPU creates particles atomically)
-	// - Particle removal: Use UploadParticles (fallback - rare case)
-	// - Same count: No action needed (GPU buffer persists)
-	// =====================================================
-	const int32 CurrentCPUCount = Particles.Num();
-	const int32 CurrentGPUCount = GPUSimulator->GetParticleCount();
-
-	if (CurrentCPUCount > CurrentGPUCount)
-	{
-		// New particles spawned - use GPU spawn system (no race condition!)
-		const int32 NewParticleCount = CurrentCPUCount - CurrentGPUCount;
-		TArray<FGPUSpawnRequest> SpawnRequests;
-		SpawnRequests.Reserve(NewParticleCount);
-
-		for (int32 i = CurrentGPUCount; i < CurrentCPUCount; ++i)
-		{
-			const FFluidParticle& Particle = Particles[i];
-			FGPUSpawnRequest Request;
-			Request.Position = FVector3f(Particle.Position);
-			Request.Velocity = FVector3f(Particle.Velocity);
-			Request.Mass = Particle.Mass;
-			Request.Radius = Preset->ParticleRadius;
-			SpawnRequests.Add(Request);
-		}
-
-		// Debug: Log spawn positions
-		if (SpawnRequests.Num() > 0)
-		{
-			const FGPUSpawnRequest& FirstReq = SpawnRequests[0];
-			UE_LOG(LogTemp, Warning, TEXT("GPU Spawn: First particle position = (%.1f, %.1f, %.1f)"),
-				FirstReq.Position.X, FirstReq.Position.Y, FirstReq.Position.Z);
-		}
-
-		GPUSimulator->AddSpawnRequests(SpawnRequests);
-
-		UE_LOG(LogTemp, Log, TEXT("GPU Spawn: Adding %d new particles via GPU spawn system (total: %d -> %d)"),
-			NewParticleCount, CurrentGPUCount, CurrentCPUCount);
-	}
-	else if (CurrentCPUCount < CurrentGPUCount)
-	{
-		// Particles removed - fallback to full upload (rare case)
-		// TODO: Implement GPU-based particle removal
-		GPUSimulator->UploadParticles(Particles);
-
-		UE_LOG(LogTemp, Warning, TEXT("GPU Upload: Particle count reduced %d -> %d (using fallback upload)"),
-			CurrentGPUCount, CurrentCPUCount);
-	}
-	
-	// else: Particle count same - GPU buffer already has simulation results, no upload needed
-
-	// Step 4: Run GPU simulation (async - results available next frame)
-	
-	
+	// Run GPU simulation (spawning is handled internally by SimulateSubstep)
 	GPUSimulator->SimulateSubstep(GPUParams);
 
 	
@@ -603,15 +567,30 @@ void UKawaiiFluidSimulationContext::Simulate(
 	SCOPE_CYCLE_COUNTER(STAT_ContextSimulate);
 	TRACE_CPUPROFILER_EVENT_SCOPE(KawaiiFluidContext_Simulate);
 
-	if (!Preset || Particles.Num() == 0)
+	if (!Preset)
 	{
 		return;
 	}
 
-	// Dispatch to GPU or CPU simulation based on Params (from Component)
+	// Debug: Check GPU simulation flag
+	static int32 SimulateLogCounter = 0;
+	if (++SimulateLogCounter % 60 == 1)
+	{
+		UE_LOG(LogTemp, Log, TEXT("Context::Simulate: bUseGPUSimulation=%d, Particles.Num=%d"),
+			Params.bUseGPUSimulation ? 1 : 0, Particles.Num());
+	}
+
+	// GPU mode: dispatch early (GPU has its own particle count check via pending spawns)
+	// Do NOT check CPU Particles.Num() here - GPU mode doesn't use CPU array
 	if (Params.bUseGPUSimulation)
 	{
 		SimulateGPU(Particles, Preset, Params, SpatialHash, DeltaTime, AccumulatedTime);
+		return;
+	}
+
+	// CPU mode: require particles in CPU array
+	if (Particles.Num() == 0)
+	{
 		return;
 	}
 

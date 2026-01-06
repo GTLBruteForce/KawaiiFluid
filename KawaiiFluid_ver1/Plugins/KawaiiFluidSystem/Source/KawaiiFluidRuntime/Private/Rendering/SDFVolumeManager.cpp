@@ -127,6 +127,58 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolumeWithGPUBounds(
 	return GraphBuilder.CreateSRV(FRDGTextureSRVDesc(SDFVolumeTexture));
 }
 
+FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolumeWithGPUBoundsDirect(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferSRVRef ParticleBufferSRV,
+	int32 ParticleCount,
+	float ParticleRadius,
+	float SDFSmoothness,
+	FRDGBufferSRVRef BoundsBufferSRV)
+{
+	// Create 3D texture for SDF volume
+	FRDGTextureDesc SDFVolumeDesc = FRDGTextureDesc::Create3D(
+		FIntVector(VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z),
+		PF_R16F,  // 16-bit float for SDF distance values
+		FClearValueBinding::None,
+		TexCreate_ShaderResource | TexCreate_UAV);
+
+	FRDGTextureRef SDFVolumeTexture = GraphBuilder.CreateTexture(SDFVolumeDesc, TEXT("SDFVolumeTexture"));
+	FRDGTextureUAVRef SDFVolumeUAV = GraphBuilder.CreateUAV(SDFVolumeTexture);
+
+	// Use the new shader that reads bounds from buffer
+	FSDFBakeWithGPUBoundsCS::FParameters* PassParameters =
+		GraphBuilder.AllocParameters<FSDFBakeWithGPUBoundsCS::FParameters>();
+	PassParameters->RenderParticles = ParticleBufferSRV;
+	PassParameters->ParticleCount = ParticleCount;
+	PassParameters->ParticleRadius = ParticleRadius;
+	PassParameters->SDFSmoothness = SDFSmoothness;
+	PassParameters->BoundsBuffer = BoundsBufferSRV;
+	PassParameters->VolumeResolution = VolumeResolution;
+	PassParameters->SDFVolume = SDFVolumeUAV;
+
+	// Get compute shader
+	TShaderMapRef<FSDFBakeWithGPUBoundsCS> ComputeShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+
+	// Calculate dispatch group counts
+	const int32 ThreadGroupSize = FSDFBakeWithGPUBoundsCS::ThreadGroupSize;
+	FIntVector GroupCount(
+		FMath::DivideAndRoundUp(VolumeResolution.X, ThreadGroupSize),
+		FMath::DivideAndRoundUp(VolumeResolution.Y, ThreadGroupSize),
+		FMath::DivideAndRoundUp(VolumeResolution.Z, ThreadGroupSize));
+
+	// Add compute pass - must run after bounds buffer is written
+	FComputeShaderUtils::AddPass(
+		GraphBuilder,
+		RDG_EVENT_NAME("SDFBake_GPUBoundsDirect(%dx%dx%d)", VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z),
+		ERDGPassFlags::AsyncCompute | ERDGPassFlags::NeverCull,
+		ComputeShader,
+		PassParameters,
+		GroupCount);
+
+	// Create and return SRV for ray marching
+	return GraphBuilder.CreateSRV(FRDGTextureSRVDesc(SDFVolumeTexture));
+}
+
 FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolume(
 	FRDGBuilder& GraphBuilder,
 	FRDGBufferSRVRef ParticleBufferSRV,

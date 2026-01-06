@@ -98,6 +98,7 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 	int32 ValidCount = 0;
 	int32 TotalParticleCount = 0;
 	FRDGBufferSRVRef ParticleBufferSRV = nullptr;
+	FRDGBufferSRVRef CachedGPUBoundsBufferSRV = nullptr;  // GPU bounds buffer for same-frame use
 	bool bUsingGPUBuffer = false;
 	TArray<FVector3f> AllParticlePositions; // For CPU mode bounding box calculation
 
@@ -107,6 +108,11 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 	{
 		// ========== GPU SIMULATION MODE: Direct buffer access (render thread safe) ==========
 		FGPUFluidSimulator* GPUSimulator = Renderer->GetGPUSimulator();
+
+		UE_LOG(LogTemp, Warning, TEXT("[RayMarchPipeline] Renderer=%s, GPUSimulator=%s"),
+			*Renderer->GetName(),
+			GPUSimulator ? TEXT("VALID") : TEXT("NULL"));
+
 		if (GPUSimulator)
 		{
 			// Get the persistent particle buffer directly from GPU simulator
@@ -114,7 +120,8 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 			TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer = GPUSimulator->GetPersistentParticleBuffer();
 			const int32 PhysicsParticleCount = GPUSimulator->GetPersistentParticleCount();
 
-			//UE_LOG(LogTemp, Warning, TEXT("  GPU Simulator: PooledValid=%d, ParticleCount=%d"),PhysicsPooledBuffer.IsValid() ? 1 : 0, PhysicsParticleCount);
+			UE_LOG(LogTemp, Warning, TEXT("[RayMarchPipeline] GPU Mode: PooledValid=%d, ParticleCount=%d"),
+				PhysicsPooledBuffer.IsValid() ? 1 : 0, PhysicsParticleCount);
 
 			if (PhysicsPooledBuffer.IsValid() && PhysicsParticleCount > 0)
 			{
@@ -130,22 +137,35 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 					TEXT("GPURenderParticles"));
 				FRDGBufferUAVRef RenderBufferUAV = GraphBuilder.CreateUAV(RenderBuffer);
 
-				// Add extract render data pass to convert Physics → Render format
+				// Create bounds buffer for same-frame GPU bounds (no readback needed)
+				FRDGBufferRef GPUBoundsBuffer = GraphBuilder.CreateBuffer(
+					FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), 2),
+					TEXT("GPUParticleBounds"));
+				FRDGBufferUAVRef GPUBoundsBufferUAV = GraphBuilder.CreateUAV(GPUBoundsBuffer);
+
+				// OPTIMIZED: Single merged pass - ExtractRenderData + CalculateBounds
 				float ParticleRadius = Renderer->GetCachedParticleRadius();
-				FGPUFluidSimulatorPassBuilder::AddExtractRenderDataPass(
+				float BoundsMargin = ParticleRadius * 2.0f;
+				FGPUFluidSimulatorPassBuilder::AddExtractRenderDataWithBoundsPass(
 					GraphBuilder,
 					PhysicsBufferSRV,
 					RenderBufferUAV,
+					GPUBoundsBufferUAV,
 					PhysicsParticleCount,
-					ParticleRadius);
+					ParticleRadius,
+					BoundsMargin);
 
-				// Create SRV from converted render buffer for subsequent passes
+				// Create SRVs for subsequent passes
 				ParticleBufferSRV = GraphBuilder.CreateSRV(RenderBuffer);
 				TotalParticleCount = PhysicsParticleCount;
 				AverageParticleRadius = ParticleRadius;
 				bUsingGPUBuffer = true;
 
-				//UE_LOG(LogTemp, Warning, TEXT("  >>> CONVERTED GPU PHYSICS → RENDER (%d particles, radius: %.2f)"),TotalParticleCount, ParticleRadius);
+				// Store bounds buffer SRV for SDF baking and ray marching
+				CachedGPUBoundsBufferSRV = GraphBuilder.CreateSRV(GPUBoundsBuffer);
+
+				UE_LOG(LogTemp, Verbose, TEXT("  >>> GPU MODE: ExtractRenderData+Bounds MERGED (%d particles, radius: %.2f)"),
+					TotalParticleCount, ParticleRadius);
 				break; // Use first valid GPU simulator (batching not supported in GPU mode yet)
 			}
 			else
@@ -267,74 +287,46 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 		int32 Resolution = FMath::Clamp(RenderParams.SDFVolumeResolution, 32, 256);
 		SDFVolumeManager.SetVolumeResolution(FIntVector(Resolution, Resolution, Resolution));
 
-		// Calculate bounding box for volume
+		FRDGTextureSRVRef SDFVolumeSRV = nullptr;
 		FVector3f VolumeMin, VolumeMax;
-		float Margin = AverageParticleRadius * 2.0f;
-		FRDGBufferRef BoundsBuffer = nullptr;
+		bool bUseGPUBoundsForRayMarch = false;
 
-		if (bUsingGPUBuffer)
+		if (bUsingGPUBuffer && CachedGPUBoundsBufferSRV)
 		{
-			// GPU mode: Calculate bounds using parallel reduction on GPU
-			// This runs as a compute shader and calculates accurate bounds from actual particle positions
-			BoundsBuffer = SDFVolumeManager.CalculateGPUBounds(
+			// GPU MODE: Use bounds from GPU buffer directly (no readback latency!)
+			// Both SDF Bake and Ray March will read bounds from the same GPU buffer
+			SDFVolumeSRV = SDFVolumeManager.BakeSDFVolumeWithGPUBoundsDirect(
 				GraphBuilder,
 				ParticleBufferSRV,
 				TotalParticleCount,
 				AverageParticleRadius,
-				Margin);
+				RenderParams.SDFSmoothness,
+				CachedGPUBoundsBufferSRV);
 
-			// Queue buffer extraction for readback next frame
-			// This uses RDG's safe extraction pattern: extract to pooled buffer,
-			// read from pooled buffer next frame (1-frame latency)
-			GraphBuilder.QueueBufferExtraction(BoundsBuffer, &PendingBoundsReadbackBuffer);
-			bHasPendingBoundsReadback = true;
+			// For debug visualization, we don't have exact bounds (they're in GPU buffer)
+			// Use placeholder values - actual rendering uses GPU buffer
+			VolumeMin = FVector3f(-500.0f, -500.0f, -500.0f);
+			VolumeMax = FVector3f(500.0f, 500.0f, 500.0f);
+			bUseGPUBoundsForRayMarch = true;
 
-			// Use cached GPU bounds from previous frame (1-frame latency)
-			if (SDFVolumeManager.HasValidGPUBounds())
-			{
-				SDFVolumeManager.GetLastGPUBounds(VolumeMin, VolumeMax);
-
-				// Debug log - every frame
-				FVector3f Size = VolumeMax - VolumeMin;
-				//UE_LOG(LogTemp, Log, TEXT("[Bounds Used] Min(%.1f, %.1f, %.1f) Max(%.1f, %.1f, %.1f) Size(%.1f, %.1f, %.1f)"),VolumeMin.X, VolumeMin.Y, VolumeMin.Z,VolumeMax.X, VolumeMax.Y, VolumeMax.Z,Size.X, Size.Y, Size.Z);
-			}
-			else
-			{
-				// First frame: use component position as initial bounds center
-				// This provides reasonable bounds until GPU readback completes
-				FVector3f SpawnCenter = FVector3f::ZeroVector;
-				for (UKawaiiFluidMetaballRenderer* Renderer : Renderers)
-				{
-					if (Renderer)
-					{
-						SpawnCenter = FVector3f(Renderer->GetSpawnPositionHint());
-						break;  // Use first renderer's position
-					}
-				}
-
-				float DefaultExtent = 100.0f;  // Reasonable initial extent around spawn point
-				VolumeMin = SpawnCenter - FVector3f(DefaultExtent, DefaultExtent, DefaultExtent);
-				VolumeMax = SpawnCenter + FVector3f(DefaultExtent, DefaultExtent, DefaultExtent);
-
-				UE_LOG(LogTemp, Warning, TEXT("[Bounds Used] FIRST FRAME - using spawn position hint: (%.1f, %.1f, %.1f)"),
-					SpawnCenter.X, SpawnCenter.Y, SpawnCenter.Z);
-			}
+			UE_LOG(LogTemp, Verbose, TEXT("GPU Mode: SDF Bake + Ray March using GPU bounds buffer (zero latency)"));
 		}
 		else
 		{
 			// CPU mode: Calculate bounds from particle positions
+			float Margin = AverageParticleRadius * 2.0f;
 			CalculateParticleBoundingBox(AllParticlePositions, AverageParticleRadius, Margin, VolumeMin, VolumeMax);
-		}
 
-		// Bake SDF volume using compute shader
-		FRDGTextureSRVRef SDFVolumeSRV = SDFVolumeManager.BakeSDFVolume(
-			GraphBuilder,
-			ParticleBufferSRV,
-			TotalParticleCount,
-			AverageParticleRadius,
-			RenderParams.SDFSmoothness,
-			VolumeMin,
-			VolumeMax);
+			// Bake SDF volume using compute shader (CPU bounds path)
+			SDFVolumeSRV = SDFVolumeManager.BakeSDFVolume(
+				GraphBuilder,
+				ParticleBufferSRV,
+				TotalParticleCount,
+				AverageParticleRadius,
+				RenderParams.SDFSmoothness,
+				VolumeMin,
+				VolumeMax);
+		}
 
 		// Store SDF volume data
 		CachedPipelineData.SDFVolumeData.SDFVolumeTextureSRV = SDFVolumeSRV;
@@ -342,6 +334,8 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 		CachedPipelineData.SDFVolumeData.VolumeMax = VolumeMax;
 		CachedPipelineData.SDFVolumeData.VolumeResolution = SDFVolumeManager.GetVolumeResolution();
 		CachedPipelineData.SDFVolumeData.bUseSDFVolume = true;
+		CachedPipelineData.SDFVolumeData.bUseGPUBounds = bUseGPUBoundsForRayMarch;
+		CachedPipelineData.SDFVolumeData.BoundsBufferSRV = CachedGPUBoundsBufferSRV;
 
 		// Notify renderers of SDF volume bounds for debug visualization
 		for (UKawaiiFluidMetaballRenderer* Renderer : Renderers)

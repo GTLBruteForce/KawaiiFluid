@@ -427,6 +427,10 @@ private:
 	// This ensures buffer and count are always synchronized
 	std::atomic<int32> PersistentParticleCount{0};
 
+	// Persistent Spatial Hash buffers - reused across frames (GPU clear instead of CPU upload)
+	TRefCountPtr<FRDGPooledBuffer> PersistentCellCountsBuffer;
+	TRefCountPtr<FRDGPooledBuffer> PersistentParticleIndicesBuffer;
+
 	// Flag: need to upload all particles from CPU (initial or after resize)
 	bool bNeedsFullUpload = true;
 

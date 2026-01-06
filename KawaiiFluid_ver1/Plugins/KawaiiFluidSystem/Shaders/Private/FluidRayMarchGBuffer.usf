@@ -22,9 +22,35 @@ float ParticleRadius;
 #if USE_SDF_VOLUME
 Texture3D<float> SDFVolumeTexture;
 SamplerState SDFVolumeSampler;
+
+// Bounds can come from uniform (CPU mode) or buffer (GPU mode)
+#if USE_GPU_BOUNDS
+StructuredBuffer<float3> BoundsBuffer;  // [0] = Min, [1] = Max
+#else
 float3 SDFVolumeMin;
 float3 SDFVolumeMax;
+#endif
+
 int3 SDFVolumeResolution;
+
+// Helper functions to get bounds (works for both CPU and GPU modes)
+float3 GetSDFVolumeMin()
+{
+#if USE_GPU_BOUNDS
+	return BoundsBuffer[0];
+#else
+	return SDFVolumeMin;
+#endif
+}
+
+float3 GetSDFVolumeMax()
+{
+#if USE_GPU_BOUNDS
+	return BoundsBuffer[1];
+#else
+	return SDFVolumeMax;
+#endif
+}
 #endif
 
 // Ray Marching Parameters
@@ -101,7 +127,9 @@ float ConvertDeviceZToLinearDepth(float DeviceZ)
 #if USE_SDF_VOLUME
 float SampleSDFVolume(float3 worldPos)
 {
-	float3 uvw = (worldPos - SDFVolumeMin) / (SDFVolumeMax - SDFVolumeMin);
+	float3 volumeMin = GetSDFVolumeMin();
+	float3 volumeMax = GetSDFVolumeMax();
+	float3 uvw = (worldPos - volumeMin) / (volumeMax - volumeMin);
 
 	if (any(uvw < 0.0) || any(uvw > 1.0))
 	{
@@ -157,7 +185,9 @@ FRayMarchResult RayMarchSDF(float3 ro, float3 rd, float maxDist)
 
 #if USE_SDF_VOLUME
 	float tBoxMin, tBoxMax;
-	if (!RayBoxIntersect(ro, rd, SDFVolumeMin, SDFVolumeMax, tBoxMin, tBoxMax))
+	float3 volumeMin = GetSDFVolumeMin();
+	float3 volumeMax = GetSDFVolumeMax();
+	if (!RayBoxIntersect(ro, rd, volumeMin, volumeMax, tBoxMin, tBoxMax))
 	{
 		return result;
 	}

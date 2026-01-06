@@ -49,9 +49,15 @@ BEGIN_SHADER_PARAMETER_STRUCT(FFluidRayMarchGBufferParameters, )
 	//========================================
 	SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float>, SDFVolumeTexture)
 	SHADER_PARAMETER_SAMPLER(SamplerState, SDFVolumeSampler)
-	SHADER_PARAMETER(FVector3f, SDFVolumeMin)
-	SHADER_PARAMETER(FVector3f, SDFVolumeMax)
+	SHADER_PARAMETER(FVector3f, SDFVolumeMin)      // Used when USE_GPU_BOUNDS=0
+	SHADER_PARAMETER(FVector3f, SDFVolumeMax)      // Used when USE_GPU_BOUNDS=0
 	SHADER_PARAMETER(FIntVector, SDFVolumeResolution)
+
+	//========================================
+	// GPU Bounds Buffer (for GPU mode - eliminates CPU readback)
+	// When USE_GPU_BOUNDS=1, bounds are read from this buffer instead of uniforms
+	//========================================
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector3f>, BoundsBuffer)  // [0]=Min, [1]=Max
 
 	//========================================
 	// SceneDepth UV Mapping
@@ -98,6 +104,12 @@ public:
 class FUseSDFVolumeGBufferDim : SHADER_PERMUTATION_BOOL("USE_SDF_VOLUME");
 
 /**
+ * @brief Shader permutation dimension for GPU Bounds buffer (GBuffer)
+ * When enabled, reads SDFVolumeMin/Max from BoundsBuffer instead of uniforms.
+ */
+class FUseGPUBoundsGBufferDim : SHADER_PERMUTATION_BOOL("USE_GPU_BOUNDS");
+
+/**
  * @brief Pixel shader for Ray Marching SDF → G-Buffer output
  *
  * Performs ray marching through SDF field, outputs:
@@ -117,7 +129,7 @@ public:
 	SHADER_USE_PARAMETER_STRUCT(FFluidRayMarchGBufferPS, FGlobalShader);
 
 	using FParameters = FFluidRayMarchGBufferParameters;
-	using FPermutationDomain = TShaderPermutationDomain<FUseSDFVolumeGBufferDim>;
+	using FPermutationDomain = TShaderPermutationDomain<FUseSDFVolumeGBufferDim, FUseGPUBoundsGBufferDim>;
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{

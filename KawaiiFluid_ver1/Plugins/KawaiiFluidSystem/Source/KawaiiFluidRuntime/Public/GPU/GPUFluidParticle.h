@@ -380,19 +380,11 @@ struct FGPUSpawnRequest
 	FVector3f Velocity;       // 12 bytes - Initial velocity
 	float Mass;               // 4 bytes  - Particle mass (total: 32)
 
-	FGPUSpawnRequest()
-		: Position(FVector3f::ZeroVector)
-		, Radius(0.0f)
-		, Velocity(FVector3f::ZeroVector)
-		, Mass(1.0f)
+	FGPUSpawnRequest(): Position(FVector3f::ZeroVector), Radius(0.0f), Velocity(FVector3f::ZeroVector), Mass(1.0f)
 	{
 	}
 
-	FGPUSpawnRequest(const FVector3f& InPosition, const FVector3f& InVelocity, float InMass = 1.0f)
-		: Position(InPosition)
-		, Radius(0.0f)
-		, Velocity(InVelocity)
-		, Mass(InMass)
+	FGPUSpawnRequest(const FVector3f& InPosition, const FVector3f& InVelocity, float InMass = 1.0f) : Position(InPosition), Radius(0.0f), Velocity(InVelocity), Mass(InMass)
 	{
 	}
 };

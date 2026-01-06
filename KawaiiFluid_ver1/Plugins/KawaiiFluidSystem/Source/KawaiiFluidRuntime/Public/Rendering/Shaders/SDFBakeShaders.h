@@ -71,3 +71,54 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
 	}
 };
+
+//=============================================================================
+// SDF Bake with GPU Bounds - Reads bounds from buffer (same-frame, no readback)
+//=============================================================================
+
+/**
+ * @brief Shader parameters for SDF baking with GPU-calculated bounds
+ *
+ * Reads bounds from a structured buffer instead of uniform parameters.
+ * This eliminates 1-frame latency from CPU readback.
+ */
+BEGIN_SHADER_PARAMETER_STRUCT(FSDFBakeWithGPUBoundsParameters, )
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FKawaiiRenderParticle>, RenderParticles)
+	SHADER_PARAMETER(int32, ParticleCount)
+	SHADER_PARAMETER(float, ParticleRadius)
+	SHADER_PARAMETER(float, SDFSmoothness)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector3f>, BoundsBuffer)
+	SHADER_PARAMETER(FIntVector, VolumeResolution)
+	SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<float>, SDFVolume)
+END_SHADER_PARAMETER_STRUCT()
+
+/**
+ * @brief Compute shader for SDF baking that reads bounds from GPU buffer
+ *
+ * Same as FSDFBakeCS but reads VolumeMin/VolumeMax from a structured buffer
+ * instead of uniform parameters. This allows using bounds calculated in the
+ * same frame without CPU readback.
+ */
+class FSDFBakeWithGPUBoundsCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FSDFBakeWithGPUBoundsCS);
+	SHADER_USE_PARAMETER_STRUCT(FSDFBakeWithGPUBoundsCS, FGlobalShader);
+
+	using FParameters = FSDFBakeWithGPUBoundsParameters;
+
+	static constexpr int32 ThreadGroupSize = 8;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};

@@ -79,13 +79,25 @@ void KawaiiRayMarchShading::RenderTranslucentGBufferWrite(
 
 	// SDF Volume (if using optimization)
 	const bool bUseSDFVolume = PipelineData.SDFVolumeData.IsValid();
+	const bool bUseGPUBounds = PipelineData.SDFVolumeData.bUseGPUBounds && PipelineData.SDFVolumeData.BoundsBufferSRV != nullptr;
+
 	if (bUseSDFVolume)
 	{
 		PassParameters->SDFVolumeTexture = PipelineData.SDFVolumeData.SDFVolumeTextureSRV;
 		PassParameters->SDFVolumeSampler = TStaticSamplerState<SF_Trilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
-		PassParameters->SDFVolumeMin = PipelineData.SDFVolumeData.VolumeMin;
-		PassParameters->SDFVolumeMax = PipelineData.SDFVolumeData.VolumeMax;
 		PassParameters->SDFVolumeResolution = PipelineData.SDFVolumeData.VolumeResolution;
+
+		if (bUseGPUBounds)
+		{
+			// GPU mode: bounds from buffer (no readback latency)
+			PassParameters->BoundsBuffer = PipelineData.SDFVolumeData.BoundsBufferSRV;
+		}
+		else
+		{
+			// CPU mode: bounds from uniforms
+			PassParameters->SDFVolumeMin = PipelineData.SDFVolumeData.VolumeMin;
+			PassParameters->SDFVolumeMax = PipelineData.SDFVolumeData.VolumeMax;
+		}
 	}
 
 	// SceneDepth UV mapping
@@ -120,6 +132,7 @@ void KawaiiRayMarchShading::RenderTranslucentGBufferWrite(
 
 	FFluidRayMarchGBufferPS::FPermutationDomain PermutationVector;
 	PermutationVector.Set<FUseSDFVolumeGBufferDim>(bUseSDFVolume);
+	PermutationVector.Set<FUseGPUBoundsGBufferDim>(bUseGPUBounds);
 	TShaderMapRef<FFluidRayMarchGBufferPS> PixelShader(GlobalShaderMap, PermutationVector);
 
 	GraphBuilder.AddPass(
@@ -385,13 +398,25 @@ void KawaiiRayMarchShading::RenderPostProcessShading(
 	PassParameters->ParticleRadius = PipelineData.ParticleRadius;
 
 	// SDF Volume data
+	const bool bUseGPUBounds = bUseSDFVolume && PipelineData.SDFVolumeData.bUseGPUBounds && PipelineData.SDFVolumeData.BoundsBufferSRV != nullptr;
+
 	if (bUseSDFVolume)
 	{
 		PassParameters->SDFVolumeTexture = PipelineData.SDFVolumeData.SDFVolumeTextureSRV;
 		PassParameters->SDFVolumeSampler = TStaticSamplerState<SF_Trilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
-		PassParameters->SDFVolumeMin = PipelineData.SDFVolumeData.VolumeMin;
-		PassParameters->SDFVolumeMax = PipelineData.SDFVolumeData.VolumeMax;
 		PassParameters->SDFVolumeResolution = PipelineData.SDFVolumeData.VolumeResolution;
+
+		if (bUseGPUBounds)
+		{
+			// GPU mode: bounds from buffer (no readback latency)
+			PassParameters->BoundsBuffer = PipelineData.SDFVolumeData.BoundsBufferSRV;
+		}
+		else
+		{
+			// CPU mode: bounds from uniforms
+			PassParameters->SDFVolumeMin = PipelineData.SDFVolumeData.VolumeMin;
+			PassParameters->SDFVolumeMax = PipelineData.SDFVolumeData.VolumeMax;
+		}
 	}
 
 	// Spatial Hash data for HYBRID mode (used WITH SDF Volume)
@@ -469,6 +494,7 @@ void KawaiiRayMarchShading::RenderPostProcessShading(
 	PermutationVector.Set<FUseSDFVolumeDim>(bUseSDFVolume);
 	PermutationVector.Set<FUseSpatialHashDim>(bUseSpatialHash);
 	PermutationVector.Set<FOutputDepthDim>(bNeedDepthOutput);  // Enable depth output for scaled-res
+	PermutationVector.Set<FUseGPUBoundsDim>(bUseGPUBounds);    // GPU bounds buffer (no readback)
 	TShaderMapRef<FFluidRayMarchPS> PixelShader(GlobalShaderMap, PermutationVector);
 
 	GraphBuilder.AddPass(

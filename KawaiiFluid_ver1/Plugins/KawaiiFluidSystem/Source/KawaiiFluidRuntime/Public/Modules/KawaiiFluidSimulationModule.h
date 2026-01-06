@@ -7,6 +7,7 @@
 #include "Core/FluidParticle.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
 #include "Interfaces/IKawaiiFluidDataProvider.h"
+#include "GPU/GPUFluidSimulator.h"
 #include "KawaiiFluidSimulationModule.generated.h"
 
 /** Collision event callback type */
@@ -110,8 +111,17 @@ public:
 	void SetNextParticleID(int32 InNextParticleID) { NextParticleID = InNextParticleID; }
 
 	/** 파티클 수 - IKawaiiFluidDataProvider::GetParticleCount() */
+	/** GPU mode: returns GPU particle count, CPU mode: returns Particles.Num() */
 	UFUNCTION(BlueprintPure, Category = "Fluid")
-	virtual int32 GetParticleCount() const override { return Particles.Num(); }
+	virtual int32 GetParticleCount() const override
+	{
+		if (bGPUSimulationActive && CachedGPUSimulator)
+		{
+			// Include both existing GPU particles AND pending spawn requests
+			return CachedGPUSimulator->GetParticleCount() + CachedGPUSimulator->GetPendingSpawnCount();
+		}
+		return Particles.Num();
+	}
 
 	//========================================
 	// 파티클 생성/삭제
@@ -609,7 +619,15 @@ public:
 	virtual float GetParticleRadius() const override;
 
 	/** Data validity check - IKawaiiFluidDataProvider */
-	virtual bool IsDataValid() const override { return Particles.Num() > 0; }
+	/** GPU mode: checks GPU particle count, CPU mode: checks Particles.Num() */
+	virtual bool IsDataValid() const override
+	{
+		if (bGPUSimulationActive && CachedGPUSimulator)
+		{
+			return CachedGPUSimulator->GetParticleCount() > 0 || CachedGPUSimulator->GetPendingSpawnCount() > 0;
+		}
+		return Particles.Num() > 0;
+	}
 
 	/** Get debug name - IKawaiiFluidDataProvider */
 	virtual FString GetDebugName() const override;

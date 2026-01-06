@@ -59,9 +59,15 @@ BEGIN_SHADER_PARAMETER_STRUCT(FFluidRayMarchParameters, )
 	//========================================
 	SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float>, SDFVolumeTexture)
 	SHADER_PARAMETER_SAMPLER(SamplerState, SDFVolumeSampler)
-	SHADER_PARAMETER(FVector3f, SDFVolumeMin)
-	SHADER_PARAMETER(FVector3f, SDFVolumeMax)
+	SHADER_PARAMETER(FVector3f, SDFVolumeMin)      // Used when USE_GPU_BOUNDS=0
+	SHADER_PARAMETER(FVector3f, SDFVolumeMax)      // Used when USE_GPU_BOUNDS=0
 	SHADER_PARAMETER(FIntVector, SDFVolumeResolution)
+
+	//========================================
+	// GPU Bounds Buffer (for GPU mode - eliminates CPU readback)
+	// When USE_GPU_BOUNDS=1, bounds are read from this buffer instead of uniforms
+	//========================================
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector3f>, BoundsBuffer)  // [0]=Min, [1]=Max
 
 	//========================================
 	// Spatial Hash (for hybrid mode: SDF Volume + Spatial Hash)
@@ -133,6 +139,13 @@ class FUseSpatialHashDim : SHADER_PERMUTATION_BOOL("USE_SPATIAL_HASH");
 class FOutputDepthDim : SHADER_PERMUTATION_BOOL("OUTPUT_DEPTH");
 
 /**
+ * @brief Shader permutation dimension for GPU Bounds buffer
+ * When enabled, reads SDFVolumeMin/Max from BoundsBuffer instead of uniforms.
+ * This eliminates CPU readback latency in GPU simulation mode.
+ */
+class FUseGPUBoundsDim : SHADER_PERMUTATION_BOOL("USE_GPU_BOUNDS");
+
+/**
  * @brief Pixel shader for Ray Marching SDF fluid rendering
  *
  * Performs ray marching through metaball SDF field to render
@@ -156,7 +169,7 @@ public:
 	SHADER_USE_PARAMETER_STRUCT(FFluidRayMarchPS, FGlobalShader);
 
 	using FParameters = FFluidRayMarchParameters;
-	using FPermutationDomain = TShaderPermutationDomain<FUseSDFVolumeDim, FUseSpatialHashDim, FOutputDepthDim>;
+	using FPermutationDomain = TShaderPermutationDomain<FUseSDFVolumeDim, FUseSpatialHashDim, FOutputDepthDim, FUseGPUBoundsDim>;
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{

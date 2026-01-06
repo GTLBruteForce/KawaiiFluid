@@ -594,8 +594,10 @@ void FFluidSceneViewExtension::SubscribeToPostProcessingPass(
 				if (ShadowRenderParams)
 				{
 					// Create a copy for shadow receiver input (can't read and write same texture)
+					// Copy desc but strip problematic flags that cause RDG assertion failures
 					FRDGTextureDesc ShadowInputDesc = Output.Texture->Desc;
-					ShadowInputDesc.Flags |= TexCreate_ShaderResource;
+					ShadowInputDesc.Flags &= ~(TexCreate_Presentable | TexCreate_DepthStencilTargetable | TexCreate_ResolveTargetable);
+					ShadowInputDesc.Flags |= (TexCreate_RenderTargetable | TexCreate_ShaderResource);
 					FRDGTextureRef ShadowInputCopy = GraphBuilder.CreateTexture(
 						ShadowInputDesc,
 						TEXT("FluidShadowReceiverInput"));
