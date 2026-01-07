@@ -89,17 +89,24 @@ struct FGPUFluidSimulationParams
 	float DeltaTime;              // Simulation substep delta time
 	float DeltaTimeSq;            // DeltaTime squared
 
-	// Bounds collision
-	FVector3f BoundsMin;          // World bounds minimum
+	// Bounds collision (OBB support)
+	FVector3f BoundsCenter;       // OBB center in world space
 	float BoundsRestitution;      // Collision restitution (bounciness)
-	FVector3f BoundsMax;          // World bounds maximum
+	FVector3f BoundsExtent;       // OBB half-extents (local space)
 	float BoundsFriction;         // Collision friction
+	FVector4f BoundsRotation;     // OBB rotation quaternion (x, y, z, w)
+
+	// Legacy AABB bounds (for backward compatibility, used when rotation is identity)
+	FVector3f BoundsMin;          // World bounds minimum (AABB mode)
+	float Padding1;
+	FVector3f BoundsMax;          // World bounds maximum (AABB mode)
+	int32 bUseOBB;                // 1 = OBB mode, 0 = AABB mode
 
 	// Iteration
 	int32 SubstepIndex;           // Current substep index
 	int32 TotalSubsteps;          // Total substeps per frame
 	int32 PressureIterations;     // Number of pressure solve iterations
-	int32 Padding;                // Padding for alignment
+	int32 Padding2;               // Padding for alignment
 
 	FGPUFluidSimulationParams()
 		: RestDensity(1000.0f)
@@ -116,14 +123,19 @@ struct FGPUFluidSimulationParams
 		, ParticleCount(0)
 		, DeltaTime(0.016f)
 		, DeltaTimeSq(0.000256f)
-		, BoundsMin(FVector3f(-1000.0f))
+		, BoundsCenter(FVector3f::ZeroVector)
 		, BoundsRestitution(0.3f)
-		, BoundsMax(FVector3f(1000.0f))
+		, BoundsExtent(FVector3f(1000.0f))
 		, BoundsFriction(0.1f)
+		, BoundsRotation(FVector4f(0.0f, 0.0f, 0.0f, 1.0f))  // Identity quaternion
+		, BoundsMin(FVector3f(-1000.0f))
+		, Padding1(0.0f)
+		, BoundsMax(FVector3f(1000.0f))
+		, bUseOBB(0)
 		, SubstepIndex(0)
 		, TotalSubsteps(1)
 		, PressureIterations(1)
-		, Padding(0)
+		, Padding2(0)
 	{
 	}
 

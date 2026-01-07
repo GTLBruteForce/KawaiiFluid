@@ -178,7 +178,7 @@ public:
 
 //=============================================================================
 // Bounds Collision Compute Shader
-// Pass 6: Apply AABB bounds collision
+// Pass 6: Apply AABB/OBB bounds collision
 //=============================================================================
 
 class FBoundsCollisionCS : public FGlobalShader
@@ -191,8 +191,15 @@ public:
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
 		SHADER_PARAMETER(int32, ParticleCount)
 		SHADER_PARAMETER(float, ParticleRadius)
+		// OBB parameters
+		SHADER_PARAMETER(FVector3f, BoundsCenter)
+		SHADER_PARAMETER(FVector3f, BoundsExtent)
+		SHADER_PARAMETER(FVector4f, BoundsRotation)  // Quaternion (x, y, z, w)
+		SHADER_PARAMETER(int32, bUseOBB)
+		// Legacy AABB parameters
 		SHADER_PARAMETER(FVector3f, BoundsMin)
 		SHADER_PARAMETER(FVector3f, BoundsMax)
+		// Collision response
 		SHADER_PARAMETER(float, Restitution)
 		SHADER_PARAMETER(float, Friction)
 	END_SHADER_PARAMETER_STRUCT()

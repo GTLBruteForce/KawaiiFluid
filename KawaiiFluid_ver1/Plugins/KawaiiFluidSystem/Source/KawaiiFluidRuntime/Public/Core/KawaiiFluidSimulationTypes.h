@@ -100,6 +100,21 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSimulationParams
 	UPROPERTY(BlueprintReadWrite, Category = "Simulation")
 	FBox WorldBounds = FBox(EForceInit::ForceInit);
 
+	/** Bounds center (world space) - for OBB collision */
+	FVector BoundsCenter = FVector::ZeroVector;
+
+	/** Bounds half-extent (local space) - for OBB collision */
+	FVector BoundsExtent = FVector::ZeroVector;
+
+	/** Bounds rotation - for OBB collision (identity = AABB mode) */
+	FQuat BoundsRotation = FQuat::Identity;
+
+	/** Bounds collision restitution (bounciness) - used for Containment on GPU */
+	float BoundsRestitution = 0.3f;
+
+	/** Bounds collision friction - used for Containment on GPU */
+	float BoundsFriction = 0.1f;
+
 	//========================================
 	// Collision Event Settings
 	//========================================

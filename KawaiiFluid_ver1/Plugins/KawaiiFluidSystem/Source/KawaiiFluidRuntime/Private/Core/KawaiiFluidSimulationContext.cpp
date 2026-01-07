@@ -128,21 +128,55 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	// Spatial hash
 	GPUParams.CellSize = Preset->SmoothingRadius;  // Cell size = smoothing radius
 
-	// Bounds collision (use world bounds from params or default)
+	// Bounds collision (use world bounds from params if containment is enabled)
 	if (Params.WorldBounds.IsValid)
 	{
-		GPUParams.BoundsMin = FVector3f(Params.WorldBounds.Min);
-		GPUParams.BoundsMax = FVector3f(Params.WorldBounds.Max);
+		// Containment enabled - check if OBB or AABB mode
+		const bool bHasRotation = !Params.BoundsRotation.Equals(FQuat::Identity, 0.0001f);
+
+		if (bHasRotation)
+		{
+			// OBB mode - use Center, Extent, Rotation
+			GPUParams.bUseOBB = 1;
+			GPUParams.BoundsCenter = FVector3f(Params.BoundsCenter);
+			GPUParams.BoundsExtent = FVector3f(Params.BoundsExtent);
+			GPUParams.BoundsRotation = FVector4f(
+				Params.BoundsRotation.X,
+				Params.BoundsRotation.Y,
+				Params.BoundsRotation.Z,
+				Params.BoundsRotation.W
+			);
+
+			// Also set AABB for fallback (compute AABB from OBB)
+			GPUParams.BoundsMin = FVector3f(Params.WorldBounds.Min);
+			GPUParams.BoundsMax = FVector3f(Params.WorldBounds.Max);
+		}
+		else
+		{
+			// AABB mode - use Min/Max
+			GPUParams.bUseOBB = 0;
+			GPUParams.BoundsMin = FVector3f(Params.WorldBounds.Min);
+			GPUParams.BoundsMax = FVector3f(Params.WorldBounds.Max);
+			GPUParams.BoundsCenter = FVector3f(Params.BoundsCenter);
+			GPUParams.BoundsExtent = FVector3f(Params.BoundsExtent);
+			GPUParams.BoundsRotation = FVector4f(0.0f, 0.0f, 0.0f, 1.0f);  // Identity
+		}
+
+		GPUParams.BoundsRestitution = Params.BoundsRestitution;
+		GPUParams.BoundsFriction = Params.BoundsFriction;
 	}
 	else
 	{
 		// Default large bounds (effectively no bounds collision)
+		GPUParams.bUseOBB = 0;
 		GPUParams.BoundsMin = FVector3f(-1000000.0f, -1000000.0f, -1000000.0f);
 		GPUParams.BoundsMax = FVector3f(1000000.0f, 1000000.0f, 1000000.0f);
+		GPUParams.BoundsCenter = FVector3f::ZeroVector;
+		GPUParams.BoundsExtent = FVector3f(1000000.0f);
+		GPUParams.BoundsRotation = FVector4f(0.0f, 0.0f, 0.0f, 1.0f);  // Identity
+		GPUParams.BoundsRestitution = Preset->Restitution;
+		GPUParams.BoundsFriction = Preset->Friction;
 	}
-
-	GPUParams.BoundsRestitution = Preset->Restitution;
-	GPUParams.BoundsFriction = Preset->Friction;
 
 	// Pressure iterations (typically 1-4)
 	GPUParams.PressureIterations = 1;

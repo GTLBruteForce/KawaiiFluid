@@ -287,6 +287,40 @@ FKawaiiFluidSimulationParams UKawaiiFluidSimulationModule::BuildSimulationParams
 		Params.bUseGPUSimulation = OwnerComp->bUseGPUSimulation;
 	}
 
+	// Containment bounds for GPU collision (supports OBB with rotation)
+	if (bEnableContainment)
+	{
+		// OBB parameters (Center, Extent, Rotation)
+		Params.BoundsCenter = ContainmentCenter;
+		Params.BoundsExtent = ContainmentExtent;
+		Params.BoundsRotation = ContainmentRotation;
+
+		// Also compute AABB from OBB for legacy/fallback
+		// For rotated box, compute the axis-aligned bounding box
+		FVector RotatedExtents[8];
+		for (int32 i = 0; i < 8; ++i)
+		{
+			FVector Corner(
+				(i & 1) ? ContainmentExtent.X : -ContainmentExtent.X,
+				(i & 2) ? ContainmentExtent.Y : -ContainmentExtent.Y,
+				(i & 4) ? ContainmentExtent.Z : -ContainmentExtent.Z
+			);
+			RotatedExtents[i] = ContainmentRotation.RotateVector(Corner);
+		}
+
+		FVector AABBMin = RotatedExtents[0];
+		FVector AABBMax = RotatedExtents[0];
+		for (int32 i = 1; i < 8; ++i)
+		{
+			AABBMin = AABBMin.ComponentMin(RotatedExtents[i]);
+			AABBMax = AABBMax.ComponentMax(RotatedExtents[i]);
+		}
+
+		Params.WorldBounds = FBox(ContainmentCenter + AABBMin, ContainmentCenter + AABBMax);
+		Params.BoundsRestitution = ContainmentRestitution;
+		Params.BoundsFriction = ContainmentFriction;
+	}
+
 	// Event Settings
 	Params.bEnableCollisionEvents = bEnableCollisionEvents;
 	Params.MinVelocityForEvent = MinVelocityForEvent;

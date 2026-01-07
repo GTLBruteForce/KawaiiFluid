@@ -1,6 +1,6 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 // GPU Fluid Physics - Bounds Collision Pass
-// Applies AABB bounds collision with velocity response
+// Applies AABB/OBB bounds collision with velocity response
 
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"
@@ -13,35 +13,51 @@
 RWStructuredBuffer<FGPUFluidParticle> Particles;
 int ParticleCount;
 float ParticleRadius;
+
+// OBB parameters
+float3 BoundsCenter;
+float3 BoundsExtent;
+float4 BoundsRotation;  // Quaternion (x, y, z, w)
+int bUseOBB;
+
+// Legacy AABB parameters
 float3 BoundsMin;
 float3 BoundsMax;
+
+// Collision response
 float Restitution;
 float Friction;
 
 //=============================================================================
-// Main Compute Shader
+// Quaternion Helpers
 //=============================================================================
 
-[numthreads(THREAD_GROUP_SIZE, 1, 1)]
-void BoundsCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+// Rotate vector by quaternion: q * v * q^-1
+float3 QuatRotateVector(float4 q, float3 v)
 {
-	uint idx = DispatchThreadId.x;
-	if (idx >= (uint)ParticleCount)
-	{
-		return;
-	}
+	// Optimized quaternion-vector rotation
+	// q = (x, y, z, w) where w is scalar part
+	float3 qv = float3(q.x, q.y, q.z);
+	float qw = q.w;
 
-	FGPUFluidParticle particle = Particles[idx];
+	float3 t = 2.0f * cross(qv, v);
+	return v + qw * t + cross(qv, t);
+}
 
-	// Skip attached particles (handled by CPU)
-	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
-	{
-		return;
-	}
+// Rotate vector by inverse (conjugate) of quaternion
+float3 QuatRotateVectorInverse(float4 q, float3 v)
+{
+	// For unit quaternion, inverse = conjugate = (-x, -y, -z, w)
+	float4 qConj = float4(-q.x, -q.y, -q.z, q.w);
+	return QuatRotateVector(qConj, v);
+}
 
-	float3 pos = particle.PredictedPosition;
-	float3 vel = particle.Velocity;
+//=============================================================================
+// AABB Collision (Legacy)
+//=============================================================================
 
+void ApplyAABBCollision(inout float3 pos, inout float3 vel, inout uint flags)
+{
 	// Effective bounds considering particle radius
 	float3 effectiveMin = BoundsMin + ParticleRadius;
 	float3 effectiveMax = BoundsMax - ParticleRadius;
@@ -80,9 +96,7 @@ void BoundsCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		pos.z = effectiveMin.z;
 		vel.z = -vel.z * Restitution;
 		vel.xy *= (1.0f - Friction);
-
-		// Mark as near ground for adhesion system
-		particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+		flags = SetFlag(flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
 	}
 	else if (pos.z > effectiveMax.z)
 	{
@@ -92,13 +106,123 @@ void BoundsCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 	else
 	{
-		// Clear near ground flag if not on ground
-		particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+		flags = ClearFlag(flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+	}
+}
+
+//=============================================================================
+// OBB Collision
+//=============================================================================
+
+void ApplyOBBCollision(inout float3 pos, inout float3 vel, inout uint flags)
+{
+	// Transform position from world space to OBB local space
+	float3 localPos = QuatRotateVectorInverse(BoundsRotation, pos - BoundsCenter);
+	float3 localVel = QuatRotateVectorInverse(BoundsRotation, vel);
+
+	// Effective extents considering particle radius
+	float3 effectiveExtent = BoundsExtent - ParticleRadius;
+	effectiveExtent = max(effectiveExtent, float3(0.001f, 0.001f, 0.001f));  // Prevent negative
+
+	bool collided = false;
+
+	// X axis collision (in local space)
+	if (localPos.x < -effectiveExtent.x)
+	{
+		localPos.x = -effectiveExtent.x;
+		localVel.x = -localVel.x * Restitution;
+		localVel.yz *= (1.0f - Friction);
+		collided = true;
+	}
+	else if (localPos.x > effectiveExtent.x)
+	{
+		localPos.x = effectiveExtent.x;
+		localVel.x = -localVel.x * Restitution;
+		localVel.yz *= (1.0f - Friction);
+		collided = true;
+	}
+
+	// Y axis collision (in local space)
+	if (localPos.y < -effectiveExtent.y)
+	{
+		localPos.y = -effectiveExtent.y;
+		localVel.y = -localVel.y * Restitution;
+		localVel.xz *= (1.0f - Friction);
+		collided = true;
+	}
+	else if (localPos.y > effectiveExtent.y)
+	{
+		localPos.y = effectiveExtent.y;
+		localVel.y = -localVel.y * Restitution;
+		localVel.xz *= (1.0f - Friction);
+		collided = true;
+	}
+
+	// Z axis collision (in local space - typically floor/ceiling)
+	if (localPos.z < -effectiveExtent.z)
+	{
+		localPos.z = -effectiveExtent.z;
+		localVel.z = -localVel.z * Restitution;
+		localVel.xy *= (1.0f - Friction);
+		flags = SetFlag(flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+		collided = true;
+	}
+	else if (localPos.z > effectiveExtent.z)
+	{
+		localPos.z = effectiveExtent.z;
+		localVel.z = -localVel.z * Restitution;
+		localVel.xy *= (1.0f - Friction);
+		collided = true;
+	}
+	else
+	{
+		flags = ClearFlag(flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
+	}
+
+	// Transform back to world space
+	pos = QuatRotateVector(BoundsRotation, localPos) + BoundsCenter;
+	vel = QuatRotateVector(BoundsRotation, localVel);
+}
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void BoundsCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	FGPUFluidParticle particle = Particles[idx];
+
+	// Skip attached particles (handled by CPU)
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+	{
+		return;
+	}
+
+	float3 pos = particle.PredictedPosition;
+	float3 vel = particle.Velocity;
+	uint flags = particle.Flags;
+
+	// Apply collision based on mode
+	if (bUseOBB != 0)
+	{
+		ApplyOBBCollision(pos, vel, flags);
+	}
+	else
+	{
+		ApplyAABBCollision(pos, vel, flags);
 	}
 
 	// Update particle
 	particle.PredictedPosition = pos;
 	particle.Velocity = vel;
+	particle.Flags = flags;
 
 	Particles[idx] = particle;
 }

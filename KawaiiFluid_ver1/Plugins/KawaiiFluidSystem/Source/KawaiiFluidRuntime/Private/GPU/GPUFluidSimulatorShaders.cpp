@@ -286,8 +286,18 @@ void FGPUFluidSimulatorPassBuilder::AddBoundsCollisionPass(
 	PassParameters->Particles = ParticlesUAV;
 	PassParameters->ParticleCount = Params.ParticleCount;
 	PassParameters->ParticleRadius = Params.ParticleRadius;
+
+	// OBB parameters
+	PassParameters->BoundsCenter = Params.BoundsCenter;
+	PassParameters->BoundsExtent = Params.BoundsExtent;
+	PassParameters->BoundsRotation = Params.BoundsRotation;
+	PassParameters->bUseOBB = Params.bUseOBB;
+
+	// Legacy AABB parameters
 	PassParameters->BoundsMin = Params.BoundsMin;
 	PassParameters->BoundsMax = Params.BoundsMax;
+
+	// Collision response
 	PassParameters->Restitution = Params.BoundsRestitution;
 	PassParameters->Friction = Params.BoundsFriction;
 
