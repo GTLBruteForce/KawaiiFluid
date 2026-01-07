@@ -1,55 +1,31 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
-// SDF Volume Bake Compute Shader
-// Bakes metaball SDF into a 3D texture for optimized ray marching
+// SDF Volume Bake Compute Shader (Dynamic Search Range Version)
+// Removes external dependencies + Applies dynamic search range
 
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"
 
 //=============================================================================
-// Render Particle Structure (must match FKawaiiRenderParticle - 32 bytes)
+// 1. Structs and Helper Functions
 //=============================================================================
 
-struct FRenderParticle
+struct FKawaiiRenderParticle
 {
-	float3 Position;   // 12 bytes
-	float3 Velocity;   // 12 bytes
-	float Radius;      // 4 bytes
-	float Padding;     // 4 bytes
+    float3 Position;
+    float3 Velocity;
+    float Radius;
+    float Padding;
 };
 
-//=============================================================================
-// Shader Parameters
-//=============================================================================
-
-// Particle Data (Input)
-#if USE_SOA_BUFFERS
-StructuredBuffer<float3> RenderPositions;  // SoA: 12B per particle (62% bandwidth reduction)
-#else
-StructuredBuffer<FRenderParticle> RenderParticles;  // AoS: 32B per particle (legacy)
-#endif
-int ParticleCount;
-float ParticleRadius;
-float SDFSmoothness;
-
-// Volume Parameters
-float3 VolumeMin;           // World-space minimum corner of the volume
-float3 VolumeMax;           // World-space maximum corner of the volume
-int3 VolumeResolution;      // Resolution of the 3D texture (e.g., 64, 64, 64)
-
-// Output SDF Volume (3D Texture UAV)
-RWTexture3D<float> SDFVolume;
-
-//=============================================================================
-// SDF Functions (Copied from FluidSDFCommon.ush for compute shader)
-//=============================================================================
-
-// Sphere SDF
-float sdSphere(float3 p, float3 center, float radius)
+uint HashCell(int3 Cell)
 {
-    return length(p - center) - radius;
+    const uint p1 = 73856093;
+    const uint p2 = 19349663;
+    const uint p3 = 83492791;
+    uint n = p1 * (uint)Cell.x ^ p2 * (uint)Cell.y ^ p3 * (uint)Cell.z;
+    return n % 65536; 
 }
 
-// Smooth minimum (polynomial smooth min)
 float smin(float a, float b, float k)
 {
     float h = max(k - abs(a - b), 0.0) / k;
@@ -57,45 +33,128 @@ float smin(float a, float b, float k)
 }
 
 //=============================================================================
-// Main Compute Shader
+// 2. Parameters
+//=============================================================================
+
+#if USE_SOA_BUFFERS
+    StructuredBuffer<float3> RenderPositions;
+#else
+    StructuredBuffer<FKawaiiRenderParticle> RenderParticles;
+#endif
+
+int ParticleCount;
+float ParticleRadius;
+float SDFSmoothness;
+
+#if USE_SPATIAL_HASH
+    StructuredBuffer<uint2> CellData;
+    StructuredBuffer<uint> SpatialHashParticleIndices;
+    float SpatialHashCellSize;
+#endif
+
+float3 VolumeMin;
+float3 VolumeMax;
+int3 VolumeResolution;
+RWTexture3D<float> SDFVolume;
+
+//=============================================================================
+// 3. Main Kernel (Dynamic Loop)
 //=============================================================================
 
 [numthreads(8, 8, 8)]
-void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+void SDFBakeCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
-    // Check bounds
-    if (any(DispatchThreadId >= uint3(VolumeResolution)))
-        return;
+    if (any(DispatchThreadId >= uint3(VolumeResolution))) return;
 
-    // Convert voxel coordinates to world position
-    // Add 0.5 to sample at voxel center
+    if ((VolumeMax.x - VolumeMin.x) <= 0) 
+    {
+        SDFVolume[DispatchThreadId] = 1e10;
+        return;
+    }
+
     float3 uvw = (float3(DispatchThreadId) + 0.5) / float3(VolumeResolution);
     float3 worldPos = lerp(VolumeMin, VolumeMax, uvw);
 
-    // Early out if no particles
     if (ParticleCount <= 0)
     {
         SDFVolume[DispatchThreadId] = 1e10;
         return;
     }
 
-    // Evaluate metaball SDF at this position
-#if USE_SOA_BUFFERS
-    float sdf = sdSphere(worldPos, RenderPositions[0], ParticleRadius);
-    for (int i = 1; i < ParticleCount; ++i)
+    float minSdf = 1e10;
+
+#if USE_SPATIAL_HASH
+    if (SpatialHashCellSize > 0.0)
     {
-        float d = sdSphere(worldPos, RenderPositions[i], ParticleRadius);
-        sdf = smin(sdf, d, SDFSmoothness);
-    }
-#else
-    float sdf = sdSphere(worldPos, RenderParticles[0].Position, ParticleRadius);
-    for (int i = 1; i < ParticleCount; ++i)
-    {
-        float d = sdSphere(worldPos, RenderParticles[i].Position, ParticleRadius);
-        sdf = smin(sdf, d, SDFSmoothness);
+        int3 CenterCell = floor(worldPos / SpatialHashCellSize);
+
+        // Core Logic: Dynamic Search Range Calculation
+        float MaxInteractionDist = ParticleRadius + (SDFSmoothness * 2.0f);
+        
+        int Range = (int)ceil(MaxInteractionDist / SpatialHashCellSize);
+        Range = clamp(Range, 1, 5); 
+
+        for (int dz = -Range; dz <= Range; ++dz)
+        {
+            for (int dy = -Range; dy <= Range; ++dy)
+            {
+                for (int dx = -Range; dx <= Range; ++dx)
+                {
+                    int3 NeighborCell = CenterCell + int3(dx, dy, dz);
+                    uint Hash = HashCell(NeighborCell);
+                    uint2 Cell = CellData[Hash];
+                    uint StartIndex = Cell.x;
+                    uint Count = Cell.y;
+
+                    for (uint i = 0; i < Count; ++i)
+                    {
+                        uint ParticleIdx = SpatialHashParticleIndices[StartIndex + i];
+                        if (ParticleIdx >= (uint)ParticleCount) continue;
+
+                        float3 P;
+                        #if USE_SOA_BUFFERS
+                            P = RenderPositions[ParticleIdx];
+                        #else
+                            P = RenderParticles[ParticleIdx].Position;
+                        #endif
+
+                        float d = length(worldPos - P) - ParticleRadius;
+                        
+                        // SDF Calculation
+                        if (minSdf > 1e9) minSdf = d;
+                        else minSdf = smin(minSdf, d, SDFSmoothness);
+                    }
+                }
+            }
+        }
+
+        // Safe Clamping
+        float SafeDistance = (float)Range * SpatialHashCellSize;
+        SDFVolume[DispatchThreadId] = min(minSdf, SafeDistance);
+        return;
     }
 #endif
 
-    // Store SDF value in volume texture
-    SDFVolume[DispatchThreadId] = sdf;
+    // [Fallback] Brute Force
+    #if USE_SOA_BUFFERS
+    {
+        float3 P0 = RenderPositions[0];
+        minSdf = length(worldPos - P0) - ParticleRadius;
+        for (int i = 1; i < ParticleCount; ++i) {
+            float d = length(worldPos - RenderPositions[i]) - ParticleRadius;
+            minSdf = smin(minSdf, d, SDFSmoothness);
+        }
+    }
+    #else
+    {
+        float3 P0 = RenderParticles[0].Position;
+        minSdf = length(worldPos - P0) - ParticleRadius;
+        for (int i = 1; i < ParticleCount; ++i) {
+            float d = length(worldPos - RenderParticles[i].Position) - ParticleRadius;
+            minSdf = smin(minSdf, d, SDFSmoothness);
+        }
+    }
+    #endif
+
+    SDFVolume[DispatchThreadId] = minSdf;
 }

@@ -66,7 +66,10 @@ public:
 		float ParticleRadius,
 		float SDFSmoothness,
 		FRDGBufferRef BoundsBuffer,
-		FRDGBufferSRVRef PositionBufferSRV = nullptr);  // SoA: optional, nullptr = use AoS
+		FRDGBufferSRVRef PositionBufferSRV = nullptr,
+		FRDGBufferSRVRef CellDataSRV = nullptr,
+		FRDGBufferSRVRef ParticleIndicesSRV = nullptr,
+		float SpatialHashCellSize = 0.0f);
 
 	/**
 	 * @brief Bake SDF volume reading bounds directly from GPU buffer (Optimized - no readback)
@@ -89,7 +92,10 @@ public:
 		float ParticleRadius,
 		float SDFSmoothness,
 		FRDGBufferSRVRef BoundsBufferSRV,
-		FRDGBufferSRVRef PositionBufferSRV = nullptr);  // SoA: optional, nullptr = use AoS
+		FRDGBufferSRVRef PositionBufferSRV = nullptr,
+		FRDGBufferSRVRef CellDataSRV = nullptr,
+		FRDGBufferSRVRef ParticleIndicesSRV = nullptr,
+		float SpatialHashCellSize = 0.0f);
 
 	/**
 	 * @brief Bake SDF volume from particle positions (legacy - CPU bounds)
@@ -114,7 +120,10 @@ public:
 		float SDFSmoothness,
 		const FVector3f& VolumeMin,
 		const FVector3f& VolumeMax,
-		FRDGBufferSRVRef PositionBufferSRV = nullptr);  // SoA: optional, nullptr = use AoS
+		FRDGBufferSRVRef PositionBufferSRV = nullptr,
+		FRDGBufferSRVRef CellDataSRV = nullptr,
+		FRDGBufferSRVRef ParticleIndicesSRV = nullptr,
+		float SpatialHashCellSize = 0.0f);
 
 	/** Get volume resolution (default: 64x64x64) */
 	FIntVector GetVolumeResolution() const { return VolumeResolution; }

@@ -73,7 +73,10 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolumeWithGPUBounds(
 	float ParticleRadius,
 	float SDFSmoothness,
 	FRDGBufferRef BoundsBuffer,
-	FRDGBufferSRVRef PositionBufferSRV)  // SoA: optional, nullptr = use AoS
+	FRDGBufferSRVRef PositionBufferSRV,
+	FRDGBufferSRVRef CellDataSRV,
+	FRDGBufferSRVRef ParticleIndicesSRV,
+	float SpatialHashCellSize)
 {
 	// Create 3D texture for SDF volume
 	FRDGTextureDesc SDFVolumeDesc = FRDGTextureDesc::Create3D(
@@ -123,9 +126,15 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolumeWithGPUBounds(
 	PassParameters->VolumeResolution = VolumeResolution;
 	PassParameters->SDFVolume = SDFVolumeUAV;
 
+	// Spatial Hash parameters
+	PassParameters->CellData = CellDataSRV;
+	PassParameters->SpatialHashParticleIndices = ParticleIndicesSRV;
+	PassParameters->SpatialHashCellSize = SpatialHashCellSize;
+
 	// Get compute shader with permutation
 	FSDFBakeCS::FPermutationDomain PermutationVector;
 	PermutationVector.Set<FSDFBakeUseSoADim>(bUseSoA);
+	PermutationVector.Set<FSDFBakeUseSpatialHashDim>(SpatialHashCellSize > 0.0f);
 	TShaderMapRef<FSDFBakeCS> ComputeShader(GetGlobalShaderMap(GMaxRHIFeatureLevel), PermutationVector);
 
 	// Calculate dispatch group counts
@@ -138,7 +147,7 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolumeWithGPUBounds(
 	// Add compute pass (must run after bounds calculation)
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
-		RDG_EVENT_NAME("SDFBake_WithGPUBounds(%dx%dx%d, SoA=%d)", VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z, bUseSoA ? 1 : 0),
+		RDG_EVENT_NAME("SDFBake_WithGPUBounds(%dx%dx%d, SoA=%d, Hash=%d)", VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z, bUseSoA ? 1 : 0, CellDataSRV != nullptr ? 1 : 0),
 		ERDGPassFlags::AsyncCompute | ERDGPassFlags::NeverCull,
 		ComputeShader,
 		PassParameters,
@@ -155,7 +164,10 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolumeWithGPUBoundsDirect(
 	float ParticleRadius,
 	float SDFSmoothness,
 	FRDGBufferSRVRef BoundsBufferSRV,
-	FRDGBufferSRVRef PositionBufferSRV)  // SoA: optional, nullptr = use AoS
+	FRDGBufferSRVRef PositionBufferSRV,
+	FRDGBufferSRVRef CellDataSRV,
+	FRDGBufferSRVRef ParticleIndicesSRV,
+	float SpatialHashCellSize)
 {
 	// Create 3D texture for SDF volume
 	FRDGTextureDesc SDFVolumeDesc = FRDGTextureDesc::Create3D(
@@ -188,9 +200,15 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolumeWithGPUBoundsDirect(
 	PassParameters->VolumeResolution = VolumeResolution;
 	PassParameters->SDFVolume = SDFVolumeUAV;
 
+	// Spatial Hash parameters
+	PassParameters->CellData = CellDataSRV;
+	PassParameters->SpatialHashParticleIndices = ParticleIndicesSRV;
+	PassParameters->SpatialHashCellSize = SpatialHashCellSize;
+
 	// Get compute shader with permutation
 	FSDFBakeWithGPUBoundsCS::FPermutationDomain PermutationVector;
 	PermutationVector.Set<FSDFBakeUseSoADim>(bUseSoA);
+	PermutationVector.Set<FSDFBakeUseSpatialHashDim>(SpatialHashCellSize > 0.0f);
 	TShaderMapRef<FSDFBakeWithGPUBoundsCS> ComputeShader(GetGlobalShaderMap(GMaxRHIFeatureLevel), PermutationVector);
 
 	// Calculate dispatch group counts
@@ -203,7 +221,7 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolumeWithGPUBoundsDirect(
 	// Add compute pass - must run after bounds buffer is written
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
-		RDG_EVENT_NAME("SDFBake_GPUBoundsDirect(%dx%dx%d, SoA=%d)", VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z, bUseSoA ? 1 : 0),
+		RDG_EVENT_NAME("SDFBake_GPUBoundsDirect(%dx%dx%d, SoA=%d, Hash=%d)", VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z, bUseSoA ? 1 : 0, CellDataSRV != nullptr ? 1 : 0),
 		ERDGPassFlags::AsyncCompute | ERDGPassFlags::NeverCull,
 		ComputeShader,
 		PassParameters,
@@ -221,7 +239,10 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolume(
 	float SDFSmoothness,
 	const FVector3f& VolumeMin,
 	const FVector3f& VolumeMax,
-	FRDGBufferSRVRef PositionBufferSRV)  // SoA: optional, nullptr = use AoS
+	FRDGBufferSRVRef PositionBufferSRV,
+	FRDGBufferSRVRef CellDataSRV,
+	FRDGBufferSRVRef ParticleIndicesSRV,
+	float SpatialHashCellSize)
 {
 	// Cache volume bounds
 	CachedVolumeMin = VolumeMin;
@@ -258,9 +279,15 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolume(
 	PassParameters->VolumeResolution = VolumeResolution;
 	PassParameters->SDFVolume = SDFVolumeUAV;
 
+	// Spatial Hash parameters
+	PassParameters->CellData = CellDataSRV;
+	PassParameters->SpatialHashParticleIndices = ParticleIndicesSRV;
+	PassParameters->SpatialHashCellSize = SpatialHashCellSize;
+
 	// Get compute shader with permutation
 	FSDFBakeCS::FPermutationDomain PermutationVector;
 	PermutationVector.Set<FSDFBakeUseSoADim>(bUseSoA);
+	PermutationVector.Set<FSDFBakeUseSpatialHashDim>(SpatialHashCellSize > 0.0f);
 	TShaderMapRef<FSDFBakeCS> ComputeShader(GetGlobalShaderMap(GMaxRHIFeatureLevel), PermutationVector);
 
 	// Calculate dispatch group counts
@@ -273,7 +300,7 @@ FRDGTextureSRVRef FSDFVolumeManager::BakeSDFVolume(
 	// Add compute pass (Async Compute for parallel execution with graphics)
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
-		RDG_EVENT_NAME("SDFBake_Async(%dx%dx%d, SoA=%d)", VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z, bUseSoA ? 1 : 0),
+		RDG_EVENT_NAME("SDFBake_Async(%dx%dx%d, SoA=%d, Hash=%d)", VolumeResolution.X, VolumeResolution.Y, VolumeResolution.Z, bUseSoA ? 1 : 0, CellDataSRV != nullptr ? 1 : 0),
 		ERDGPassFlags::AsyncCompute | ERDGPassFlags::NeverCull,
 		ComputeShader,
 		PassParameters,

@@ -322,96 +322,31 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 
 	if (bUseSDFVolume)
 	{
-		RDG_EVENT_SCOPE(GraphBuilder, "SDFVolumeBake");
-
 		// Set volume resolution from parameters
 		int32 Resolution = FMath::Clamp(RenderParams.SDFVolumeResolution, 32, 256);
 		SDFVolumeManager.SetVolumeResolution(FIntVector(Resolution, Resolution, Resolution));
-
-		FRDGTextureSRVRef SDFVolumeSRV = nullptr;
-		FVector3f VolumeMin, VolumeMax;
-		bool bUseGPUBoundsForRayMarch = false;
-
-		if (bUsingGPUBuffer && CachedGPUBoundsBufferSRV)
-		{
-			RDG_EVENT_SCOPE(GraphBuilder, "SDFBake_GPUBounds");
-			// GPU MODE: Use bounds from GPU buffer directly (no readback latency!)
-			// Both SDF Bake and Ray March will read bounds from the same GPU buffer
-			SDFVolumeSRV = SDFVolumeManager.BakeSDFVolumeWithGPUBoundsDirect(
-				GraphBuilder,
-				ParticleBufferSRV,
-				TotalParticleCount,
-				AverageParticleRadius,
-				RenderParams.SDFSmoothness,
-				CachedGPUBoundsBufferSRV);
-
-			// For debug visualization, we don't have exact bounds (they're in GPU buffer)
-			// Use placeholder values - actual rendering uses GPU buffer
-			VolumeMin = FVector3f(-500.0f, -500.0f, -500.0f);
-			VolumeMax = FVector3f(500.0f, 500.0f, 500.0f);
-			bUseGPUBoundsForRayMarch = true;
-
-			UE_LOG(LogTemp, Verbose, TEXT("GPU Mode: SDF Bake + Ray March using GPU bounds buffer (zero latency)"));
-		}
-		else
-		{
-			RDG_EVENT_SCOPE(GraphBuilder, "SDFBake_CPUBounds");
-			// CPU mode: Calculate bounds from particle positions
-			float Margin = AverageParticleRadius * 2.0f;
-			CalculateParticleBoundingBox(AllParticlePositions, AverageParticleRadius, Margin, VolumeMin, VolumeMax);
-
-			// Bake SDF volume using compute shader (CPU bounds path)
-			SDFVolumeSRV = SDFVolumeManager.BakeSDFVolume(
-				GraphBuilder,
-				ParticleBufferSRV,
-				TotalParticleCount,
-				AverageParticleRadius,
-				RenderParams.SDFSmoothness,
-				VolumeMin,
-				VolumeMax);
-		}
-
-		{
-			RDG_EVENT_SCOPE(GraphBuilder, "SDFBake_StoreData");
-			// Store SDF volume data
-			CachedPipelineData.SDFVolumeData.SDFVolumeTextureSRV = SDFVolumeSRV;
-			CachedPipelineData.SDFVolumeData.VolumeMin = VolumeMin;
-			CachedPipelineData.SDFVolumeData.VolumeMax = VolumeMax;
-			CachedPipelineData.SDFVolumeData.VolumeResolution = SDFVolumeManager.GetVolumeResolution();
-			CachedPipelineData.SDFVolumeData.bUseSDFVolume = true;
-			CachedPipelineData.SDFVolumeData.bUseGPUBounds = bUseGPUBoundsForRayMarch;
-			CachedPipelineData.SDFVolumeData.BoundsBufferSRV = CachedGPUBoundsBufferSRV;
-
-			// Notify renderers of SDF volume bounds for debug visualization
-			for (UKawaiiFluidMetaballRenderer* Renderer : Renderers)
-			{
-				if (Renderer && Renderer->GetLocalParameters().bDebugDrawSDFVolume)
-				{
-					Renderer->SetSDFVolumeBounds(FVector(VolumeMin), FVector(VolumeMax));
-				}
-			}
-		}
 
 		UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: Using SDF Volume optimization (%dx%dx%d)"),
 			Resolution, Resolution, Resolution);
 
 		// ========== HYBRID MODE: Build Spatial Hash for precise final evaluation ==========
-		// SDF Volume handles 90% of ray distance (fast O(1) sampling)
-		// Spatial Hash handles 10% final evaluation (precise O(k) lookup)
+		// We build it here so SDF Volume Bake can also use it for acceleration
 		const bool bUseSpatialHash = RenderParams.bUseSpatialHash;
 		if (bUseSpatialHash)
 		{
-			RDG_EVENT_SCOPE(GraphBuilder, "SpatialHashBuild_Hybrid(%d)", TotalParticleCount);
+			RDG_EVENT_SCOPE(GraphBuilder, "SpatialHashBuild_Hybrid");
 
 			// Cell size = SearchRadius to ensure 3x3x3 search covers all neighbors
+			// SearchRadius = ParticleRadius * 2.0 + Smoothness
 			float SearchRadius = AverageParticleRadius * 2.0f + RenderParams.SDFSmoothness;
 			float CellSize = SearchRadius;
 
-			FRDGBufferSRVRef PositionSRV = nullptr;
-
 			// Step 1: Extract float3 positions from FKawaiiRenderParticle buffer
+			// (If already in SoA mode, we can use CachedPipelineData.PositionBufferSRV directly)
+			FRDGBufferSRVRef PositionSRV = CachedPipelineData.PositionBufferSRV;
+
+			if (!CachedPipelineData.bUseSoABuffers || !PositionSRV)
 			{
-				RDG_EVENT_SCOPE(GraphBuilder, "ExtractPositions");
 				FRDGBufferRef PositionBuffer = GraphBuilder.CreateBuffer(
 					FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), TotalParticleCount),
 					TEXT("SpatialHash.ExtractedPositions"));
@@ -427,40 +362,106 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 
 			// Step 2: Build Multi-pass Spatial Hash with extracted positions
 			FSpatialHashMultipassResources HashResources;
-			bool bHashSuccess = false;
+			bool bHashSuccess = FSpatialHashBuilder::CreateAndBuildHashMultipass(
+				GraphBuilder,
+				PositionSRV,
+				TotalParticleCount,
+				CellSize,
+				HashResources);
+
+			if (bHashSuccess && HashResources.IsValid())
 			{
-				RDG_EVENT_SCOPE(GraphBuilder, "BuildMultipassHash");
-				bHashSuccess = FSpatialHashBuilder::CreateAndBuildHashMultipass(
-					GraphBuilder,
-					PositionSRV,
-					TotalParticleCount,
-					CellSize,
-					HashResources);
+				CachedPipelineData.SpatialHashData.bUseSpatialHash = true;
+				CachedPipelineData.SpatialHashData.CellDataSRV = HashResources.CellDataSRV;
+				CachedPipelineData.SpatialHashData.ParticleIndicesSRV = HashResources.ParticleIndicesSRV;
+				CachedPipelineData.SpatialHashData.CellSize = CellSize;
+
+				UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: HYBRID MODE - SDF Volume + Spatial Hash (%d particles, CellSize: %.2f)"),
+					TotalParticleCount, CellSize);
 			}
-
-			// Step 3: Store results
+			else
 			{
-				RDG_EVENT_SCOPE(GraphBuilder, "StoreHashData");
-				if (bHashSuccess && HashResources.IsValid())
-				{
-					CachedPipelineData.SpatialHashData.bUseSpatialHash = true;
-					CachedPipelineData.SpatialHashData.CellDataSRV = HashResources.CellDataSRV;
-					CachedPipelineData.SpatialHashData.ParticleIndicesSRV = HashResources.ParticleIndicesSRV;
-					CachedPipelineData.SpatialHashData.CellSize = CellSize;
-
-					UE_LOG(LogTemp, Verbose, TEXT("KawaiiFluid: HYBRID MODE - SDF Volume + Spatial Hash (%d particles, CellSize: %.2f)"),
-						TotalParticleCount, CellSize);
-				}
-				else
-				{
-					UE_LOG(LogTemp, Warning, TEXT("KawaiiFluid: Spatial Hash build failed for Hybrid mode, using SDF Volume only"));
-					CachedPipelineData.SpatialHashData.bUseSpatialHash = false;
-				}
+				UE_LOG(LogTemp, Warning, TEXT("KawaiiFluid: Spatial Hash build failed for Hybrid mode, using SDF Volume only"));
+				CachedPipelineData.SpatialHashData.bUseSpatialHash = false;
 			}
 		}
 		else
 		{
 			CachedPipelineData.SpatialHashData.bUseSpatialHash = false;
+		}
+
+		RDG_EVENT_SCOPE(GraphBuilder, "SDFVolumeBake");
+
+		FRDGTextureSRVRef SDFVolumeSRV = nullptr;
+		FVector3f VolumeMin, VolumeMax;
+		bool bUseGPUBoundsForRayMarch = false;
+
+		// Spatial Hash SRVs (if enabled)
+		FRDGBufferSRVRef CellDataSRV = CachedPipelineData.SpatialHashData.bUseSpatialHash ? CachedPipelineData.SpatialHashData.CellDataSRV : nullptr;
+		FRDGBufferSRVRef ParticleIndicesSRV = CachedPipelineData.SpatialHashData.bUseSpatialHash ? CachedPipelineData.SpatialHashData.ParticleIndicesSRV : nullptr;
+		float SpatialHashCellSize = CachedPipelineData.SpatialHashData.bUseSpatialHash ? CachedPipelineData.SpatialHashData.CellSize : 0.0f;
+
+		if (bUsingGPUBuffer && CachedGPUBoundsBufferSRV)
+		{
+			// GPU MODE: Use bounds from GPU buffer directly (no readback latency!)
+			// Both SDF Bake and Ray March will read bounds from the same GPU buffer
+			SDFVolumeSRV = SDFVolumeManager.BakeSDFVolumeWithGPUBoundsDirect(
+				GraphBuilder,
+				ParticleBufferSRV,
+				TotalParticleCount,
+				AverageParticleRadius,
+				RenderParams.SDFSmoothness,
+				CachedGPUBoundsBufferSRV,
+				CachedPipelineData.PositionBufferSRV,
+				CellDataSRV,
+				ParticleIndicesSRV,
+				SpatialHashCellSize);
+
+			// For debug visualization, we don't have exact bounds (they're in GPU buffer)
+			// Use placeholder values - actual rendering uses GPU buffer
+			VolumeMin = FVector3f(-500.0f, -500.0f, -500.0f);
+			VolumeMax = FVector3f(500.0f, 500.0f, 500.0f);
+			bUseGPUBoundsForRayMarch = true;
+
+			UE_LOG(LogTemp, Verbose, TEXT("GPU Mode: SDF Bake + Ray March using GPU bounds buffer (zero latency)"));
+		}
+		else
+		{
+			// CPU mode: Calculate bounds from particle positions
+			float Margin = AverageParticleRadius * 2.0f;
+			CalculateParticleBoundingBox(AllParticlePositions, AverageParticleRadius, Margin, VolumeMin, VolumeMax);
+
+			// Bake SDF volume using compute shader (CPU bounds path)
+			SDFVolumeSRV = SDFVolumeManager.BakeSDFVolume(
+				GraphBuilder,
+				ParticleBufferSRV,
+				TotalParticleCount,
+				AverageParticleRadius,
+				RenderParams.SDFSmoothness,
+				VolumeMin,
+				VolumeMax,
+				CachedPipelineData.PositionBufferSRV,
+				CellDataSRV,
+				ParticleIndicesSRV,
+				SpatialHashCellSize);
+		}
+
+		// Store SDF volume data
+		CachedPipelineData.SDFVolumeData.SDFVolumeTextureSRV = SDFVolumeSRV;
+		CachedPipelineData.SDFVolumeData.VolumeMin = VolumeMin;
+		CachedPipelineData.SDFVolumeData.VolumeMax = VolumeMax;
+		CachedPipelineData.SDFVolumeData.VolumeResolution = SDFVolumeManager.GetVolumeResolution();
+		CachedPipelineData.SDFVolumeData.bUseSDFVolume = true;
+		CachedPipelineData.SDFVolumeData.bUseGPUBounds = bUseGPUBoundsForRayMarch;
+		CachedPipelineData.SDFVolumeData.BoundsBufferSRV = CachedGPUBoundsBufferSRV;
+
+		// Notify renderers of SDF volume bounds for debug visualization
+		for (UKawaiiFluidMetaballRenderer* Renderer : Renderers)
+		{
+			if (Renderer && Renderer->GetLocalParameters().bDebugDrawSDFVolume)
+			{
+				Renderer->SetSDFVolumeBounds(FVector(VolumeMin), FVector(VolumeMax));
+			}
 		}
 	}
 	else

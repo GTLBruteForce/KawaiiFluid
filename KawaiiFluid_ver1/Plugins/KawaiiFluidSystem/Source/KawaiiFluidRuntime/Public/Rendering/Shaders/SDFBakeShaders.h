@@ -37,12 +37,24 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSDFBakeParameters, )
 	// Output SDF Volume (UAV)
 	//========================================
 	SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<float>, SDFVolume)
+
+	//========================================
+	// Spatial Hash Parameters (Optimization)
+	//========================================
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint2>, CellData)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, SpatialHashParticleIndices)
+	SHADER_PARAMETER(float, SpatialHashCellSize)
 END_SHADER_PARAMETER_STRUCT()
 
 /**
  * @brief Shader permutation for SoA buffer layout
  */
 class FSDFBakeUseSoADim : SHADER_PERMUTATION_BOOL("USE_SOA_BUFFERS");
+
+/**
+ * @brief Shader permutation for Spatial Hash optimization
+ */
+class FSDFBakeUseSpatialHashDim : SHADER_PERMUTATION_BOOL("USE_SPATIAL_HASH");
 
 /**
  * @brief Compute shader for baking SDF volume
@@ -57,6 +69,8 @@ class FSDFBakeUseSoADim : SHADER_PERMUTATION_BOOL("USE_SOA_BUFFERS");
  * Permutations:
  * - USE_SOA_BUFFERS=0: AoS (32B per particle, legacy)
  * - USE_SOA_BUFFERS=1: SoA (12B per particle, 62% bandwidth reduction)
+ * - USE_SPATIAL_HASH=0: O(N) iteration (default)
+ * - USE_SPATIAL_HASH=1: O(k) neighbor search (optimized)
  */
 class FSDFBakeCS : public FGlobalShader
 {
@@ -65,7 +79,7 @@ public:
 	SHADER_USE_PARAMETER_STRUCT(FSDFBakeCS, FGlobalShader);
 
 	using FParameters = FSDFBakeParameters;
-	using FPermutationDomain = TShaderPermutationDomain<FSDFBakeUseSoADim>;
+	using FPermutationDomain = TShaderPermutationDomain<FSDFBakeUseSoADim, FSDFBakeUseSpatialHashDim>;
 
 	static constexpr int32 ThreadGroupSize = 8;
 
@@ -102,6 +116,13 @@ BEGIN_SHADER_PARAMETER_STRUCT(FSDFBakeWithGPUBoundsParameters, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector3f>, BoundsBuffer)
 	SHADER_PARAMETER(FIntVector, VolumeResolution)
 	SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<float>, SDFVolume)
+
+	//========================================
+	// Spatial Hash Parameters (Optimization)
+	//========================================
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint2>, CellData)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, SpatialHashParticleIndices)
+	SHADER_PARAMETER(float, SpatialHashCellSize)
 END_SHADER_PARAMETER_STRUCT()
 
 /**
@@ -114,6 +135,8 @@ END_SHADER_PARAMETER_STRUCT()
  * Permutations:
  * - USE_SOA_BUFFERS=0: AoS (32B per particle, legacy)
  * - USE_SOA_BUFFERS=1: SoA (12B per particle, 62% bandwidth reduction)
+ * - USE_SPATIAL_HASH=0: O(N) iteration (default)
+ * - USE_SPATIAL_HASH=1: O(k) neighbor search (optimized)
  */
 class FSDFBakeWithGPUBoundsCS : public FGlobalShader
 {
@@ -122,7 +145,7 @@ public:
 	SHADER_USE_PARAMETER_STRUCT(FSDFBakeWithGPUBoundsCS, FGlobalShader);
 
 	using FParameters = FSDFBakeWithGPUBoundsParameters;
-	using FPermutationDomain = TShaderPermutationDomain<FSDFBakeUseSoADim>;
+	using FPermutationDomain = TShaderPermutationDomain<FSDFBakeUseSoADim, FSDFBakeUseSpatialHashDim>;
 
 	static constexpr int32 ThreadGroupSize = 8;
 

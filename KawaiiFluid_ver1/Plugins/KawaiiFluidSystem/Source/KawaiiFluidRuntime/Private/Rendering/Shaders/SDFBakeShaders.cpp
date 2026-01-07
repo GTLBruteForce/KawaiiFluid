@@ -4,7 +4,7 @@
 
 IMPLEMENT_GLOBAL_SHADER(FSDFBakeCS,
 	"/Plugin/KawaiiFluidSystem/Private/SDFBake.usf",
-	"MainCS",
+	"SDFBakeCS",
 	SF_Compute);
 
 IMPLEMENT_GLOBAL_SHADER(FSDFBakeWithGPUBoundsCS,
