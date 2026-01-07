@@ -26,7 +26,8 @@ FGPUFluidSimulator::FGPUFluidSimulator()
 	, MaxParticleCount(0)
 	, CurrentParticleCount(0)
 	, ExternalForce(FVector3f::ZeroVector)
-	, MaxVelocity(50000.0f)  // Safety clamp: 50000 cm/s = 500 m/s
+	, MaxVelocity(50000.0f)   // Safety clamp: 50000 cm/s = 500 m/s
+	, VelocityDamping(0.98f)  // Velocity damping factor
 {
 }
 
@@ -1113,10 +1114,10 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		AddSolvePressurePass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
 	}
 
-	// Pass 6: Apply Viscosity
+	// Pass 6: Apply Viscosity (XSPH velocity smoothing)
 	AddApplyViscosityPass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
 
-	// Pass 6.5: Apply Cohesion (surface tension)
+	// Pass 6.5: Apply Cohesion (surface tension between particles)
 	AddApplyCohesionPass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
 
 	// Pass 7: Bounds Collision
@@ -1188,7 +1189,7 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		);
 	}
 
-	// Pass 8: Finalize Positions
+	// Pass 8: Finalize Positions (update Position from PredictedPosition, recalculate Velocity with blending/damping)
 	AddFinalizePositionsPass(GraphBuilder, ParticlesUAVLocal, Params);
 
 	// Pass 8.5: Clear just-detached flag at end of frame
@@ -1634,6 +1635,7 @@ void FGPUFluidSimulator::AddFinalizePositionsPass(
 	PassParameters->Particles = ParticlesUAV;
 	PassParameters->ParticleCount = CurrentParticleCount;
 	PassParameters->DeltaTime = Params.DeltaTime;
+	PassParameters->VelocityDamping = VelocityDamping;
 	PassParameters->MaxVelocity = MaxVelocity;  // Safety clamp (50000 cm/s = 500 m/s)
 
 	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FFinalizePositionsCS::ThreadGroupSize);
