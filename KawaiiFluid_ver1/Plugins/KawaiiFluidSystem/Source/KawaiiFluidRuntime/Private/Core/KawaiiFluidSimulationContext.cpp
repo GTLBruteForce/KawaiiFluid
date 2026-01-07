@@ -480,8 +480,21 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 		PersistentBoneTransforms = MoveTemp(CollisionPrimitives.BoneTransforms);
 	}
 
-	// Run GPU simulation (spawning is handled internally by SimulateSubstep)
-	GPUSimulator->SimulateSubstep(GPUParams);
+	// =====================================================
+	// Run GPU simulation with Accumulator method
+	// Simulate with fixed dt substeps for frame-rate independence
+	// =====================================================
+	const int32 MaxSubstepsPerFrame = Preset->MaxSubsteps;
+	const float MaxAllowedTime = Preset->SubstepDeltaTime * MaxSubstepsPerFrame;
+	AccumulatedTime += FMath::Min(DeltaTime, MaxAllowedTime);
+
+	int32 SubstepCount = 0;
+	while (AccumulatedTime >= Preset->SubstepDeltaTime && SubstepCount < MaxSubstepsPerFrame)
+	{
+		GPUSimulator->SimulateSubstep(GPUParams);
+		AccumulatedTime -= Preset->SubstepDeltaTime;
+		++SubstepCount;
+	}
 
 	
 	
@@ -664,7 +677,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 	// GPU Statistics Collection
 	// For GPU comparison, collect basic stats without particle readback
 	//========================================
-	CollectGPUSimulationStats(Preset, GPUParams.ParticleCount);
+	CollectGPUSimulationStats(Preset, GPUParams.ParticleCount, SubstepCount);
 }
 
 void UKawaiiFluidSimulationContext::Simulate(
@@ -708,8 +721,8 @@ void UKawaiiFluidSimulationContext::Simulate(
 	EnsureSolversInitialized(Preset);
 
 	// Accumulator method: simulate with fixed dt
-	constexpr int32 MaxSubstepsPerFrame = 4;
-	const float MaxAllowedTime = Preset->SubstepDeltaTime * FMath::Min(Preset->MaxSubsteps, MaxSubstepsPerFrame);
+	const int32 MaxSubstepsPerFrame = Preset->MaxSubsteps;
+	const float MaxAllowedTime = Preset->SubstepDeltaTime * MaxSubstepsPerFrame;
 	AccumulatedTime += FMath::Min(DeltaTime, MaxAllowedTime);
 
 	// Cache collider shapes once per frame
@@ -718,7 +731,7 @@ void UKawaiiFluidSimulationContext::Simulate(
 	// Update attached particle positions (bone tracking - before physics)
 	UpdateAttachedParticlePositions(Particles, Params.InteractionComponents);
 
-	// Substep loop (hard limit: 4 substeps per frame)
+	// Substep loop
 	int32 SubstepCount = 0;
 	while (AccumulatedTime >= Preset->SubstepDeltaTime && SubstepCount < MaxSubstepsPerFrame)
 	{
@@ -1953,7 +1966,8 @@ void UKawaiiFluidSimulationContext::CollectSimulationStats(
 
 void UKawaiiFluidSimulationContext::CollectGPUSimulationStats(
 	const UKawaiiFluidPresetDataAsset* Preset,
-	int32 ParticleCount)
+	int32 ParticleCount,
+	int32 SubstepCount)
 {
 	FKawaiiFluidSimulationStatsCollector& Stats = GetFluidStatsCollector();
 
@@ -1971,10 +1985,8 @@ void UKawaiiFluidSimulationContext::CollectGPUSimulationStats(
 		Stats.SetRestDensity(Preset->RestDensity);
 		Stats.SetSolverIterations(Preset->SolverIterations);
 
-		// Calculate estimated substep count based on preset
-		constexpr int32 MaxSubstepsPerFrame = 4;
-		int32 EstimatedSubsteps = FMath::Min(Preset->MaxSubsteps, MaxSubstepsPerFrame);
-		Stats.SetSubstepCount(EstimatedSubsteps);
+		// Use actual substep count from simulation
+		Stats.SetSubstepCount(SubstepCount);
 	}
 
 	// Detailed GPU stats: download particles and collect full statistics

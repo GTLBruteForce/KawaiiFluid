@@ -209,7 +209,8 @@ protected:
 	/** Collect GPU simulation statistics (without particle readback) */
 	virtual void CollectGPUSimulationStats(
 		const UKawaiiFluidPresetDataAsset* Preset,
-		int32 ParticleCount
+		int32 ParticleCount,
+		int32 SubstepCount
 	);
 
 	/** 3.5. Apply shape matching constraint (for slime) */
