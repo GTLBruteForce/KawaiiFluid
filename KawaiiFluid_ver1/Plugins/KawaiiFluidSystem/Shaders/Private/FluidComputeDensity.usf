@@ -58,6 +58,9 @@ void ComputeDensityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Density accumulator
 	float density = 0.0f;
 
+	// Neighbor counter (for statistics)
+	uint neighborCount = 0;
+
 	// Gradient accumulators for Lambda calculation
 	float3 gradC_i = float3(0.0f, 0.0f, 0.0f);
 	float sumGradC2 = 0.0f;
@@ -103,6 +106,12 @@ void ComputeDensityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 						float w = Poly6Kernel(r2, h2);
 						density += mass * Poly6Coeff * w;
 
+						// Count neighbors (excluding self)
+						if (neighborIdx != idx)
+						{
+							neighborCount++;
+						}
+
 						// Spiky gradient for constraint (only for Lambda calculation)
 						float rLen = sqrt(r2);                 // Distance in meters
 						float3 r = r_cm * CM_TO_M;             // Convert r vector to meters
@@ -127,6 +136,9 @@ void ComputeDensityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	// Store density
 	particle.Density = density;
+
+	// Store neighbor count (for statistics)
+	particle.NeighborCount = neighborCount;
 
 	// Calculate Lambda (XPBD constraint multiplier)
 	// C = (density / restDensity) - 1

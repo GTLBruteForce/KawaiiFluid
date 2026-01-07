@@ -2,6 +2,7 @@
 
 #include "Core/KawaiiFluidSimulationContext.h"
 #include "Core/SpatialHash.h"
+#include "Core/KawaiiFluidSimulationStats.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Physics/DensityConstraint.h"
 #include "Physics/ViscositySolver.h"
@@ -644,6 +645,12 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 			}
 		}
 	}
+
+	//========================================
+	// GPU Statistics Collection
+	// For GPU comparison, collect basic stats without particle readback
+	//========================================
+	CollectGPUSimulationStats(Preset, GPUParams.ParticleCount);
 }
 
 void UKawaiiFluidSimulationContext::Simulate(
@@ -705,6 +712,9 @@ void UKawaiiFluidSimulationContext::Simulate(
 		AccumulatedTime -= Preset->SubstepDeltaTime;
 		++SubstepCount;
 	}
+
+	// Collect simulation statistics
+	CollectSimulationStats(Particles, Preset, SubstepCount, false);
 }
 
 void UKawaiiFluidSimulationContext::SimulateSubstep(
@@ -1853,4 +1863,185 @@ void UKawaiiFluidSimulationContext::UpdateAttachedParticlePositions(
 			}
 		}
 	}
+}
+
+//=============================================================================
+// Statistics Collection
+//=============================================================================
+
+void UKawaiiFluidSimulationContext::CollectSimulationStats(
+	const TArray<FFluidParticle>& Particles,
+	const UKawaiiFluidPresetDataAsset* Preset,
+	int32 SubstepCount,
+	bool bIsGPU)
+{
+	FKawaiiFluidSimulationStatsCollector& Stats = GetFluidStatsCollector();
+
+	if (!Stats.IsEnabled())
+	{
+		return;
+	}
+
+	// Begin new frame of stats collection
+	Stats.BeginFrame();
+	Stats.SetGPUSimulation(bIsGPU);
+	Stats.SetSubstepCount(SubstepCount);
+
+	if (Preset)
+	{
+		Stats.SetRestDensity(Preset->RestDensity);
+		Stats.SetPressureIterations(Preset->SolverIterations);
+	}
+
+	// Count particle types
+	int32 TotalCount = Particles.Num();
+	int32 AttachedCount = 0;
+	int32 GroundCount = 0;
+
+	for (const FFluidParticle& Particle : Particles)
+	{
+		// Velocity sample
+		float VelMag = static_cast<float>(Particle.Velocity.Size());
+		Stats.AddVelocitySample(VelMag);
+
+		// Density sample
+		Stats.AddDensitySample(Particle.Density);
+
+		// Neighbor count sample
+		Stats.AddNeighborCountSample(Particle.NeighborIndices.Num());
+
+		// Count attached particles
+		if (Particle.bIsAttached)
+		{
+			AttachedCount++;
+		}
+
+		// Count ground contact
+		if (Particle.bNearGround)
+		{
+			GroundCount++;
+		}
+	}
+
+	// Set particle counts
+	int32 ActiveCount = TotalCount - AttachedCount;
+	Stats.SetParticleCounts(TotalCount, ActiveCount, AttachedCount);
+
+	// Set ground contact count as collision stat
+	for (int32 i = 0; i < GroundCount; ++i)
+	{
+		Stats.AddGroundContact();
+	}
+
+	// End frame and finalize statistics
+	Stats.EndFrame();
+}
+
+void UKawaiiFluidSimulationContext::CollectGPUSimulationStats(
+	const UKawaiiFluidPresetDataAsset* Preset,
+	int32 ParticleCount)
+{
+	FKawaiiFluidSimulationStatsCollector& Stats = GetFluidStatsCollector();
+
+	if (!Stats.IsEnabled())
+	{
+		return;
+	}
+
+	// Begin new frame of stats collection
+	Stats.BeginFrame();
+	Stats.SetGPUSimulation(true);
+
+	if (Preset)
+	{
+		Stats.SetRestDensity(Preset->RestDensity);
+		Stats.SetPressureIterations(Preset->SolverIterations);
+
+		// Calculate estimated substep count based on preset
+		constexpr int32 MaxSubstepsPerFrame = 4;
+		int32 EstimatedSubsteps = FMath::Min(Preset->MaxSubsteps, MaxSubstepsPerFrame);
+		Stats.SetSubstepCount(EstimatedSubsteps);
+	}
+
+	// Detailed GPU stats: download particles and collect full statistics
+	if (Stats.IsDetailedGPUEnabled() && GPUSimulator.IsValid() && ParticleCount > 0)
+	{
+		TArray<FFluidParticle> GPUParticles;
+		// Use GetAllGPUParticles instead of DownloadParticles
+		// DownloadParticles requires existing CPU particles for ParticleID matching
+		// GetAllGPUParticles creates new particles directly from GPU readback
+		bool bSuccess = GPUSimulator->GetAllGPUParticles(GPUParticles);
+
+		if (bSuccess && GPUParticles.Num() > 0)
+		{
+			// Count particle types
+			int32 TotalCount = GPUParticles.Num();
+			int32 AttachedCount = 0;
+			int32 GroundCount = 0;
+
+			// Debug log for detailed GPU stats
+			static int32 DetailedStatsLogCounter = 0;
+			if (++DetailedStatsLogCounter % 60 == 1)
+			{
+				float FirstVel = GPUParticles.Num() > 0 ? GPUParticles[0].Velocity.Size() : 0.0f;
+				float FirstDensity = GPUParticles.Num() > 0 ? GPUParticles[0].Density : 0.0f;
+				UE_LOG(LogTemp, Log, TEXT("GPU Detailed Stats: Retrieved %d particles, First.Vel=%.1f, First.Density=%.1f"),
+					TotalCount, FirstVel, FirstDensity);
+			}
+
+			for (const FFluidParticle& Particle : GPUParticles)
+			{
+				// Velocity sample
+				float VelMag = static_cast<float>(Particle.Velocity.Size());
+				Stats.AddVelocitySample(VelMag);
+
+				// Density sample
+				Stats.AddDensitySample(Particle.Density);
+
+				// Neighbor count sample (GPU doesn't track neighbors the same way, use 0)
+				Stats.AddNeighborCountSample(Particle.NeighborIndices.Num());
+
+				// Count attached particles
+				if (Particle.bIsAttached)
+				{
+					AttachedCount++;
+				}
+
+				// Count ground contact
+				if (Particle.bNearGround)
+				{
+					GroundCount++;
+				}
+			}
+
+			// Set particle counts
+			int32 ActiveCount = TotalCount - AttachedCount;
+			Stats.SetParticleCounts(TotalCount, ActiveCount, AttachedCount);
+
+			// Set ground contact count
+			for (int32 i = 0; i < GroundCount; ++i)
+			{
+				Stats.AddGroundContact();
+			}
+		}
+		else
+		{
+			// Readback returned empty - use basic counts
+			static int32 ReadbackFailLogCounter = 0;
+			if (++ReadbackFailLogCounter % 60 == 1)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("GPU Detailed Stats: GetAllGPUParticles failed (bSuccess=%d, Count=%d)"),
+					bSuccess ? 1 : 0, GPUParticles.Num());
+			}
+			Stats.SetParticleCounts(ParticleCount, ParticleCount, 0);
+		}
+	}
+	else
+	{
+		// Basic mode: no readback, just set particle count
+		Stats.SetParticleCounts(ParticleCount, ParticleCount, 0);
+	}
+
+	// End frame and finalize statistics
+	Stats.EndFrame();
 }

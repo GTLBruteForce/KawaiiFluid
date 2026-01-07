@@ -25,7 +25,7 @@ struct FGPUFluidParticle
 	int32 ParticleID;             // 4 bytes  - Unique particle ID
 	int32 ClusterID;              // 4 bytes  - Cluster ID for slime grouping
 	uint32 Flags;                 // 4 bytes  - Bitfield flags (see EGPUParticleFlags)
-	float Padding;                // 4 bytes  - Padding for 16-byte alignment (total: 64)
+	uint32 NeighborCount;         // 4 bytes  - Number of neighbors (for stats) (total: 64)
 
 	FGPUFluidParticle()
 		: Position(FVector3f::ZeroVector)
@@ -37,7 +37,7 @@ struct FGPUFluidParticle
 		, ParticleID(0)
 		, ClusterID(0)
 		, Flags(0)
-		, Padding(0.0f)
+		, NeighborCount(0)
 	{
 	}
 };

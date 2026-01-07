@@ -93,8 +93,8 @@ void SpawnParticlesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Initialize flags (no special state)
 	newParticle.Flags = GPU_PARTICLE_FLAG_NONE;
 
-	// Padding
-	newParticle.Padding = 0.0f;
+	// NeighborCount will be calculated during density solve
+	newParticle.NeighborCount = 0;
 
 	// Write to particle buffer
 	Particles[particleIdx] = newParticle;
@@ -179,7 +179,7 @@ void SpawnParticlesBatchCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	newParticle.ParticleID = NextParticleID + (int)totalIdx;
 	newParticle.ClusterID = 0;
 	newParticle.Flags = GPU_PARTICLE_FLAG_NONE;
-	newParticle.Padding = 0.0f;
+	newParticle.NeighborCount = 0;
 
 	Particles[particleIdx] = newParticle;
 }

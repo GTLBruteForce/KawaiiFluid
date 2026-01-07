@@ -68,6 +68,15 @@ public:
 	void DownloadParticles(TArray<FFluidParticle>& OutCPUParticles);
 
 	/**
+	 * Get all GPU particles directly from readback buffer
+	 * Unlike DownloadParticles, this creates new FFluidParticle instances
+	 * Useful for stats collection when no existing CPU particles are available
+	 * @param OutParticles - Output array (will be populated with all GPU particles)
+	 * @return true if valid GPU data was retrieved
+	 */
+	bool GetAllGPUParticles(TArray<FFluidParticle>& OutParticles);
+
+	/**
 	 * Get current particle count on GPU
 	 */
 	int32 GetParticleCount() const { return CurrentParticleCount; }

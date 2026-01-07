@@ -23,7 +23,7 @@ struct FGPUFluidParticle
 	int ParticleID;            // 4 bytes
 	int ClusterID;             // 4 bytes
 	uint Flags;                // 4 bytes
-	float Padding;             // 4 bytes
+	uint NeighborCount;        // 4 bytes - Number of neighbors (for stats)
 };
 
 //=============================================================================

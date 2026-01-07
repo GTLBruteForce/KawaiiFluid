@@ -3,6 +3,7 @@
 #include "GPU/GPUFluidSimulator.h"
 #include "GPU/GPUFluidSimulatorShaders.h"
 #include "Core/FluidParticle.h"
+#include "Core/KawaiiFluidSimulationStats.h"
 #include "Rendering/Shaders/FluidSpatialHashShaders.h"
 
 #include "RenderGraphBuilder.h"
@@ -258,7 +259,8 @@ FGPUFluidParticle FGPUFluidSimulator::ConvertToGPU(const FFluidParticle& CPUPart
 	if (CPUParticle.bNearGround) Flags |= EGPUParticleFlags::NearGround;
 	GPUParticle.Flags = Flags;
 
-	GPUParticle.Padding = 0.0f;
+	// NeighborCount is calculated on GPU during density solve
+	GPUParticle.NeighborCount = 0;
 
 	return GPUParticle;
 }
@@ -444,6 +446,89 @@ void FGPUFluidSimulator::DownloadParticles(TArray<FFluidParticle>& OutCPUParticl
 	UE_LOG(LogGPUFluidSimulator, Verbose, TEXT("DownloadParticles: Updated %d/%d particles"), UpdatedCount, Count);
 }
 
+bool FGPUFluidSimulator::GetAllGPUParticles(TArray<FFluidParticle>& OutParticles)
+{
+	if (!bIsInitialized || CurrentParticleCount == 0)
+	{
+		return false;
+	}
+
+	// Only download if we have valid GPU results from a previous simulation
+	if (!bHasValidGPUResults.load())
+	{
+		return false;
+	}
+
+	FScopeLock Lock(&BufferLock);
+
+	// Read from readback buffer
+	const int32 Count = ReadbackGPUParticles.Num();
+	if (Count == 0)
+	{
+		return false;
+	}
+
+	// Create new particles from GPU data (no ParticleID matching required)
+	OutParticles.SetNum(Count);
+
+	for (int32 i = 0; i < Count; ++i)
+	{
+		const FGPUFluidParticle& GPUParticle = ReadbackGPUParticles[i];
+		FFluidParticle& OutParticle = OutParticles[i];
+
+		// Initialize with default values
+		OutParticle = FFluidParticle();
+
+		// Convert GPU data to CPU particle
+		FVector NewPosition = FVector(GPUParticle.Position);
+		FVector NewVelocity = FVector(GPUParticle.Velocity);
+
+		// Validate data
+		const float MaxValidValue = 1000000.0f;
+		bool bValidPosition = !NewPosition.ContainsNaN() && NewPosition.GetAbsMax() < MaxValidValue;
+		bool bValidVelocity = !NewVelocity.ContainsNaN() && NewVelocity.GetAbsMax() < MaxValidValue;
+
+		if (bValidPosition)
+		{
+			OutParticle.Position = NewPosition;
+			OutParticle.PredictedPosition = FVector(GPUParticle.PredictedPosition);
+		}
+
+		if (bValidVelocity)
+		{
+			OutParticle.Velocity = NewVelocity;
+		}
+
+		OutParticle.Mass = FMath::IsFinite(GPUParticle.Mass) ? GPUParticle.Mass : 1.0f;
+		OutParticle.Density = FMath::IsFinite(GPUParticle.Density) ? GPUParticle.Density : 0.0f;
+		OutParticle.Lambda = FMath::IsFinite(GPUParticle.Lambda) ? GPUParticle.Lambda : 0.0f;
+		OutParticle.ParticleID = GPUParticle.ParticleID;
+		OutParticle.ClusterID = GPUParticle.ClusterID;
+
+		// Unpack flags
+		OutParticle.bIsAttached = (GPUParticle.Flags & EGPUParticleFlags::IsAttached) != 0;
+		OutParticle.bIsSurfaceParticle = (GPUParticle.Flags & EGPUParticleFlags::IsSurface) != 0;
+		OutParticle.bIsCoreParticle = (GPUParticle.Flags & EGPUParticleFlags::IsCore) != 0;
+		OutParticle.bJustDetached = (GPUParticle.Flags & EGPUParticleFlags::JustDetached) != 0;
+		OutParticle.bNearGround = (GPUParticle.Flags & EGPUParticleFlags::NearGround) != 0;
+
+		// Set neighbor count (resize array so NeighborIndices.Num() returns the count)
+		// GPU stores count only, not actual indices (computed on-the-fly during spatial hash queries)
+		if (GPUParticle.NeighborCount > 0)
+		{
+			OutParticle.NeighborIndices.SetNum(GPUParticle.NeighborCount);
+		}
+	}
+
+	static int32 DebugFrameCounter = 0;
+	if (++DebugFrameCounter % 60 == 0)
+	{
+		UE_LOG(LogGPUFluidSimulator, Log, TEXT("GetAllGPUParticles: Retrieved %d particles"), Count);
+	}
+
+	return true;
+}
+
 //=============================================================================
 // Collision Primitives Upload
 //=============================================================================
@@ -523,10 +608,58 @@ void FGPUFluidSimulator::SimulateSubstep(const FGPUFluidSimulationParams& Params
 			if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> RDG EXECUTE COMPLETE"));
 
 			// =====================================================
-			// Phase 2: NO READBACK - GPU buffer is source of truth
-			// Renderer should read directly from GPU buffer
-			// This eliminates CPU-GPU sync stall (~10-15ms savings)
+			// Phase 2: Conditional readback for detailed stats only
+			// Normal mode: GPU buffer is source of truth (no CPU readback)
+			// Detailed stats mode: Perform readback for velocity/density analysis
 			// =====================================================
+
+			// Check if detailed GPU stats are enabled (game thread flag)
+			const bool bNeedReadback = GetFluidStatsCollector().IsDetailedGPUEnabled();
+
+			if (bNeedReadback && Self->StagingBufferRHI.IsValid() && Self->PersistentParticleBuffer.IsValid())
+			{
+				const int32 ParticleCount = Self->CurrentParticleCount;
+				const int32 CopySize = ParticleCount * sizeof(FGPUFluidParticle);
+
+				if (ParticleCount > 0 && CopySize > 0)
+				{
+					// Transition persistent buffer for copy
+					RHICmdList.Transition(FRHITransitionInfo(
+						Self->PersistentParticleBuffer->GetRHI(),
+						ERHIAccess::UAVCompute,
+						ERHIAccess::CopySrc));
+
+					// Copy from GPU buffer to staging buffer
+					RHICmdList.CopyBufferRegion(
+						Self->StagingBufferRHI,
+						0,
+						Self->PersistentParticleBuffer->GetRHI(),
+						0,
+						CopySize);
+
+					// Read from staging buffer to CPU
+					{
+						FScopeLock Lock(&Self->BufferLock);
+						Self->ReadbackGPUParticles.SetNumUninitialized(ParticleCount);
+
+						FGPUFluidParticle* DataPtr = (FGPUFluidParticle*)RHICmdList.LockBuffer(
+							Self->StagingBufferRHI, 0, CopySize, RLM_ReadOnly);
+						FMemory::Memcpy(Self->ReadbackGPUParticles.GetData(), DataPtr, CopySize);
+						RHICmdList.UnlockBuffer(Self->StagingBufferRHI);
+					}
+
+					// Transition back for next frame's compute
+					RHICmdList.Transition(FRHITransitionInfo(
+						Self->PersistentParticleBuffer->GetRHI(),
+						ERHIAccess::CopySrc,
+						ERHIAccess::UAVCompute));
+
+					if (bLogThisFrame)
+					{
+						UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> READBACK: Copied %d particles for detailed stats"), ParticleCount);
+					}
+				}
+			}
 
 			// Mark that we have valid GPU results (buffer is ready for rendering)
 			Self->bHasValidGPUResults.store(true);

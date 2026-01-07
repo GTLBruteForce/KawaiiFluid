@@ -198,6 +198,20 @@ protected:
 		const UKawaiiFluidPresetDataAsset* Preset
 	);
 
+	/** Collect simulation statistics for debugging/comparison (CPU) */
+	virtual void CollectSimulationStats(
+		const TArray<FFluidParticle>& Particles,
+		const UKawaiiFluidPresetDataAsset* Preset,
+		int32 SubstepCount,
+		bool bIsGPU
+	);
+
+	/** Collect GPU simulation statistics (without particle readback) */
+	virtual void CollectGPUSimulationStats(
+		const UKawaiiFluidPresetDataAsset* Preset,
+		int32 ParticleCount
+	);
+
 	/** 3.5. Apply shape matching constraint (for slime) */
 	virtual void ApplyShapeMatchingConstraint(
 		TArray<FFluidParticle>& Particles,
