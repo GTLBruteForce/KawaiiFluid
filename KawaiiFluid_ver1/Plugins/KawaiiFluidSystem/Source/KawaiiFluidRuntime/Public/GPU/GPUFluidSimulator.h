@@ -361,6 +361,14 @@ private:
 		FRDGBufferSRVRef ParticleIndicesSRV,
 		const FGPUFluidSimulationParams& Params);
 
+	/** Add apply cohesion pass (surface tension / cohesion forces) */
+	void AddApplyCohesionPass(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferUAVRef ParticlesUAV,
+		FRDGBufferSRVRef CellCountsSRV,
+		FRDGBufferSRVRef ParticleIndicesSRV,
+		const FGPUFluidSimulationParams& Params);
+
 	/** Add bounds collision pass */
 	void AddBoundsCollisionPass(
 		FRDGBuilder& GraphBuilder,

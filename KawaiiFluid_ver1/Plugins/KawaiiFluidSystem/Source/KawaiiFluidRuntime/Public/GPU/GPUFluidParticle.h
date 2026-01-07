@@ -74,6 +74,7 @@ struct FGPUFluidSimulationParams
 	// Forces
 	FVector3f Gravity;            // Gravity vector (cm/s²)
 	float ViscosityCoefficient;   // XSPH viscosity coefficient (0-1)
+	float CohesionStrength;       // Surface tension / cohesion strength (0-1)
 
 	// SPH kernel coefficients (precomputed)
 	float Poly6Coeff;             // 315 / (64 * PI * h^9)
@@ -116,6 +117,7 @@ struct FGPUFluidSimulationParams
 		, ParticleRadius(5.0f)
 		, Gravity(FVector3f(0.0f, 0.0f, -980.0f))
 		, ViscosityCoefficient(0.01f)
+		, CohesionStrength(0.0f)
 		, Poly6Coeff(0.0f)
 		, SpikyCoeff(0.0f)
 		, Poly6GradCoeff(0.0f)

@@ -26,6 +26,10 @@ IMPLEMENT_GLOBAL_SHADER(FApplyViscosityCS,
 	"/Plugin/KawaiiFluidSystem/Private/FluidApplyViscosity.usf",
 	"ApplyViscosityCS", SF_Compute);
 
+IMPLEMENT_GLOBAL_SHADER(FApplyCohesionCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidApplyCohesion.usf",
+	"ApplyCohesionCS", SF_Compute);
+
 IMPLEMENT_GLOBAL_SHADER(FBoundsCollisionCS,
 	"/Plugin/KawaiiFluidSystem/Private/FluidBoundsCollision.usf",
 	"BoundsCollisionCS", SF_Compute);
@@ -278,6 +282,49 @@ void FGPUFluidSimulatorPassBuilder::AddApplyViscosityPass(
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
 		RDG_EVENT_NAME("GPUFluid::ApplyViscosity(%d)", Params.ParticleCount),
+		ComputeShader,
+		PassParameters,
+		FIntVector(NumGroups, 1, 1));
+}
+
+void FGPUFluidSimulatorPassBuilder::AddApplyCohesionPass(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferUAVRef ParticlesUAV,
+	FRDGBufferSRVRef CellCountsSRV,
+	FRDGBufferSRVRef ParticleIndicesSRV,
+	const FGPUFluidSimulationParams& Params)
+{
+	if (Params.ParticleCount <= 0 || !ParticlesUAV || !CellCountsSRV || !ParticleIndicesSRV)
+	{
+		return;
+	}
+
+	// Skip if cohesion is disabled
+	if (Params.CohesionStrength <= 0.0f)
+	{
+		return;
+	}
+
+	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	TShaderMapRef<FApplyCohesionCS> ComputeShader(GlobalShaderMap);
+
+	FApplyCohesionCS::FParameters* PassParameters =
+		GraphBuilder.AllocParameters<FApplyCohesionCS::FParameters>();
+
+	PassParameters->Particles = ParticlesUAV;
+	PassParameters->CellCounts = CellCountsSRV;
+	PassParameters->ParticleIndices = ParticleIndicesSRV;
+	PassParameters->ParticleCount = Params.ParticleCount;
+	PassParameters->SmoothingRadius = Params.SmoothingRadius;
+	PassParameters->CohesionStrength = Params.CohesionStrength;
+	PassParameters->CellSize = Params.CellSize;
+
+	const int32 ThreadGroupSize = FApplyCohesionCS::ThreadGroupSize;
+	const int32 NumGroups = FMath::DivideAndRoundUp(Params.ParticleCount, ThreadGroupSize);
+
+	FComputeShaderUtils::AddPass(
+		GraphBuilder,
+		RDG_EVENT_NAME("GPUFluid::ApplyCohesion(%d)", Params.ParticleCount),
 		ComputeShader,
 		PassParameters,
 		FIntVector(NumGroups, 1, 1));

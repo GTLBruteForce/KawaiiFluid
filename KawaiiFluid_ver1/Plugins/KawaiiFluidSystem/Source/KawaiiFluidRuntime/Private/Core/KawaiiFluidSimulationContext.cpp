@@ -118,6 +118,7 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	GPUParams.Compliance = Preset->Compliance;
 	GPUParams.ParticleRadius = Preset->ParticleRadius;
 	GPUParams.ViscosityCoefficient = Preset->ViscosityCoefficient;
+	GPUParams.CohesionStrength = Preset->CohesionStrength;
 
 	// Gravity from preset
 	GPUParams.Gravity = FVector3f(Preset->Gravity);

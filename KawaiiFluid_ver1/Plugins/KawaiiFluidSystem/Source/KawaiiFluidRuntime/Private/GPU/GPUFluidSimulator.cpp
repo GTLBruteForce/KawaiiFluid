@@ -979,6 +979,9 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	// Pass 6: Apply Viscosity
 	AddApplyViscosityPass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
 
+	// Pass 6.5: Apply Cohesion (surface tension)
+	AddApplyCohesionPass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
+
 	// Pass 7: Bounds Collision
 	AddBoundsCollisionPass(GraphBuilder, ParticlesUAVLocal, Params);
 
@@ -1237,6 +1240,42 @@ void FGPUFluidSimulator::AddApplyViscosityPass(
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
 		RDG_EVENT_NAME("GPUFluid::ApplyViscosity"),
+		ComputeShader,
+		PassParameters,
+		FIntVector(NumGroups, 1, 1)
+	);
+}
+
+void FGPUFluidSimulator::AddApplyCohesionPass(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferUAVRef InParticlesUAV,
+	FRDGBufferSRVRef InCellCountsSRV,
+	FRDGBufferSRVRef InParticleIndicesSRV,
+	const FGPUFluidSimulationParams& Params)
+{
+	// Skip if cohesion is disabled
+	if (Params.CohesionStrength <= 0.0f)
+	{
+		return;
+	}
+
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	TShaderMapRef<FApplyCohesionCS> ComputeShader(ShaderMap);
+
+	FApplyCohesionCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FApplyCohesionCS::FParameters>();
+	PassParameters->Particles = InParticlesUAV;
+	PassParameters->CellCounts = InCellCountsSRV;
+	PassParameters->ParticleIndices = InParticleIndicesSRV;
+	PassParameters->ParticleCount = CurrentParticleCount;
+	PassParameters->SmoothingRadius = Params.SmoothingRadius;
+	PassParameters->CohesionStrength = Params.CohesionStrength;
+	PassParameters->CellSize = Params.CellSize;
+
+	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FApplyCohesionCS::ThreadGroupSize);
+
+	FComputeShaderUtils::AddPass(
+		GraphBuilder,
+		RDG_EVENT_NAME("GPUFluid::ApplyCohesion"),
 		ComputeShader,
 		PassParameters,
 		FIntVector(NumGroups, 1, 1)

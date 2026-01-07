@@ -177,6 +177,45 @@ public:
 };
 
 //=============================================================================
+// Apply Cohesion Compute Shader
+// Pass 5.5: Apply surface tension / cohesion forces (Akinci 2013)
+//=============================================================================
+
+class FApplyCohesionCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FApplyCohesionCS);
+	SHADER_USE_PARAMETER_STRUCT(FApplyCohesionCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellCounts)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleIndices)
+		SHADER_PARAMETER(int32, ParticleCount)
+		SHADER_PARAMETER(float, SmoothingRadius)
+		SHADER_PARAMETER(float, CohesionStrength)
+		SHADER_PARAMETER(float, CellSize)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("SPATIAL_HASH_SIZE"), GPU_SPATIAL_HASH_SIZE);
+		OutEnvironment.SetDefine(TEXT("MAX_PARTICLES_PER_CELL"), GPU_MAX_PARTICLES_PER_CELL);
+	}
+};
+
+//=============================================================================
 // Bounds Collision Compute Shader
 // Pass 6: Apply AABB/OBB bounds collision
 //=============================================================================
@@ -632,6 +671,14 @@ public:
 
 	/** Add apply viscosity pass */
 	static void AddApplyViscosityPass(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferUAVRef ParticlesUAV,
+		FRDGBufferSRVRef CellCountsSRV,
+		FRDGBufferSRVRef ParticleIndicesSRV,
+		const FGPUFluidSimulationParams& Params);
+
+	/** Add apply cohesion pass (surface tension / cohesion forces) */
+	static void AddApplyCohesionPass(
 		FRDGBuilder& GraphBuilder,
 		FRDGBufferUAVRef ParticlesUAV,
 		FRDGBufferSRVRef CellCountsSRV,
