@@ -650,61 +650,6 @@ public:
 class KAWAIIFLUIDRUNTIME_API FGPUFluidSimulatorPassBuilder
 {
 public:
-	/** Add predict positions pass */
-	static void AddPredictPositionsPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		int32 ParticleCount,
-		float DeltaTime,
-		const FVector3f& Gravity,
-		const FVector3f& ExternalForce);
-
-	/** Add compute density pass */
-	static void AddComputeDensityPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		FRDGBufferSRVRef CellCountsSRV,
-		FRDGBufferSRVRef ParticleIndicesSRV,
-		const FGPUFluidSimulationParams& Params);
-
-	/** Add solve pressure pass */
-	static void AddSolvePressurePass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		FRDGBufferSRVRef CellCountsSRV,
-		FRDGBufferSRVRef ParticleIndicesSRV,
-		const FGPUFluidSimulationParams& Params);
-
-	/** Add apply viscosity pass */
-	static void AddApplyViscosityPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		FRDGBufferSRVRef CellCountsSRV,
-		FRDGBufferSRVRef ParticleIndicesSRV,
-		const FGPUFluidSimulationParams& Params);
-
-	/** Add apply cohesion pass (surface tension / cohesion forces) */
-	static void AddApplyCohesionPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		FRDGBufferSRVRef CellCountsSRV,
-		FRDGBufferSRVRef ParticleIndicesSRV,
-		const FGPUFluidSimulationParams& Params);
-
-	/** Add bounds collision pass */
-	static void AddBoundsCollisionPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		const FGPUFluidSimulationParams& Params);
-
-	/** Add distance field collision pass (UE5 Global Distance Field) */
-	static void AddDistanceFieldCollisionPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		FRDGTextureSRVRef GlobalDistanceFieldSRV,
-		const FGPUDistanceFieldCollisionParams& DFParams,
-		int32 ParticleCount);
-
 	/** Add primitive collision pass (explicit primitives from FluidCollider) */
 	static void AddPrimitiveCollisionPass(
 		FRDGBuilder& GraphBuilder,
@@ -721,23 +666,6 @@ public:
 		int32 ParticleCount,
 		float ParticleRadius,
 		float CollisionThreshold);
-
-	/** Add finalize positions pass */
-	static void AddFinalizePositionsPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		int32 ParticleCount,
-		float DeltaTime,
-		float VelocityDamping = 0.99f,
-		float MaxVelocity = 1000.0f);
-
-	/** Add extract positions pass (for spatial hash) */
-	static void AddExtractPositionsPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferSRVRef ParticlesSRV,
-		FRDGBufferUAVRef PositionsUAV,
-		int32 ParticleCount,
-		bool bUsePredictedPosition);
 
 	/** Add extract render data pass (Phase 2: GPU physics → GPU render) */
 	static void AddExtractRenderDataPass(
