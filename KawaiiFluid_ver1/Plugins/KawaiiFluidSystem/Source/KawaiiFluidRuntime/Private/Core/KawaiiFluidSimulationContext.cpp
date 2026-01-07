@@ -184,7 +184,14 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	// Pressure iterations (typically 1-4)
 	GPUParams.PressureIterations = 1;
 
-	// Precompute kernel coefficients
+	// Tensile Instability Correction (PBF Eq.13-14)
+	// Must be set before PrecomputeKernelCoefficients() to compute InvW_DeltaQ
+	GPUParams.bEnableTensileInstability = Preset->bEnableTensileInstabilityCorrection ? 1 : 0;
+	GPUParams.TensileK = Preset->TensileInstabilityK;
+	GPUParams.TensileN = Preset->TensileInstabilityN;
+	GPUParams.TensileDeltaQ = Preset->TensileInstabilityDeltaQ;
+
+	// Precompute kernel coefficients (including InvW_DeltaQ for tensile instability)
 	GPUParams.PrecomputeKernelCoefficients();
 
 	// Configure Distance Field collision on GPU simulator (if enabled)

@@ -108,7 +108,17 @@ struct FGPUFluidSimulationParams
 	int32 TotalSubsteps;          // Total substeps per frame
 	int32 PressureIterations;     // Number of pressure solve iterations
 	float CurrentTime;            // Current game time (seconds)
-	
+
+	// Tensile Instability Correction (PBF paper Eq.13-14)
+	// s_corr = -k * (W(r)/W(Δq))^n
+	int32 bEnableTensileInstability;  // Enable tensile instability correction
+	float TensileK;               // Strength coefficient k (typically 0.1)
+	int32 TensileN;               // Exponent n (typically 4)
+	float TensileDeltaQ;          // Reference distance ratio Δq/h (typically 0.2)
+	float InvW_DeltaQ;            // Precomputed 1/W(Δq, h) for efficiency
+	float Padding2;               // Alignment padding
+	float Padding3;               // Alignment padding
+	float Padding4;               // Alignment padding
 
 	FGPUFluidSimulationParams()
 		: RestDensity(1000.0f)
@@ -139,6 +149,14 @@ struct FGPUFluidSimulationParams
 		, TotalSubsteps(1)
 		, PressureIterations(1)
 		, CurrentTime(0.0f)
+		, bEnableTensileInstability(1)
+		, TensileK(0.1f)
+		, TensileN(4)
+		, TensileDeltaQ(0.2f)
+		, InvW_DeltaQ(0.0f)
+		, Padding2(0.0f)
+		, Padding3(0.0f)
+		, Padding4(0.0f)
 	{
 	}
 
@@ -166,6 +184,29 @@ struct FGPUFluidSimulationParams
 
 		// Precompute dt²
 		DeltaTimeSq = DeltaTime * DeltaTime;
+
+		// Tensile Instability: Precompute 1/W(Δq, h)
+		// W(Δq) = Poly6Coeff * (h² - (Δq*h)²)³
+		// where Δq = TensileDeltaQ * h
+		if (bEnableTensileInstability && TensileDeltaQ > 0.0f)
+		{
+			const float DeltaQ = TensileDeltaQ * h;  // Δq in meters
+			const float DeltaQ2 = DeltaQ * DeltaQ;
+			const float Diff = h2 - DeltaQ2;
+			if (Diff > 0.0f)
+			{
+				const float W_DeltaQ = Poly6Coeff * Diff * Diff * Diff;
+				InvW_DeltaQ = (W_DeltaQ > 1e-10f) ? (1.0f / W_DeltaQ) : 0.0f;
+			}
+			else
+			{
+				InvW_DeltaQ = 0.0f;
+			}
+		}
+		else
+		{
+			InvW_DeltaQ = 0.0f;
+		}
 	}
 };
 

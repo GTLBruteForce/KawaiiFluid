@@ -1335,7 +1335,13 @@ void FGPUFluidSimulator::AddSolvePressurePass(
 	PassParameters->SmoothingRadius = Params.SmoothingRadius;
 	PassParameters->RestDensity = Params.RestDensity;
 	PassParameters->SpikyCoeff = Params.SpikyCoeff;
+	PassParameters->Poly6Coeff = Params.Poly6Coeff;
 	PassParameters->CellSize = Params.CellSize;
+	// Tensile Instability Correction (PBF Eq.13-14)
+	PassParameters->bEnableTensileInstability = Params.bEnableTensileInstability;
+	PassParameters->TensileK = Params.TensileK;
+	PassParameters->TensileN = Params.TensileN;
+	PassParameters->InvW_DeltaQ = Params.InvW_DeltaQ;
 
 	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FSolvePressureCS::ThreadGroupSize);
 

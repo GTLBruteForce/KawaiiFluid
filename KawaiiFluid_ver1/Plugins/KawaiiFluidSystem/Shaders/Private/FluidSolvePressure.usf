@@ -19,7 +19,16 @@ int ParticleCount;
 float SmoothingRadius;
 float RestDensity;
 float SpikyCoeff;
+float Poly6Coeff;
 float CellSize;
+
+// Tensile Instability Correction (PBF paper Eq.13-14)
+// s_corr = -k * (W(r)/W(Δq))^n
+// Prevents particle clustering at low-density regions (splash, surface)
+int bEnableTensileInstability;
+float TensileK;
+int TensileN;
+float InvW_DeltaQ;  // Precomputed 1/W(Δq, h)
 
 //=============================================================================
 // Main Compute Shader
@@ -102,8 +111,47 @@ void SolvePressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 					// IMPORTANT: Multiply by CM_TO_M to match CPU calculation scale
 					gradW *= SpikyCoeff * CM_TO_M;
 
-					// Position correction: Δp = (λ_i + λ_j) * ∇W (result in meters)
-					deltaP += (lambda_i + lambda_j) * gradW;
+					// Tensile Instability Correction (PBF Eq.13-14)
+					// s_corr = -k * (W(r)/W(Δq))^n
+					// Prevents particle clustering at surface/splash regions
+					float scorr = 0.0f;
+					if (bEnableTensileInstability)
+					{
+						// Poly6 kernel ratio: W(r)/W(Δq) = (h²-r²)³ / (h²-Δq²)³
+						// Coefficient cancels out in ratio, so we don't need Poly6Coeff
+						float diff = h2 - r2;
+						float W_r = diff * diff * diff;
+
+						// W(Δq) where Δq = 0.2h (PBF paper default)
+						float deltaQ2 = 0.04f * h2;  // (0.2h)² = 0.04h²
+						float diffQ = h2 - deltaQ2;  // 0.96h²
+						float W_deltaQ = diffQ * diffQ * diffQ;
+
+						// Ratio clamped to [0,1] for numerical stability
+						float ratio = (W_deltaQ > 0.0f) ? saturate(W_r / W_deltaQ) : 0.0f;
+
+						// s_corr = -k * ratio^n
+						// Manually compute ratio^n for common exponents to avoid loop/pow issues
+						float ratioN = 1.0f;
+						if (TensileN == 4)
+						{
+							float ratio2 = ratio * ratio;
+							ratioN = ratio2 * ratio2;
+						}
+						else if (TensileN == 2)
+						{
+							ratioN = ratio * ratio;
+						}
+						else if (TensileN == 6)
+						{
+							float ratio2 = ratio * ratio;
+							ratioN = ratio2 * ratio2 * ratio2;
+						}
+						scorr = -TensileK * ratioN;
+					}
+
+					// Position correction: Δp = (λ_i + λ_j + s_corr) * ∇W (result in meters)
+					deltaP += (lambda_i + lambda_j + scorr) * gradW;
 				}
 			}
 		}

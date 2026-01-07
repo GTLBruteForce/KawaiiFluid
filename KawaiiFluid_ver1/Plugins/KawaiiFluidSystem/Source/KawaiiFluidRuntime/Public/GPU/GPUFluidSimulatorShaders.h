@@ -115,7 +115,13 @@ public:
 		SHADER_PARAMETER(float, SmoothingRadius)
 		SHADER_PARAMETER(float, RestDensity)
 		SHADER_PARAMETER(float, SpikyCoeff)
+		SHADER_PARAMETER(float, Poly6Coeff)
 		SHADER_PARAMETER(float, CellSize)
+		// Tensile Instability (PBF Eq.13-14: s_corr = -k * (W(r)/W(Δq))^n)
+		SHADER_PARAMETER(int32, bEnableTensileInstability)
+		SHADER_PARAMETER(float, TensileK)
+		SHADER_PARAMETER(int32, TensileN)
+		SHADER_PARAMETER(float, InvW_DeltaQ)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;
