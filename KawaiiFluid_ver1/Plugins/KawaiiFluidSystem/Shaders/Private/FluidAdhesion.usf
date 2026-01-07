@@ -162,6 +162,45 @@ void GetConvexSurfaceInfo(
 	}
 }
 
+// Calculate absolute distance between an arbitrary position and the attached primitive surface
+float ComputeAttachmentSurfaceDistance(float3 pos, FGPUParticleAttachment attachment)
+{
+	if (attachment.PrimitiveIndex < 0)
+	{
+		return 0.0f;
+	}
+
+	if (attachment.PrimitiveType == PRIM_TYPE_SPHERE && attachment.PrimitiveIndex < SphereCount)
+	{
+		FGPUCollisionSphere sphere = CollisionSpheres[attachment.PrimitiveIndex];
+		return abs(length(pos - sphere.Center) - sphere.Radius);
+	}
+	else if (attachment.PrimitiveType == PRIM_TYPE_CAPSULE && attachment.PrimitiveIndex < CapsuleCount)
+	{
+		FGPUCollisionCapsule capsule = CollisionCapsules[attachment.PrimitiveIndex];
+		float3 ab = capsule.End - capsule.Start;
+		float t = saturate(dot(pos - capsule.Start, ab) / dot(ab, ab));
+		float3 closestOnAxis = capsule.Start + t * ab;
+		return abs(length(pos - closestOnAxis) - capsule.Radius);
+	}
+	else if (attachment.PrimitiveType == PRIM_TYPE_BOX && attachment.PrimitiveIndex < BoxCount)
+	{
+		FGPUCollisionBox box = CollisionBoxes[attachment.PrimitiveIndex];
+		return abs(sdBox(pos, box.Center, box.Extent, box.Rotation));
+	}
+	else if (attachment.PrimitiveType == PRIM_TYPE_CONVEX && attachment.PrimitiveIndex < ConvexCount)
+	{
+		FGPUCollisionConvex convex = CollisionConvexes[attachment.PrimitiveIndex];
+		float signedDistance;
+		float3 tmpNormal;
+		float3 tmpPoint;
+		GetConvexSurfaceInfo(pos, convex, ConvexPlanes, signedDistance, tmpNormal, tmpPoint);
+		return abs(signedDistance);
+	}
+
+	return 0.0f;
+}
+
 //=============================================================================
 // Adhesion Compute Shader - Check and create attachments
 //=============================================================================
@@ -330,43 +369,19 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	FGPUFluidParticle particle = Particles[idx];
 	FGPUBoneTransform bone = BoneTransforms[attachment.BoneIndex];
 
+	// Check predicted drift before forcing particle to follow the bone
+	bool bShouldDetach = false;
+	float predictedSurfaceDistance = ComputeAttachmentSurfaceDistance(particle.PredictedPosition, attachment);
+	if (predictedSurfaceDistance > DetachDistanceThreshold)
+	{
+		bShouldDetach = true;
+	}
+
 	// Calculate new world position from bone transform
 	float3 newPos = BoneLocalToWorld(attachment.LocalOffset, bone);
 
 	// Check if we should detach
-	bool bShouldDetach = false;
-
-	// Detach if moved too far from primitive surface
-	float surfaceDistance = 0;
-
-	if (attachment.PrimitiveType == PRIM_TYPE_SPHERE && attachment.PrimitiveIndex < SphereCount)
-	{
-		FGPUCollisionSphere sphere = CollisionSpheres[attachment.PrimitiveIndex];
-		surfaceDistance = abs(length(newPos - sphere.Center) - sphere.Radius);
-	}
-	else if (attachment.PrimitiveType == PRIM_TYPE_CAPSULE && attachment.PrimitiveIndex < CapsuleCount)
-	{
-		FGPUCollisionCapsule capsule = CollisionCapsules[attachment.PrimitiveIndex];
-		float3 ab = capsule.End - capsule.Start;
-		float t = saturate(dot(newPos - capsule.Start, ab) / dot(ab, ab));
-		float3 closestOnAxis = capsule.Start + t * ab;
-		surfaceDistance = abs(length(newPos - closestOnAxis) - capsule.Radius);
-	}
-	else if (attachment.PrimitiveType == PRIM_TYPE_BOX && attachment.PrimitiveIndex < BoxCount)
-	{
-		FGPUCollisionBox box = CollisionBoxes[attachment.PrimitiveIndex];
-		surfaceDistance = abs(sdBox(newPos, box.Center, box.Extent, box.Rotation));
-	}
-	else if (attachment.PrimitiveType == PRIM_TYPE_CONVEX && attachment.PrimitiveIndex < ConvexCount)
-	{
-		FGPUCollisionConvex convex = CollisionConvexes[attachment.PrimitiveIndex];
-		float signedDistance;
-		float3 tmpNormal;
-		float3 tmpPoint;
-		GetConvexSurfaceInfo(newPos, convex, ConvexPlanes, signedDistance, tmpNormal, tmpPoint);
-		surfaceDistance = abs(signedDistance);
-	}
-
+	float surfaceDistance = ComputeAttachmentSurfaceDistance(newPos, attachment);
 	if (surfaceDistance > DetachDistanceThreshold)
 	{
 		bShouldDetach = true;
