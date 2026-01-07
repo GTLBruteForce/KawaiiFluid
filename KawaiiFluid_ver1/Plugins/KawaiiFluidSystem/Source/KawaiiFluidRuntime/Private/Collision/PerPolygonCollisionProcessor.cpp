@@ -158,6 +158,7 @@ void FPerPolygonCollisionProcessor::ProcessCollisions(
 	const TArray<UFluidInteractionComponent*>& InteractionComponents,
 	float ParticleRadius,
 	float AdhesionStrength,
+	float ContactOffset,
 	TArray<FParticleCorrection>& OutCorrections)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(PerPolygonCollision_ProcessCollisions);
@@ -292,7 +293,7 @@ void FPerPolygonCollisionProcessor::ProcessCollisions(
 		FVector CollisionClosestPoint;
 
 		if (ProcessSingleParticle(Candidate, BVH, ParticleRadius, CompCollisionMargin, CompFriction, CompRestitution,
-			AdhesionStrength, Correction, CollisionTriangleIndex, CollisionClosestPoint))
+			AdhesionStrength, ContactOffset, Correction, CollisionTriangleIndex, CollisionClosestPoint))
 		{
 			CollisionCount.fetch_add(1, std::memory_order_relaxed);
 
@@ -361,6 +362,7 @@ bool FPerPolygonCollisionProcessor::ProcessSingleParticle(
 	float InFriction,
 	float InRestitution,
 	float InAdhesionStrength,
+	float ContactOffset,
 	FParticleCorrection& OutCorrection,
 	int32& OutTriangleIndex,
 	FVector& OutClosestPoint)
@@ -373,7 +375,7 @@ bool FPerPolygonCollisionProcessor::ProcessSingleParticle(
 
 	// Query BVH for nearby triangles
 	TArray<int32> NearbyTriangles;
-	const float SearchRadius = ParticleRadius * 2.0f + InCollisionMargin;
+	const float SearchRadius = ParticleRadius * 2.0f + InCollisionMargin + ContactOffset;
 	BVH->QuerySphere(Position, SearchRadius, NearbyTriangles);
 
 	// DEBUG: Log first particle's query results
@@ -409,10 +411,11 @@ bool FPerPolygonCollisionProcessor::ProcessSingleParticle(
 		const FVector TriClosestPoint = FSkeletalMeshBVH::ClosestPointOnTriangle(
 			Position, Tri.V0, Tri.V1, Tri.V2);
 		const float Distance = FVector::Dist(Position, TriClosestPoint);
+		const float AdjustedDistance = FMath::Max(0.0f, Distance - ContactOffset);
 
-		if (Distance < MinDistance)
+		if (AdjustedDistance < MinDistance)
 		{
-			MinDistance = Distance;
+			MinDistance = AdjustedDistance;
 			ClosestPoint = TriClosestPoint;
 			ClosestNormal = Tri.Normal;
 			ClosestTriangleIndex = TriIdx;
@@ -427,8 +430,8 @@ bool FPerPolygonCollisionProcessor::ProcessSingleParticle(
 	if (++DistanceDebugCounter % 500 == 1)
 	{
 		UE_LOG(LogPerPolygonCollision, Warning,
-			TEXT("Distance DEBUG: MinDist=%.2f, EffectiveRadius=%.2f, ParticleRadius=%.2f, CollisionMargin=%.2f, Collides=%s"),
-			MinDistance, EffectiveRadius, ParticleRadius, InCollisionMargin,
+			TEXT("Distance DEBUG: MinDist=%.2f, EffectiveRadius=%.2f, ParticleRadius=%.2f, CollisionMargin=%.2f, ContactOffset=%.2f, Collides=%s"),
+			MinDistance, EffectiveRadius, ParticleRadius, InCollisionMargin, ContactOffset,
 			MinDistance < EffectiveRadius ? TEXT("YES") : TEXT("NO"));
 	}
 

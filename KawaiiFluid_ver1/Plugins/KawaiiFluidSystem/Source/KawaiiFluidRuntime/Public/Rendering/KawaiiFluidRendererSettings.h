@@ -206,6 +206,16 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidMetaballRendererSettings
 		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching && bUseSDFVolumeOptimization"))
 	bool bUseSpatialHash = false;
 
+	/** Number of history samples per particle (1 = current only, 2 = include previous frame). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "1", ClampMax = "2"))
+	int32 AttachedRenderSampleCount = 2;
+
+	/** Blend weight between previous and current position for history samples (0 = exact previous, 1 = near current). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "bEnabled && PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "0.0", ClampMax = "1.0"))
+	float AttachedRenderSpread = 0.25f;
+
 	//========================================
 	// G-Buffer Mode Parameters
 	//========================================

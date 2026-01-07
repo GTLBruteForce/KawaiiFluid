@@ -26,13 +26,15 @@ public:
 	 * @param AdhesionStrength 접착 강도 (0.0 ~ 1.0)
 	 * @param AdhesionRadius 접착 범위
 	 * @param DetachThreshold 분리 임계값
+	 * @param ColliderContactOffset 접촉 거리 보정값 (양수면 더 깊이 겹침 허용)
 	 */
 	void Apply(
 		TArray<FFluidParticle>& Particles,
 		const TArray<UFluidCollider*>& Colliders,
 		float AdhesionStrength,
 		float AdhesionRadius,
-		float DetachThreshold
+		float DetachThreshold,
+		float ColliderContactOffset
 	);
 
 	/**

@@ -483,6 +483,8 @@ struct FGPUAdhesionParams
 	float AdhesionRadius;         // 4 bytes - Max distance for adhesion
 	float DetachAccelThreshold;   // 4 bytes - Acceleration threshold for detachment
 	float DetachDistanceThreshold;// 4 bytes - Distance threshold for detachment
+	float ColliderContactOffset;  // 4 bytes - Extra contact offset applied to distance checks
+	float BoneVelocityScale;      // 4 bytes - How much of bone velocity to inherit (0-1)
 	float SlidingFriction;        // 4 bytes - Friction when sliding on surface
 	float CurrentTime;            // 4 bytes - Current game time
 	int32 bEnableAdhesion;        // 4 bytes - Enable flag
@@ -504,7 +506,7 @@ struct FGPUAdhesionParams
 	{
 	}
 };
-static_assert(sizeof(FGPUAdhesionParams) == 48, "FGPUAdhesionParams must be 48 bytes");
+static_assert(sizeof(FGPUAdhesionParams) == 56, "FGPUAdhesionParams must be 56 bytes");
 
 /**
  * GPU Collision Primitives Collection

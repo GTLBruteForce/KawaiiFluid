@@ -457,6 +457,8 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 				AdhesionParams.bEnableAdhesion = 1;
 				AdhesionParams.AdhesionStrength = Preset->AdhesionStrength;
 				AdhesionParams.AdhesionRadius = Preset->AdhesionRadius;
+				AdhesionParams.ColliderContactOffset = Preset->AdhesionContactOffset;
+				AdhesionParams.BoneVelocityScale = Preset->AdhesionBoneVelocityScale;
 				AdhesionParams.DetachAccelThreshold = Preset->AdhesionDetachAcceleration;  // Detach on fast acceleration
 				AdhesionParams.DetachDistanceThreshold = Preset->AdhesionDetachDistance; // Detach if too far from surface
 				AdhesionParams.SlidingFriction = DefaultFriction;
@@ -613,6 +615,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 							Params.InteractionComponents,
 							Preset->ParticleRadius,
 							Preset->AdhesionStrength,  // 유체의 접착력
+							Preset->AdhesionContactOffset,
 							Corrections
 						);
 
@@ -1701,7 +1704,8 @@ void UKawaiiFluidSimulationContext::ApplyAdhesion(
 			Colliders,
 			Preset->AdhesionStrength,
 			Preset->AdhesionRadius,
-			Preset->DetachThreshold
+			Preset->DetachThreshold,
+			Preset->AdhesionContactOffset
 		);
 	}
 }

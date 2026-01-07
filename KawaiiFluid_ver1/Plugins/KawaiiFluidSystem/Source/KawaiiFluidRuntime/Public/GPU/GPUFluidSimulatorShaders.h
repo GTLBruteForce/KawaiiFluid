@@ -998,6 +998,8 @@ public:
 		SHADER_PARAMETER(float, AdhesionRadius)
 		SHADER_PARAMETER(float, DetachAccelThreshold)
 		SHADER_PARAMETER(float, DetachDistanceThreshold)
+		SHADER_PARAMETER(float, ColliderContactOffset)
+		SHADER_PARAMETER(float, BoneVelocityScale)
 		SHADER_PARAMETER(float, SlidingFriction)
 		SHADER_PARAMETER(float, CurrentTime)
 		SHADER_PARAMETER(float, DeltaTime)
@@ -1051,6 +1053,8 @@ public:
 
 		SHADER_PARAMETER(float, DetachAccelThreshold)
 		SHADER_PARAMETER(float, DetachDistanceThreshold)
+		SHADER_PARAMETER(float, ColliderContactOffset)
+		SHADER_PARAMETER(float, BoneVelocityScale)
 		SHADER_PARAMETER(float, SlidingFriction)
 		SHADER_PARAMETER(float, DeltaTime)
 

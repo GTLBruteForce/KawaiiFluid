@@ -35,6 +35,7 @@ public:
 	 * @param InteractionComponents - Per-Polygon enabled interaction components
 	 * @param ParticleRadius - Particle collision radius
 	 * @param AdhesionStrength - Fluid adhesion strength (0-1) from Preset
+	 * @param ContactOffset - Extra contact offset applied to collider distance checks
 	 * @param OutCorrections - Output correction data for GPU
 	 */
 	void ProcessCollisions(
@@ -42,6 +43,7 @@ public:
 		const TArray<UFluidInteractionComponent*>& InteractionComponents,
 		float ParticleRadius,
 		float AdhesionStrength,
+		float ContactOffset,
 		TArray<FParticleCorrection>& OutCorrections
 	);
 
@@ -145,6 +147,7 @@ private:
 	 * @param InFriction - Surface friction from InteractionComponent
 	 * @param InRestitution - Bounce coefficient from InteractionComponent
 	 * @param InAdhesionStrength - Fluid adhesion strength (0-1) from Preset
+	 * @param ContactOffset - Extra distance allowed to overlap the collider
 	 * @param OutCorrection - Output correction data
 	 * @param OutTriangleIndex - Output triangle index for attachment (INDEX_NONE if no collision)
 	 * @param OutClosestPoint - Output closest point on triangle for attachment
@@ -158,6 +161,7 @@ private:
 		float InFriction,
 		float InRestitution,
 		float InAdhesionStrength,
+		float ContactOffset,
 		FParticleCorrection& OutCorrection,
 		int32& OutTriangleIndex,
 		FVector& OutClosestPoint

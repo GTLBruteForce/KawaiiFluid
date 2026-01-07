@@ -43,6 +43,8 @@ float AdhesionStrength;
 float AdhesionRadius;
 float DetachAccelThreshold;
 float DetachDistanceThreshold;
+float ColliderContactOffset;
+float BoneVelocityScale;
 float SlidingFriction;
 float CurrentTime;
 float DeltaTime;
@@ -216,6 +218,7 @@ void AdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	FGPUFluidParticle particle = Particles[idx];
 	FGPUParticleAttachment attachment = Attachments[idx];
+	const float EffectiveAdhesionRadius = max(0.0f, AdhesionRadius + ColliderContactOffset);
 
 	float3 pos = particle.Position;
 
@@ -232,7 +235,7 @@ void AdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	// Find closest primitive for potential attachment
-	float closestDist = AdhesionRadius;
+	float closestDist = EffectiveAdhesionRadius;
 	int closestPrimType = -1;
 	int closestPrimIndex = -1;
 	int closestBoneIndex = -1;
@@ -249,7 +252,7 @@ void AdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		float distance;
 		float3 surfacePoint = GetClosestPointOnSphere(pos, sphere, normal, distance);
 
-		if (distance < closestDist && distance < AdhesionRadius)
+		if (distance < closestDist && distance < EffectiveAdhesionRadius)
 		{
 			closestDist = distance;
 			closestPrimType = PRIM_TYPE_SPHERE;
@@ -270,7 +273,7 @@ void AdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		float distance;
 		float3 surfacePoint = GetClosestPointOnCapsule(pos, capsule, normal, distance);
 
-		if (distance < closestDist && distance < AdhesionRadius)
+		if (distance < closestDist && distance < EffectiveAdhesionRadius)
 		{
 			closestDist = distance;
 			closestPrimType = PRIM_TYPE_CAPSULE;
@@ -291,7 +294,7 @@ void AdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		float distance;
 		float3 surfacePoint = GetClosestPointOnBox(pos, box, normal, distance);
 
-		if (distance < closestDist && distance < AdhesionRadius)
+		if (distance < closestDist && distance < EffectiveAdhesionRadius)
 		{
 			closestDist = distance;
 			closestPrimType = PRIM_TYPE_BOX;
@@ -313,7 +316,7 @@ void AdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		float3 surfacePoint;
 		GetConvexSurfaceInfo(pos, convex, ConvexPlanes, distance, surfaceNormal, surfacePoint);
 
-		if (distance < closestDist && distance < AdhesionRadius)
+		if (distance < closestDist && distance < EffectiveAdhesionRadius)
 		{
 			closestDist = distance;
 			closestPrimType = PRIM_TYPE_CONVEX;
@@ -359,6 +362,7 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	FGPUParticleAttachment attachment = Attachments[idx];
+	const float EffectiveDetachThreshold = max(0.0f, DetachDistanceThreshold + ColliderContactOffset);
 
 	// Skip non-attached particles
 	if (attachment.PrimitiveType < 0 || attachment.BoneIndex < 0 || attachment.BoneIndex >= BoneCount)
@@ -368,32 +372,31 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	FGPUFluidParticle particle = Particles[idx];
 	FGPUBoneTransform bone = BoneTransforms[attachment.BoneIndex];
+	float3 previousVelocity = particle.Velocity;
 
-	// Check predicted drift before forcing particle to follow the bone
-	bool bShouldDetach = false;
+	// Desired bone-follow position and inferred speed
+	float3 desiredPos = BoneLocalToWorld(attachment.LocalOffset, bone);
+	float3 followDelta = desiredPos - particle.PredictedPosition;
+	const float DesiredSpeed = length(followDelta) / max(DeltaTime, 0.0001f);
+
+	// Detach if the required follow speed exceeds threshold
+	bool bShouldDetach = (DesiredSpeed > DetachAccelThreshold);
+
+	// Additional safety: detach if we drift too far from the surface
 	float predictedSurfaceDistance = ComputeAttachmentSurfaceDistance(particle.PredictedPosition, attachment);
-	if (predictedSurfaceDistance > DetachDistanceThreshold)
+	if (predictedSurfaceDistance > EffectiveDetachThreshold)
 	{
 		bShouldDetach = true;
 	}
 
-	// Calculate new world position from bone transform
-	float3 newPos = BoneLocalToWorld(attachment.LocalOffset, bone);
-
-	// Check if we should detach
-	float surfaceDistance = ComputeAttachmentSurfaceDistance(newPos, attachment);
-	if (surfaceDistance > DetachDistanceThreshold)
+	float surfaceDistance = ComputeAttachmentSurfaceDistance(desiredPos, attachment);
+	if (surfaceDistance > EffectiveDetachThreshold)
 	{
 		bShouldDetach = true;
 	}
 
-	// Calculate bone velocity and check acceleration-based detachment
+	// Calculate bone velocity for later velocity blending / sliding
 	float3 boneVelocity = CalcBoneVelocity(attachment.LocalOffset, bone, DeltaTime);
-	float acceleration = length(boneVelocity - particle.Velocity) / max(DeltaTime, 0.0001f);
-	if (acceleration > DetachAccelThreshold)
-	{
-		bShouldDetach = true;
-	}
 
 	if (bShouldDetach)
 	{
@@ -416,19 +419,20 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		{
 			clampedVelocity = clampedVelocity * (MaxDetachVelocity / velMag);
 		}
-		particle.Velocity = clampedVelocity;
+		float3 desiredVelocity = clampedVelocity;
+		particle.Velocity = lerp(previousVelocity, desiredVelocity, saturate(BoneVelocityScale));
 	}
 	else
 	{
 		// === Gravity-based surface sliding ===
 		// Calculate surface normal at current position
 		float3 surfaceNormal = float3(0, 0, 1);
-		float3 surfacePoint = newPos;
+		float3 surfacePoint = desiredPos;
 
 		if (attachment.PrimitiveType == PRIM_TYPE_SPHERE && attachment.PrimitiveIndex < SphereCount)
 		{
 			FGPUCollisionSphere sphere = CollisionSpheres[attachment.PrimitiveIndex];
-			float3 toParticle = newPos - sphere.Center;
+			float3 toParticle = desiredPos - sphere.Center;
 			float dist = length(toParticle);
 			surfaceNormal = dist > 0.0001f ? toParticle / dist : float3(0, 0, 1);
 			surfacePoint = sphere.Center + surfaceNormal * sphere.Radius;
@@ -437,9 +441,9 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		{
 			FGPUCollisionCapsule capsule = CollisionCapsules[attachment.PrimitiveIndex];
 			float3 ab = capsule.End - capsule.Start;
-			float t = saturate(dot(newPos - capsule.Start, ab) / dot(ab, ab));
+			float t = saturate(dot(desiredPos - capsule.Start, ab) / dot(ab, ab));
 			float3 closestOnAxis = capsule.Start + t * ab;
-			float3 toParticle = newPos - closestOnAxis;
+			float3 toParticle = desiredPos - closestOnAxis;
 			float dist = length(toParticle);
 			surfaceNormal = dist > 0.0001f ? toParticle / dist : float3(0, 0, 1);
 			surfacePoint = closestOnAxis + surfaceNormal * capsule.Radius;
@@ -448,13 +452,13 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		{
 			FGPUCollisionBox box = CollisionBoxes[attachment.PrimitiveIndex];
 			float dummy;
-			surfacePoint = GetClosestPointOnBox(newPos, box, surfaceNormal, dummy);
+			surfacePoint = GetClosestPointOnBox(desiredPos, box, surfaceNormal, dummy);
 		}
 		else if (attachment.PrimitiveType == PRIM_TYPE_CONVEX && attachment.PrimitiveIndex < ConvexCount)
 		{
 			FGPUCollisionConvex convex = CollisionConvexes[attachment.PrimitiveIndex];
 			float signedDistance;
-			GetConvexSurfaceInfo(newPos, convex, ConvexPlanes, signedDistance, surfaceNormal, surfacePoint);
+			GetConvexSurfaceInfo(desiredPos, convex, ConvexPlanes, signedDistance, surfaceNormal, surfacePoint);
 		}
 
 		// Calculate tangential gravity component (gravity projected onto surface)
@@ -475,7 +479,7 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float3 slidingDisplacement = slidingAccel * DeltaTime * DeltaTime * 0.5f;
 
 			// Convert displacement to bone local space and update LocalOffset
-			float3 newWorldPos = newPos + slidingDisplacement;
+			float3 newWorldPos = desiredPos + slidingDisplacement;
 
 			// Re-project onto surface to prevent drifting away
 			float3 toNewPos = newWorldPos - surfacePoint;
@@ -488,14 +492,16 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			// Update particle position
 			particle.Position = newWorldPos;
 			particle.PredictedPosition = newWorldPos;
-			particle.Velocity = boneVelocity + slidingAccel * DeltaTime;
+			float3 desiredVelocity = boneVelocity + slidingAccel * DeltaTime;
+			particle.Velocity = lerp(previousVelocity, desiredVelocity, saturate(BoneVelocityScale));
 		}
 		else
 		{
 			// No sliding - just follow bone
-			particle.Position = newPos;
-			particle.PredictedPosition = newPos;
-			particle.Velocity = boneVelocity;
+			particle.Position = desiredPos;
+			particle.PredictedPosition = desiredPos;
+			float3 desiredVelocity = boneVelocity;
+			particle.Velocity = lerp(previousVelocity, desiredVelocity, saturate(BoneVelocityScale));
 		}
 	}
 

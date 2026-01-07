@@ -126,6 +126,32 @@ public:
 	/** Get particle count that matches PersistentParticleBuffer (synchronized in render thread) */
 	int32 GetPersistentParticleCount() const { return PersistentParticleCount.load(); }
 
+	/** Access previous frame position buffer (for history trails) */
+	TRefCountPtr<FRDGPooledBuffer>& AccessPreviousPositionsBuffer() { return PreviousPositionsBuffer; }
+
+	/** Get previous position count */
+	int32 GetPreviousPositionsCount() const { return PreviousPositionsCount; }
+
+	/** Returns true if previous positions buffer is valid and matches required particle count */
+	bool HasPreviousPositions(int32 RequiredCount) const
+	{
+		return bPreviousPositionsValid && PreviousPositionsBuffer.IsValid() && PreviousPositionsCount == RequiredCount;
+	}
+
+	/** Mark previous positions as valid/invalid */
+	void MarkPreviousPositionsValid(bool bIsValid) { bPreviousPositionsValid = bIsValid; }
+
+	/** Set previous positions count */
+	void SetPreviousPositionsCount(int32 Count) { PreviousPositionsCount = Count; }
+
+	/** Invalidate previous positions buffer (call when particle order changes drastically) */
+	void InvalidatePreviousPositions()
+	{
+		bPreviousPositionsValid = false;
+		PreviousPositionsCount = 0;
+		PreviousPositionsBuffer.SafeRelease();
+	}
+
 	//=============================================================================
 	// Configuration
 	//=============================================================================
@@ -558,6 +584,11 @@ private:
 
 	// Cached adhesion parameters
 	FGPUAdhesionParams CachedAdhesionParams;
+
+	// Previous positions buffer for rendering history trails
+	TRefCountPtr<FRDGPooledBuffer> PreviousPositionsBuffer;
+	int32 PreviousPositionsCount = 0;
+	bool bPreviousPositionsValid = false;
 
 	// Attachment data buffer (one per particle)
 	TRefCountPtr<FRDGPooledBuffer> PersistentAttachmentBuffer;

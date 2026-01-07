@@ -2413,6 +2413,8 @@ void FGPUFluidSimulator::AddAdhesionPass(
 	PassParameters->AdhesionRadius = CachedAdhesionParams.AdhesionRadius;
 	PassParameters->DetachAccelThreshold = CachedAdhesionParams.DetachAccelThreshold;
 	PassParameters->DetachDistanceThreshold = CachedAdhesionParams.DetachDistanceThreshold;
+	PassParameters->ColliderContactOffset = CachedAdhesionParams.ColliderContactOffset;
+	PassParameters->BoneVelocityScale = CachedAdhesionParams.BoneVelocityScale;
 	PassParameters->SlidingFriction = CachedAdhesionParams.SlidingFriction;
 	PassParameters->CurrentTime = Params.CurrentTime;
 	PassParameters->DeltaTime = Params.DeltaTime;
@@ -2543,6 +2545,8 @@ void FGPUFluidSimulator::AddUpdateAttachedPositionsPassInternal(
 	PassParameters->ConvexPlanes = GraphBuilder.CreateSRV(ConvexPlanesBuffer);
 	PassParameters->DetachAccelThreshold = CachedAdhesionParams.DetachAccelThreshold;
 	PassParameters->DetachDistanceThreshold = CachedAdhesionParams.DetachDistanceThreshold;
+	PassParameters->ColliderContactOffset = CachedAdhesionParams.ColliderContactOffset;
+	PassParameters->BoneVelocityScale = CachedAdhesionParams.BoneVelocityScale;
 	PassParameters->SlidingFriction = CachedAdhesionParams.SlidingFriction;
 	PassParameters->DeltaTime = Params.DeltaTime;
 

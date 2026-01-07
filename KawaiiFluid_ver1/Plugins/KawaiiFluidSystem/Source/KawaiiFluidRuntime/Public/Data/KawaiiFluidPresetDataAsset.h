@@ -170,6 +170,20 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "0.1"))
 	float AdhesionRadius = 25.0f;
 
+	/**
+	 * Additional contact offset (cm) applied to adhesion/collision checks.
+	 * Positive values allow particles to overlap deeper into bone colliders.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "-50.0", ClampMax = "50.0"))
+	float AdhesionContactOffset = 0.0f;
+
+	/**
+	 * Scale applied to bone velocity when updating attached particle velocity.
+	 * 1 = inherit full bone motion, 0 = keep previous particle velocity.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AdhesionBoneVelocityScale = 1.0f;
+
 	/** Detach distance threshold (cm) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "0.0"))
 	float AdhesionDetachDistance = 15.0f;

@@ -13,7 +13,8 @@ void FAdhesionSolver::Apply(
 	const TArray<UFluidCollider*>& Colliders,
 	float AdhesionStrength,
 	float AdhesionRadius,
-	float DetachThreshold)
+	float DetachThreshold,
+	float ColliderContactOffset)
 {
 	// 디버그: AdhesionSolver 호출 확인
 	static int32 ApplyDebugCounter = 0;
@@ -71,10 +72,12 @@ void FAdhesionSolver::Apply(
 
 			if (Collider->GetClosestPointWithBone(Particle.Position, SurfacePoint, Normal, Distance, BoneName, BoneTransform))
 			{
+				const float AdjustedDistance = FMath::Max(0.0f, Distance - ColliderContactOffset);
+
 				// 가장 가까운 콜라이더 추적 (거리 무관하게)
-				if (Distance < ClosestDistance)
+				if (AdjustedDistance < ClosestDistance)
 				{
-					ClosestDistance = Distance;
+					ClosestDistance = AdjustedDistance;
 					ClosestColliderActor = Collider->GetOwner();
 					ClosestBoneName = BoneName;
 					ClosestBoneTransform = BoneTransform;
