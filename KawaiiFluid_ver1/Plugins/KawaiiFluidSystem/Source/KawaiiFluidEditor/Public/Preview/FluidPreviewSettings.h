@@ -57,11 +57,10 @@ public:
 	// Rendering Settings
 	//========================================
 
-	/** ISM Renderer Settings */
+	/** ISM Renderer Settings (debug visualization, per-preview) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (DisplayName = "ISM Settings"))
 	FKawaiiFluidISMRendererSettings ISMSettings;
 
-	/** Metaball Renderer Settings */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (DisplayName = "Metaball Settings"))
-	FKawaiiFluidMetaballRendererSettings MetaballSettings;
+	// Note: Metaball settings come from Preset->RenderingParameters
+	// This ensures preview matches actual runtime appearance
 };

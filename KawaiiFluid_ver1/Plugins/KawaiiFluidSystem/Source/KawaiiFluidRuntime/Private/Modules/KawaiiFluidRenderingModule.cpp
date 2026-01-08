@@ -12,7 +12,7 @@ UKawaiiFluidRenderingModule::UKawaiiFluidRenderingModule()
 	MetaballRenderer = CreateDefaultSubobject<UKawaiiFluidMetaballRenderer>(TEXT("MetaballRenderer"));
 }
 
-void UKawaiiFluidRenderingModule::Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent, IKawaiiFluidDataProvider* InDataProvider)
+void UKawaiiFluidRenderingModule::Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent, IKawaiiFluidDataProvider* InDataProvider, UKawaiiFluidPresetDataAsset* InPreset)
 {
 	CachedWorld = InWorld;
 	CachedOwnerComponent = InOwnerComponent;
@@ -41,7 +41,7 @@ void UKawaiiFluidRenderingModule::Initialize(UWorld* InWorld, USceneComponent* I
 
 	if (MetaballRenderer)
 	{
-		MetaballRenderer->Initialize(InWorld, InOwnerComponent);
+		MetaballRenderer->Initialize(InWorld, InOwnerComponent, InPreset);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("RenderingModule: Initialized (ISM: %s, Metaball: %s)"),

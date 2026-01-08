@@ -19,10 +19,11 @@ UKawaiiFluidMetaballRenderer::UKawaiiFluidMetaballRenderer()
 	// No component tick needed - UObject doesn't tick
 }
 
-void UKawaiiFluidMetaballRenderer::Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent)
+void UKawaiiFluidMetaballRenderer::Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent, UKawaiiFluidPresetDataAsset* InPreset)
 {
 	CachedWorld = InWorld;
 	CachedOwnerComponent = InOwnerComponent;
+	CachedPreset = InPreset;
 
 	if (!CachedWorld)
 	{
@@ -56,8 +57,11 @@ void UKawaiiFluidMetaballRenderer::Initialize(UWorld* InWorld, USceneComponent* 
 		}
 	);
 
-	// Create initial Pipeline
-	UpdatePipeline();
+	// Create Pipeline based on Preset
+	if (CachedPreset)
+	{
+		UpdatePipeline();
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Initialized GPU resources (MaxParticles: %d)"),
 		MaxRenderParticles);
@@ -203,11 +207,10 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 	if (bUseSimulationRadius)
 	{
 		RenderRadius = ParticleRadius;
-		LocalParameters.ParticleRenderRadius = RenderRadius;
 	}
 	else
 	{
-		RenderRadius = LocalParameters.ParticleRenderRadius;
+		RenderRadius = GetLocalParameters().ParticleRenderRadius;
 	}
 
 	// =====================================================
@@ -226,7 +229,7 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 			CachedGPUSimulator = Simulator;
 
 			// Update anisotropy parameters to GPU simulator
-			Simulator->SetAnisotropyParams(LocalParameters.AnisotropyParams);
+			Simulator->SetAnisotropyParams(GetLocalParameters().AnisotropyParams);
 
 			// Get particle count (atomic, thread-safe read)
 			const int32 GPUParticleCount = Simulator->GetPersistentParticleCount();
@@ -361,14 +364,16 @@ bool UKawaiiFluidMetaballRenderer::IsRenderingActive() const
 
 void UKawaiiFluidMetaballRenderer::UpdatePipeline()
 {
+	const FFluidRenderingParameters& Params = GetLocalParameters();
+
 	// Check if Pipeline needs to be recreated
-	bool bPipelineChanged = !Pipeline || CachedPipelineType != LocalParameters.PipelineType;
+	bool bPipelineChanged = !Pipeline || CachedPipelineType != Params.PipelineType;
 
 	// Create/recreate Pipeline if needed
 	// Note: Pipeline now handles ShadingMode internally via switch statements
 	if (bPipelineChanged)
 	{
-		switch (LocalParameters.PipelineType)
+		switch (Params.PipelineType)
 		{
 		case EMetaballPipelineType::ScreenSpace:
 			Pipeline = MakeShared<FKawaiiMetaballScreenSpacePipeline>();
@@ -381,14 +386,14 @@ void UKawaiiFluidMetaballRenderer::UpdatePipeline()
 			break;
 		}
 
-		CachedPipelineType = LocalParameters.PipelineType;
+		CachedPipelineType = Params.PipelineType;
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Pipeline=%s, Shading=%s"),
-		LocalParameters.PipelineType == EMetaballPipelineType::ScreenSpace ? TEXT("ScreenSpace") : TEXT("RayMarching"),
-		LocalParameters.ShadingMode == EMetaballShadingMode::PostProcess ? TEXT("PostProcess") :
-		LocalParameters.ShadingMode == EMetaballShadingMode::GBuffer ? TEXT("GBuffer") :
-		LocalParameters.ShadingMode == EMetaballShadingMode::Opaque ? TEXT("Opaque") : TEXT("Translucent"));
+		Params.PipelineType == EMetaballPipelineType::ScreenSpace ? TEXT("ScreenSpace") : TEXT("RayMarching"),
+		Params.ShadingMode == EMetaballShadingMode::PostProcess ? TEXT("PostProcess") :
+		Params.ShadingMode == EMetaballShadingMode::GBuffer ? TEXT("GBuffer") :
+		Params.ShadingMode == EMetaballShadingMode::Opaque ? TEXT("Opaque") : TEXT("Translucent"));
 }
 
 void UKawaiiFluidMetaballRenderer::SetSDFVolumeBounds(const FVector& VolumeMin, const FVector& VolumeMax)
@@ -407,7 +412,9 @@ void UKawaiiFluidMetaballRenderer::SetSDFVolumeBounds(const FVector& VolumeMin, 
 
 void UKawaiiFluidMetaballRenderer::DrawDebugVisualization()
 {
-	if (!LocalParameters.bDebugDrawSDFVolume || !bHasValidSDFVolumeBounds)
+	const FFluidRenderingParameters& Params = GetLocalParameters();
+
+	if (!Params.bDebugDrawSDFVolume || !bHasValidSDFVolumeBounds)
 	{
 		return;
 	}
@@ -426,7 +433,7 @@ void UKawaiiFluidMetaballRenderer::DrawDebugVisualization()
 		CachedWorld,
 		BoxCenter,
 		BoxExtent,
-		LocalParameters.SDFVolumeDebugColor,
+		Params.SDFVolumeDebugColor,
 		false,  // bPersistentLines
 		-1.0f,  // LifeTime (negative = one frame)
 		0,      // DepthPriority
@@ -452,5 +459,19 @@ void UKawaiiFluidMetaballRenderer::DrawDebugVisualization()
 	for (const FVector& Corner : Corners)
 	{
 		DrawDebugPoint(CachedWorld, Corner, MarkerSize, CornerColor, false, -1.0f, 0);
+	}
+}
+
+void UKawaiiFluidMetaballRenderer::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
+{
+	CachedPreset = InPreset;
+
+	if (CachedPreset)
+	{
+		// Update Pipeline based on Preset's PipelineType
+		UpdatePipeline();
+
+		UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: SetPreset - PipelineType=%s"),
+			GetLocalParameters().PipelineType == EMetaballPipelineType::ScreenSpace ? TEXT("ScreenSpace") : TEXT("RayMarching"));
 	}
 }

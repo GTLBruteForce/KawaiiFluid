@@ -47,9 +47,10 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 	if (RenderingModule && PreviewActor)
 	{
 		// Initialize with this as DataProvider (PreviewActor의 RootComponent에 ISM 부착)
-		RenderingModule->Initialize(GetWorld(), PreviewActor->GetRootComponent(), this);
+		// Preset은 SetPreset()에서 나중에 설정됨
+		RenderingModule->Initialize(GetWorld(), PreviewActor->GetRootComponent(), this, nullptr);
 
-		// Apply default settings to renderers (same as runtime!)
+		// Apply default ISM settings (debug visualization)
 		if (UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer())
 		{
 			FKawaiiFluidISMRendererSettings ISMSettings;
@@ -57,12 +58,7 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 			ISMRenderer->ApplySettings(ISMSettings);
 		}
 
-		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
-		{
-			FKawaiiFluidMetaballRendererSettings MetaballSettings;
-			MetaballSettings.bEnabled = true;
-			MetaballRenderer->ApplySettings(MetaballSettings);
-		}
+		// Metaball settings come from Preset->RenderingParameters (set in SetPreset)
 
 		// Register to FluidRendererSubsystem (required for Metaball ViewExtension!)
 		if (UWorld* World = GetWorld())
@@ -186,16 +182,21 @@ void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 
 		CachedParticleRadius = CurrentPreset->ParticleRadius;
 
-		// Update particle scale from preset (color comes from PreviewSettings)
+		// Update renderers from preset
 		if (RenderingModule)
 		{
 			if (UKawaiiFluidISMRenderer* ISM = RenderingModule->GetISMRenderer())
 			{
 				ISM->ParticleScale = CachedParticleRadius / 5.0f;
 			}
+			// Metaball uses Preset->RenderingParameters via SetPreset
+			if (UKawaiiFluidMetaballRenderer* Metaball = RenderingModule->GetMetaballRenderer())
+			{
+				Metaball->SetPreset(CurrentPreset);
+			}
 		}
 
-		// Apply rendering settings (includes color from PreviewSettings)
+		// Apply ISM settings from PreviewSettings
 		ApplyPreviewSettings();
 	}
 
@@ -224,16 +225,21 @@ void FFluidPreviewScene::RefreshFromPreset()
 
 	CachedParticleRadius = CurrentPreset->ParticleRadius;
 
-	// Update particle scale from preset (color comes from PreviewSettings)
+	// Update renderers from preset
 	if (RenderingModule)
 	{
 		if (UKawaiiFluidISMRenderer* ISM = RenderingModule->GetISMRenderer())
 		{
 			ISM->ParticleScale = CachedParticleRadius / 5.0f;
 		}
+		// Metaball uses Preset->RenderingParameters via SetPreset
+		if (UKawaiiFluidMetaballRenderer* Metaball = RenderingModule->GetMetaballRenderer())
+		{
+			Metaball->SetPreset(CurrentPreset);
+		}
 	}
 
-	// Apply rendering settings (includes color from PreviewSettings)
+	// Apply ISM settings from PreviewSettings
 	ApplyPreviewSettings();
 }
 
@@ -400,16 +406,13 @@ void FFluidPreviewScene::ApplyPreviewSettings()
 {
 	UpdateEnvironment();
 
-	// Apply rendering settings to renderers
+	// Apply ISM settings (debug visualization, per-preview)
+	// Note: Metaball settings come from Preset->RenderingParameters (set in SetPreset/RefreshFromPreset)
 	if (RenderingModule && PreviewSettingsObject)
 	{
 		if (UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer())
 		{
 			ISMRenderer->ApplySettings(PreviewSettingsObject->ISMSettings);
-		}
-		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
-		{
-			MetaballRenderer->ApplySettings(PreviewSettingsObject->MetaballSettings);
 		}
 	}
 }

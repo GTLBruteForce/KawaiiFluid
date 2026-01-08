@@ -23,6 +23,10 @@
 // New Pipeline architecture (ShadingPass removed - Pipeline handles ShadingMode internally)
 #include "Rendering/Pipeline/IKawaiiMetaballRenderingPipeline.h"
 
+// Context-based batching
+#include "Core/KawaiiFluidSimulationContext.h"
+#include "Data/KawaiiFluidPresetDataAsset.h"
+
 static TRefCountPtr<IPooledRenderTarget> GFluidCompositeDebug_KeepAlive;
 
 // ==============================================================================
@@ -309,6 +313,7 @@ void FFluidSceneViewExtension::BeginRenderViewFamily(FSceneViewFamily& InViewFam
 	{
 		HistoryManager->BeginFrame();
 	}
+	// Note: Per-frame deduplication is handled by Preset-based TMap batching
 }
 
 bool FFluidSceneViewExtension::IsViewFromOurWorld(const FSceneView& InView) const
@@ -356,11 +361,12 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 	RDG_EVENT_SCOPE(GraphBuilder, "KawaiiFluid_PostBasePass");
 
 	// Collect GBuffer/Translucent renderers only
+	// Batching by Preset - same preset = same GPU buffer = one render
 	// PostProcess mode is handled entirely in SubscribeToPostProcessingPass
 	// - GBuffer: writes to GBuffer
 	// - Translucent: writes to GBuffer + Stencil marking
-	TMap<FFluidRenderingParameters, TArray<UKawaiiFluidMetaballRenderer*>> GBufferBatches;
-	TMap<FFluidRenderingParameters, TArray<UKawaiiFluidMetaballRenderer*>> TranslucentBatches;
+	TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidMetaballRenderer*>> GBufferBatches;
+	TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidMetaballRenderer*>> TranslucentBatches;
 
 	const TArray<UKawaiiFluidRenderingModule*>& Modules = SubsystemPtr->GetAllRenderingModules();
 	for (UKawaiiFluidRenderingModule* Module : Modules)
@@ -370,16 +376,25 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 		UKawaiiFluidMetaballRenderer* MetaballRenderer = Module->GetMetaballRenderer();
 		if (MetaballRenderer && MetaballRenderer->IsRenderingActive())
 		{
-			const FFluidRenderingParameters& Params = MetaballRenderer->GetLocalParameters();
+			// Get preset for batching (same preset = same rendering params = one render)
+			UKawaiiFluidPresetDataAsset* Preset = MetaballRenderer->GetPreset();
+			if (!Preset)
+			{
+				continue;
+			}
+
+			// Get rendering params from preset
+			const FFluidRenderingParameters& Params = Preset->RenderingParameters;
+
 			// Route based on ShadingMode (PostProcess is handled in SubscribeToPostProcessingPass)
 			switch (Params.ShadingMode)
 			{
 			case EMetaballShadingMode::GBuffer:
 			case EMetaballShadingMode::Opaque:
-				GBufferBatches.FindOrAdd(Params).Add(MetaballRenderer);
+				GBufferBatches.FindOrAdd(Preset).Add(MetaballRenderer);
 				break;
 			case EMetaballShadingMode::Translucent:
-				TranslucentBatches.FindOrAdd(Params).Add(MetaballRenderer);
+				TranslucentBatches.FindOrAdd(Preset).Add(MetaballRenderer);
 				break;
 			case EMetaballShadingMode::PostProcess:
 				// Handled in SubscribeToPostProcessingPass
@@ -403,14 +418,18 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 	FRDGTextureRef SceneDepthTexture = RenderTargets.DepthStencil.GetTexture();
 
 	// Process GBuffer batches using new Pipeline architecture
+	// Batched by Preset - same preset renders only once
 	for (auto& Batch : GBufferBatches)
 	{
-		const FFluidRenderingParameters& BatchParams = Batch.Key;
+		UKawaiiFluidPresetDataAsset* Preset = Batch.Key;
 		const TArray<UKawaiiFluidMetaballRenderer*>& Renderers = Batch.Value;
+
+		// Get rendering params directly from preset
+		const FFluidRenderingParameters& BatchParams = Preset->RenderingParameters;
 
 		RDG_EVENT_SCOPE(GraphBuilder, "FluidBatch_GBuffer");
 
-		// Get Pipeline from first renderer (all renderers in batch share same params)
+		// Get Pipeline from first renderer (all renderers in batch share same preset)
 		if (Renderers.Num() > 0 && Renderers[0]->GetPipeline())
 		{
 			TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline = Renderers[0]->GetPipeline();
@@ -435,14 +454,18 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 
 	// Process Translucent batches - ExecutePostBasePass for GBuffer write with Stencil marking
 	// This writes to GBuffer with Stencil=0x01 marking for TransparencyComposite
+	// Batched by Preset - same preset renders only once
 	for (auto& Batch : TranslucentBatches)
 	{
-		const FFluidRenderingParameters& BatchParams = Batch.Key;
+		UKawaiiFluidPresetDataAsset* Preset = Batch.Key;
 		const TArray<UKawaiiFluidMetaballRenderer*>& Renderers = Batch.Value;
+
+		// Get rendering params directly from preset
+		const FFluidRenderingParameters& BatchParams = Preset->RenderingParameters;
 
 		RDG_EVENT_SCOPE(GraphBuilder, "FluidBatch_Translucent_GBufferWrite");
 
-		// Get Pipeline from first renderer (all renderers in batch share same params)
+		// Get Pipeline from first renderer (all renderers in batch share same preset)
 		if (Renderers.Num() > 0 && Renderers[0]->GetPipeline())
 		{
 			TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline = Renderers[0]->GetPipeline();
@@ -527,12 +550,13 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 	}
 
 	// Collect all renderers for PrePostProcess (before TSR)
+	// Batching by Preset - same preset = same GPU buffer = one render
 	// - Translucent: GBuffer write already done, transparency compositing here
 	// - ScreenSpace: Full pipeline (depth/normal/thickness generation + shading)
 	// - RayMarching: Full pipeline (SDF + ray march shading)
-	TMap<FFluidRenderingParameters, TArray<UKawaiiFluidMetaballRenderer*>> TranslucentBatches;
-	TMap<FFluidRenderingParameters, TArray<UKawaiiFluidMetaballRenderer*>> ScreenSpaceBatches;
-	TMap<FFluidRenderingParameters, TArray<UKawaiiFluidMetaballRenderer*>> RayMarchingBatches;
+	TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidMetaballRenderer*>> TranslucentBatches;
+	TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidMetaballRenderer*>> ScreenSpaceBatches;
+	TMap<UKawaiiFluidPresetDataAsset*, TArray<UKawaiiFluidMetaballRenderer*>> RayMarchingBatches;
 	const FFluidRenderingParameters* ShadowRenderParams = nullptr;
 
 	const TArray<UKawaiiFluidRenderingModule*>& Modules = SubsystemPtr->GetAllRenderingModules();
@@ -543,7 +567,15 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 		UKawaiiFluidMetaballRenderer* MetaballRenderer = Module->GetMetaballRenderer();
 		if (MetaballRenderer && MetaballRenderer->IsRenderingActive())
 		{
-			const FFluidRenderingParameters& Params = MetaballRenderer->GetLocalParameters();
+			// Get preset for batching (same preset = same rendering params = one render)
+			UKawaiiFluidPresetDataAsset* Preset = MetaballRenderer->GetPreset();
+			if (!Preset)
+			{
+				continue;
+			}
+
+			// Get rendering params from preset
+			const FFluidRenderingParameters& Params = Preset->RenderingParameters;
 
 			// Collect shadow params from first renderer with shadow casting enabled
 			if (!ShadowRenderParams && Params.bEnableShadowCasting)
@@ -553,7 +585,7 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 
 			if (Params.ShadingMode == EMetaballShadingMode::Translucent)
 			{
-				TranslucentBatches.FindOrAdd(Params).Add(MetaballRenderer);
+				TranslucentBatches.FindOrAdd(Preset).Add(MetaballRenderer);
 			}
 			else if (Params.ShadingMode == EMetaballShadingMode::GBuffer)
 			{
@@ -562,11 +594,11 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 			}
 			else if (Params.PipelineType == EMetaballPipelineType::ScreenSpace)
 			{
-				ScreenSpaceBatches.FindOrAdd(Params).Add(MetaballRenderer);
+				ScreenSpaceBatches.FindOrAdd(Preset).Add(MetaballRenderer);
 			}
 			else if (Params.PipelineType == EMetaballPipelineType::RayMarching)
 			{
-				RayMarchingBatches.FindOrAdd(Params).Add(MetaballRenderer);
+				RayMarchingBatches.FindOrAdd(Preset).Add(MetaballRenderer);
 			}
 		}
 	}
@@ -684,10 +716,14 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 	}
 
 	// Apply TransparencyPass for each Translucent batch using Pipeline
+	// Batched by Preset - same preset renders only once
 	for (auto& Batch : TranslucentBatches)
 	{
-		const FFluidRenderingParameters& BatchParams = Batch.Key;
+		UKawaiiFluidPresetDataAsset* Preset = Batch.Key;
 		const TArray<UKawaiiFluidMetaballRenderer*>& Renderers = Batch.Value;
+
+		// Get rendering params directly from preset
+		const FFluidRenderingParameters& BatchParams = Preset->RenderingParameters;
 
 		RDG_EVENT_SCOPE(GraphBuilder, "FluidBatch_Translucent(%d renderers)", Renderers.Num());
 
@@ -711,11 +747,15 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 
 	// ============================================
 	// ScreenSpace Pipeline Rendering (before TSR)
+	// Batched by Preset - same preset renders only once
 	// ============================================
 	for (auto& Batch : ScreenSpaceBatches)
 	{
-		const FFluidRenderingParameters& BatchParams = Batch.Key;
+		UKawaiiFluidPresetDataAsset* Preset = Batch.Key;
 		const TArray<UKawaiiFluidMetaballRenderer*>& Renderers = Batch.Value;
+
+		// Get rendering params directly from preset
+		const FFluidRenderingParameters& BatchParams = Preset->RenderingParameters;
 
 		RDG_EVENT_SCOPE(GraphBuilder, "FluidBatch_ScreenSpace(%d)", Renderers.Num());
 
@@ -788,11 +828,15 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 
 	// ============================================
 	// RayMarching Pipeline Rendering (before TSR)
+	// Batched by Preset - same preset renders only once
 	// ============================================
 	for (auto& Batch : RayMarchingBatches)
 	{
-		const FFluidRenderingParameters& BatchParams = Batch.Key;
+		UKawaiiFluidPresetDataAsset* Preset = Batch.Key;
 		const TArray<UKawaiiFluidMetaballRenderer*>& Renderers = Batch.Value;
+
+		// Get rendering params directly from preset
+		const FFluidRenderingParameters& BatchParams = Preset->RenderingParameters;
 
 		RDG_EVENT_SCOPE(GraphBuilder, "FluidBatch_RayMarching(%d)", Renderers.Num());
 

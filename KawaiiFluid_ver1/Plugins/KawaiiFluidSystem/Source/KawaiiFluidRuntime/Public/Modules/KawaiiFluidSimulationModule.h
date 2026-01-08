@@ -17,6 +17,7 @@ class FSpatialHash;
 class UKawaiiFluidPresetDataAsset;
 class UFluidCollider;
 class UFluidInteractionComponent;
+class UKawaiiFluidSimulationContext;
 
 /**
  * 유체 시뮬레이션 데이터 모듈 (UObject 기반)
@@ -468,11 +469,13 @@ public:
 	const FOnModuleCollisionEvent& GetCollisionEventCallback() const { return OnCollisionEventCallback; }
 
 	//========================================
-	// Preset (디테일 패널에 노출)
+	// Preset (내부 캐시 - Component에서 설정)
 	//========================================
 
-	/** Fluid preset data asset */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Simulation")
+	/** Cached preset reference (set by owning Component via Initialize/SetPreset)
+	 * Note: Component owns the Preset, Module just caches reference for simulation
+	 */
+	UPROPERTY()
 	TObjectPtr<UKawaiiFluidPresetDataAsset> Preset;
 
 	//========================================
@@ -651,10 +654,26 @@ public:
 	/** Set GPU simulation active flag */
 	void SetGPUSimulationActive(bool bActive) { bGPUSimulationActive = bActive; }
 
+	//========================================
+	// Simulation Context Reference
+	//========================================
+
+	/** Get the simulation context associated with this module
+	 * Context is owned by SimulatorSubsystem and shared by all modules with same preset
+	 * Returns nullptr if module is not registered with subsystem
+	 */
+	UKawaiiFluidSimulationContext* GetSimulationContext() const { return CachedSimulationContext; }
+
+	/** Set the simulation context reference (called by SimulatorSubsystem on registration) */
+	void SetSimulationContext(UKawaiiFluidSimulationContext* InContext) { CachedSimulationContext = InContext; }
+
 private:
 	/** Cached GPU simulator pointer (owned by SimulationContext) */
 	FGPUFluidSimulator* CachedGPUSimulator = nullptr;
 
 	/** GPU simulation active flag */
 	bool bGPUSimulationActive = false;
+
+	/** Cached simulation context pointer (owned by SimulatorSubsystem) */
+	UKawaiiFluidSimulationContext* CachedSimulationContext = nullptr;
 };

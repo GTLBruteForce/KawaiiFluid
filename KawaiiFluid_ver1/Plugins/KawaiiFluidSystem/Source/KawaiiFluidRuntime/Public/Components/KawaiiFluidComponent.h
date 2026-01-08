@@ -11,6 +11,7 @@
 
 class UKawaiiFluidRenderingModule;
 class UKawaiiFluidComponent;
+class UKawaiiFluidPresetDataAsset;
 
 /**
  * Instance data for preserving particle data during re-construction
@@ -316,7 +317,7 @@ public:
 	virtual void OnRegister() override;
 	virtual void OnUnregister() override;
 	virtual TStructOnScope<FActorComponentInstanceData> GetComponentInstanceData() const override;
-
+	
 	//========================================
 	// Module Accessors
 	//========================================
@@ -324,6 +325,14 @@ public:
 	/** Returns simulation module - provides all APIs for particles/colliders/external forces */
 	UFUNCTION(BlueprintPure, Category = "Fluid")
 	UKawaiiFluidSimulationModule* GetSimulationModule() const { return SimulationModule; }
+
+	//========================================
+	// Preset Configuration
+	//========================================
+
+	/** Fluid preset data asset - contains physics and rendering parameters */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Configuration")
+	TObjectPtr<UKawaiiFluidPresetDataAsset> Preset;
 
 	//========================================
 	// GPU Simulation
@@ -344,13 +353,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering")
 	bool bEnableRendering = true;
 
-	/** ISM Renderer Settings */
+	/** ISM Renderer Settings (per-Component, debug/preview purpose) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "ISM Settings"))
 	FKawaiiFluidISMRendererSettings ISMSettings;
 
-	/** Metaball Renderer Settings */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Rendering", meta = (EditCondition = "bEnableRendering", DisplayName = "Metaball Settings"))
-	FKawaiiFluidMetaballRendererSettings MetaballSettings;
+	// Note: Metaball rendering parameters are in Preset->RenderingParameters
+	// This ensures same Preset = same Metaball rendering = proper batching
 
 	//========================================
 	// Spawn Settings

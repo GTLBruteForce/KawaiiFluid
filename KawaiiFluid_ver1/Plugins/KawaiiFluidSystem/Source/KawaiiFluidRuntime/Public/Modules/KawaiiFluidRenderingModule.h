@@ -10,6 +10,7 @@
 
 class UKawaiiFluidISMRenderer;
 class UKawaiiFluidMetaballRenderer;
+class UKawaiiFluidPresetDataAsset;
 
 /**
  * Fluid Rendering Module (UObject-based)
@@ -52,8 +53,9 @@ public:
 	 * @param InWorld World context
 	 * @param InOwnerComponent Parent scene component for attachment
 	 * @param InDataProvider Data provider to use
+	 * @param InPreset Preset data asset for rendering parameters
 	 */
-	void Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent, IKawaiiFluidDataProvider* InDataProvider);
+	void Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent, IKawaiiFluidDataProvider* InDataProvider, UKawaiiFluidPresetDataAsset* InPreset);
 
 	/**
 	 * Cleanup resources

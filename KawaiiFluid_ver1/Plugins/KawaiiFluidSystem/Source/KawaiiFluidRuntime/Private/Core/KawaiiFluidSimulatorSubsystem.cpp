@@ -97,21 +97,35 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 			bWantsGPUSimulation = OwnerComp->bUseGPUSimulation;
 		}
 
-		if (Preset && bWantsGPUSimulation)
+		// Always setup Context reference (needed for rendering)
+		if (Preset)
 		{
 			UKawaiiFluidSimulationContext* Context = GetOrCreateContext(Preset);
 			if (Context)
 			{
-				if (!Context->IsGPUSimulatorReady())
+				// Set context reference for rendering access
+				Module->SetSimulationContext(Context);
+
+				// Cache preset in context for rendering parameter access
+				if (!Context->GetCachedPreset())
 				{
-					Context->InitializeGPUSimulator(Preset->MaxParticles);
+					Context->SetCachedPreset(Preset);
 				}
 
-				if (Context->IsGPUSimulatorReady())
+				// GPU simulation setup
+				if (bWantsGPUSimulation)
 				{
-					Module->SetGPUSimulator(Context->GetGPUSimulator());
-					Module->SetGPUSimulationActive(true);
-					UE_LOG(LogTemp, Log, TEXT("SimulationModule: GPU simulation initialized at registration"));
+					if (!Context->IsGPUSimulatorReady())
+					{
+						Context->InitializeGPUSimulator(Preset->MaxParticles);
+					}
+
+					if (Context->IsGPUSimulatorReady())
+					{
+						Module->SetGPUSimulator(Context->GetGPUSimulator());
+						Module->SetGPUSimulationActive(true);
+						UE_LOG(LogTemp, Log, TEXT("SimulationModule: GPU simulation initialized at registration"));
+					}
 				}
 			}
 		}

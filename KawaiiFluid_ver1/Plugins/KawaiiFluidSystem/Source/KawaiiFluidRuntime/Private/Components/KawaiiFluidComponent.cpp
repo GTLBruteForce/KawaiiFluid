@@ -3,6 +3,7 @@
 #include "Components/KawaiiFluidComponent.h"
 #include "Core/KawaiiFluidSimulatorSubsystem.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
+#include "Core/KawaiiFluidSimulationContext.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
@@ -33,24 +34,21 @@ void UKawaiiFluidComponent::OnRegister()
 	UWorld* World = GetWorld();
 	if (World && !World->IsGameWorld() && bEnableRendering && RenderingModule && SimulationModule)
 	{
-		// SimulationModule 초기화 (Preset 없으면 기본 생성)
-		if (!SimulationModule->Preset)
+		// Component->Preset 사용 (없으면 기본 생성)
+		if (!Preset)
 		{
-			SimulationModule->Preset = NewObject<UKawaiiFluidPresetDataAsset>(this, NAME_None, RF_Transient);
+			Preset = NewObject<UKawaiiFluidPresetDataAsset>(this, NAME_None, RF_Transient);
 		}
-		SimulationModule->Initialize(SimulationModule->Preset);
+		// Module에 Preset 설정 후 초기화
+		SimulationModule->Initialize(Preset);
 
-		// RenderingModule 초기화
-		RenderingModule->Initialize(World, this, SimulationModule);
+		// RenderingModule 초기화 (Preset 포함)
+		RenderingModule->Initialize(World, this, SimulationModule, Preset);
 
-		// ISM/Metaball 설정 적용
+		// ISM 설정 적용
 		if (UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer())
 		{
 			ISMRenderer->ApplySettings(ISMSettings);
-		}
-		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
-		{
-			MetaballRenderer->ApplySettings(MetaballSettings);
 		}
 
 		// FluidRendererSubsystem에 등록
@@ -89,13 +87,15 @@ void UKawaiiFluidComponent::BeginPlay()
 	// 시뮬레이션 모듈 초기화
 	if (SimulationModule)
 	{
-		// Preset 없으면 기본 생성
-		if (!SimulationModule->Preset)
+		// Component->Preset 사용 (없으면 기본 생성)
+		if (!Preset)
 		{
-			SimulationModule->Preset = NewObject<UKawaiiFluidPresetDataAsset>(this, NAME_None, RF_Transient);
+			Preset = NewObject<UKawaiiFluidPresetDataAsset>(this, NAME_None, RF_Transient);
 			UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidComponent [%s]: No Preset assigned, using default values"), *GetName());
 		}
-		SimulationModule->Initialize(SimulationModule->Preset);
+		// Module에 Preset 설정 후 초기화
+		SimulationModule->SetPreset(Preset);
+		SimulationModule->Initialize(Preset);
 
 		// 이벤트 콜백 항상 연결 (Module에서 bEnableCollisionEvents 체크)
 		SimulationModule->SetCollisionEventCallback(
@@ -113,8 +113,8 @@ void UKawaiiFluidComponent::BeginPlay()
 		}
 		else
 		{
-			// 1. RenderingModule 초기화 (this를 부모 컴포넌트로 전달)
-			RenderingModule->Initialize(GetWorld(), this, SimulationModule);
+			// 1. RenderingModule 초기화 (Preset 포함)
+			RenderingModule->Initialize(GetWorld(), this, SimulationModule, Preset);
 
 			// 2. ISM 렌더러 설정 적용
 			if (UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer())
@@ -122,13 +122,7 @@ void UKawaiiFluidComponent::BeginPlay()
 				ISMRenderer->ApplySettings(ISMSettings);
 			}
 
-			// 3. Metaball 렌더러 설정 적용
-			if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
-			{
-				MetaballRenderer->ApplySettings(MetaballSettings);
-			}
-
-			// 4. FluidRendererSubsystem에 등록
+			// 3. FluidRendererSubsystem에 등록
 			if (UWorld* World = GetWorld())
 			{
 				if (UFluidRendererSubsystem* RendererSubsystem = World->GetSubsystem<UFluidRendererSubsystem>())
@@ -137,10 +131,9 @@ void UKawaiiFluidComponent::BeginPlay()
 				}
 			}
 
-			UE_LOG(LogTemp, Log, TEXT("KawaiiFluidComponent [%s]: Rendering initialized (ISM: %s, Metaball: %s)"),
+			UE_LOG(LogTemp, Log, TEXT("KawaiiFluidComponent [%s]: Rendering initialized (ISM: %s, Metaball: from Preset)"),
 				*GetName(),
-				ISMSettings.bEnabled ? TEXT("Enabled") : TEXT("Disabled"),
-				MetaballSettings.bEnabled ? TEXT("Enabled") : TEXT("Disabled"));
+				ISMSettings.bEnabled ? TEXT("Enabled") : TEXT("Disabled"));
 		}
 	}
 

@@ -8,6 +8,7 @@
 #include "Core/KawaiiFluidSimulationTypes.h"
 #include "Collision/PerPolygonCollisionProcessor.h"
 #include "GPU/GPUFluidParticle.h"
+#include "Data/KawaiiFluidPresetDataAsset.h"
 #include "KawaiiFluidSimulationContext.generated.h"
 
 // Forward declarations
@@ -15,7 +16,6 @@ class FSpatialHash;
 class FDensityConstraint;
 class FViscositySolver;
 class FAdhesionSolver;
-class UKawaiiFluidPresetDataAsset;
 class FGPUFluidSimulator;
 struct FGPUFluidSimulationParams;
 
@@ -75,6 +75,17 @@ public:
 	 * Get GPU simulator pointer (for Phase 2 GPU→GPU rendering)
 	 */
 	FGPUFluidSimulator* GetGPUSimulator() const { return GPUSimulator.Get(); }
+
+	/**
+	 * Get the cached preset associated with this context
+	 * Returns nullptr if preset has been garbage collected
+	 */
+	UKawaiiFluidPresetDataAsset* GetCachedPreset() const { return CachedPreset.Get(); }
+
+	/**
+	 * Set the preset associated with this context
+	 */
+	void SetCachedPreset(UKawaiiFluidPresetDataAsset* InPreset) { CachedPreset = InPreset; }
 
 	/**
 	 * Main simulation entry point (Stateless)
@@ -306,4 +317,7 @@ protected:
 
 	/** Bone name to index mapping persisted across frames */
 	TMap<FName, int32> PersistentBoneNameToIndex;
+
+	/** Weak reference to the preset associated with this context */
+	TWeakObjectPtr<UKawaiiFluidPresetDataAsset> CachedPreset;
 };

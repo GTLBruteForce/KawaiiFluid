@@ -186,10 +186,6 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Performance", meta = (ClampMin = "0.25", ClampMax = "1.0"))
 	float RenderTargetScale = 1.0f;
 
-	/** SSFR rendering mode (maps to PipelineType + ShadingMode internally) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering")
-	ESSFRRenderingMode SSFRMode = ESSFRRenderingMode::Custom;
-
 	/** Anisotropy parameters for ellipsoid rendering */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Anisotropy")
 	FFluidAnisotropyParams AnisotropyParams;
@@ -200,32 +196,32 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 
 	/** SDF smoothness for metaball blending (higher = more stretchy/blobby) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "1.0", ClampMax = "64.0"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "1.0", ClampMax = "64.0"))
 	float SDFSmoothness = 12.0f;
 
 	/** Maximum ray marching steps */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "16", ClampMax = "256"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "16", ClampMax = "256"))
 	int32 MaxRayMarchSteps = 128;
 
 	/** Ray march hit threshold (surface detection) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "0.0001", ClampMax = "1.0"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "0.0001", ClampMax = "1.0"))
 	float RayMarchHitThreshold = 1.0f;
 
 	/** Maximum ray march distance */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "100.0", ClampMax = "10000.0"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "100.0", ClampMax = "10000.0"))
 	float RayMarchMaxDistance = 2000.0f;
 
 	/** Subsurface scattering intensity (jelly effect) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "0.0", ClampMax = "2.0"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "0.0", ClampMax = "2.0"))
 	float SSSIntensity = 1.0f;
 
 	/** Subsurface scattering color */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching"))
 	FLinearColor SSSColor = FLinearColor(1.0f, 0.5f, 0.3f, 1.0f);
 
 	/**
@@ -234,12 +230,12 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	 * When disabled, uses direct particle iteration (legacy mode)
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching"))
 	bool bUseSDFVolumeOptimization = true;
 
 	/** SDF Volume resolution (64 = 64x64x64 voxels) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching && bUseSDFVolumeOptimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDFVolumeOptimization",
 			ClampMin = "32", ClampMax = "256"))
 	int32 SDFVolumeResolution = 64;
 
@@ -253,17 +249,17 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	 * HybridSwitchThreshold is auto-calculated: ParticleRadius * 2.0 + SDFSmoothness
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching && bUseSDFVolumeOptimization"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDFVolumeOptimization"))
 	bool bUseSpatialHash = false;
 
 	/** Number of history samples per particle (1 = current only, 2 = include previous frame). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "1", ClampMax = "2"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "1", ClampMax = "2"))
 	int32 AttachedRenderSampleCount = 2;
 
 	/** Blend weight between previous and current position when spawning history samples (0 = exact previous, 1 = near current). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::RayMarching", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching", ClampMin = "0.0", ClampMax = "1.0"))
 	float AttachedRenderSpread = 0.25f;
 
 	//========================================
@@ -313,17 +309,17 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 
 	/** Metallic value for GBuffer (G-Buffer mode only) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (EditCondition = "ShadingMode == EMetaballShadingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
 	float Metallic = 0.1f;
 
 	/** Roughness value for GBuffer (G-Buffer mode only) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (EditCondition = "ShadingMode == EMetaballShadingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
 	float Roughness = 0.3f;
 
 	/** Subsurface scattering opacity (G-Buffer mode only) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|GBuffer",
-		meta = (EditCondition = "SSFRMode == ESSFRRenderingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (EditCondition = "ShadingMode == EMetaballShadingMode::GBuffer", ClampMin = "0.0", ClampMax = "1.0"))
 	float SubsurfaceOpacity = 0.5f;
 
 	FFluidRenderingParameters() = default;

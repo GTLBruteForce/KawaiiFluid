@@ -8,6 +8,7 @@
 #include "Core/KawaiiRenderParticle.h"
 #include "Rendering/KawaiiFluidRendererSettings.h"
 #include "Rendering/FluidRenderingParameters.h"
+#include "Data/KawaiiFluidPresetDataAsset.h"
 #include "KawaiiFluidMetaballRenderer.generated.h"
 
 class IKawaiiFluidDataProvider;
@@ -40,17 +41,22 @@ public:
 	UKawaiiFluidMetaballRenderer();
 
 	/**
-	 * Initialize renderer with world and owner context
+	 * Initialize renderer with world, owner and preset
 	 * @param InWorld World context for subsystem access
 	 * @param InOwnerComponent Parent scene component (for consistency with ISM)
+	 * @param InPreset Preset data asset for rendering parameters
 	 */
-	void Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent);
+	void Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent, UKawaiiFluidPresetDataAsset* InPreset);
 
 	/**
 	 * Cleanup renderer resources
 	 */
 	void Cleanup();
 
+
+	///////////////////////////////////////////////////////////////////////
+	///////////////DEPRECATED(Using Preset Data)//////////////
+	///////////////////////////////////////////////////////////////////////
 	/**
 	 * Apply settings from struct
 	 * @param Settings Editor configuration to apply
@@ -83,8 +89,12 @@ public:
 	/** Get cached particle radius (for ViewExtension access) */
 	float GetCachedParticleRadius() const { return CachedParticleRadius; }
 
-	/** Get local rendering parameters for batching */
-	const FFluidRenderingParameters& GetLocalParameters() const { return LocalParameters; }
+	/** Get rendering parameters from Preset */
+	const FFluidRenderingParameters& GetLocalParameters() const
+	{
+		check(CachedPreset);
+		return CachedPreset->RenderingParameters;
+	}
 
 	/** Get rendering pipeline (handles ShadingMode internally) */
 	TSharedPtr<IKawaiiMetaballRenderingPipeline> GetPipeline() const { return Pipeline; }
@@ -106,6 +116,16 @@ public:
 	FVector GetSpawnPositionHint() const { return CachedOwnerComponent ? CachedOwnerComponent->GetComponentLocation() : FVector::ZeroVector; }
 
 	//========================================
+	// Preset Access (for batching by Preset)
+	//========================================
+
+	/** Get cached preset (for render thread preset-based batching) */
+	UKawaiiFluidPresetDataAsset* GetPreset() const { return CachedPreset; }
+
+	/** Set preset reference and sync Pipeline from Preset->RenderingParameters (called from game thread) */
+	void SetPreset(UKawaiiFluidPresetDataAsset* InPreset);
+
+	//========================================
 	// Enable Control
 	//========================================
 
@@ -118,6 +138,10 @@ public:
 	/** Render only surface particles (for slime) */
 	bool bRenderSurfaceOnly = false;
 
+
+	///////////////////////////////////////////////////////////////////////
+	///////////////DEPRECATED(Using Preset Data)//////////////
+	///////////////////////////////////////////////////////////////////////
 	/** Local rendering parameters (per-renderer settings) */
 	FFluidRenderingParameters LocalParameters;
 
@@ -215,6 +239,14 @@ private:
 
 	/** Cached GPU simulator pointer (for render thread direct buffer access) */
 	FGPUFluidSimulator* CachedGPUSimulator = nullptr;
+
+	//========================================
+	// Preset Reference
+	//========================================
+
+	/** Cached preset pointer (for preset-based batching and rendering params) */
+	UPROPERTY()
+	TObjectPtr<UKawaiiFluidPresetDataAsset> CachedPreset;
 };
 
 // Backwards compatibility alias
