@@ -17,6 +17,51 @@ float sdSphere(float3 p, float3 center, float radius)
 }
 
 //=============================================================================
+// Ellipsoid SDF (Anisotropic Particles)
+// Reference: Inigo Quilez https://iquilezles.org/articles/ellipsoids/
+//=============================================================================
+
+// Ellipsoid SDF with axis-aligned radii
+// radii: (rx, ry, rz) - radii along each axis
+float sdEllipsoid(float3 p, float3 center, float3 radii)
+{
+	float3 pLocal = p - center;
+
+	// Approximate ellipsoid SDF (exact SDF is expensive)
+	// This uses the "bound" approximation: transform to unit sphere space
+	float k0 = length(pLocal / radii);
+	float k1 = length(pLocal / (radii * radii));
+	return k0 * (k0 - 1.0) / k1;
+}
+
+// Anisotropic Particle SDF using transformation matrix
+// Transforms point into ellipsoid's local space, then evaluates as sphere
+// axis1/2/3: orthonormal basis vectors (eigenvectors)
+// scale1/2/3: scale factors along each axis (eigenvalues)
+float sdAnisotropicParticle(
+	float3 p,
+	float3 center,
+	float3 axis1, float3 axis2, float3 axis3,
+	float scale1, float scale2, float scale3,
+	float baseRadius)
+{
+	// Transform to local space
+	float3 pLocal = p - center;
+
+	// Project onto each axis and scale inversely
+	// (larger scale = more stretched = need to shrink in that direction for SDF)
+	float3 pScaled;
+	pScaled.x = dot(pLocal, axis1) / max(scale1, 0.001);
+	pScaled.y = dot(pLocal, axis2) / max(scale2, 0.001);
+	pScaled.z = dot(pLocal, axis3) / max(scale3, 0.001);
+
+	// In scaled space, evaluate as sphere
+	// Scale the distance back to world space using geometric mean
+	float geoMeanScale = pow(scale1 * scale2 * scale3, 1.0 / 3.0);
+	return (length(pScaled) - baseRadius) * geoMeanScale;
+}
+
+//=============================================================================
 // SDF Operations
 //=============================================================================
 
@@ -397,4 +442,246 @@ float3 CalculateNormalAnalyticWithSpatialHash_SoA(
 		return float3(0, 1, 0);
 
 	return normalize(gradient);
+}
+
+//=============================================================================
+// Anisotropic SDF Evaluation (Ellipsoid particles)
+// Uses precomputed anisotropy buffers from FluidAnisotropyCompute.usf
+// AnisotropyAxis1/2/3: float4(axis.xyz, scale.w) per particle
+//=============================================================================
+
+// Evaluate anisotropic metaball SDF with Spatial Hash acceleration
+float EvaluateAnisotropicSDFWithSpatialHash_SoA(
+	float3 p,
+	StructuredBuffer<float3> RenderPositions,
+	StructuredBuffer<float4> AnisotropyAxis1,
+	StructuredBuffer<float4> AnisotropyAxis2,
+	StructuredBuffer<float4> AnisotropyAxis3,
+	StructuredBuffer<uint2> CellData,
+	StructuredBuffer<uint> SpatialHashParticleIndices,
+	int ParticleCount,
+	float ParticleRadius,
+	float Smoothness,
+	float CellSize)
+{
+	if (ParticleCount <= 0)
+		return 1e10;
+
+	int3 CenterCell = WorldToCell(p, CellSize);
+
+	float sdf = 1e10;
+	bool bFoundAny = false;
+
+	[unroll]
+	for (int dz = -1; dz <= 1; ++dz)
+	{
+		[unroll]
+		for (int dy = -1; dy <= 1; ++dy)
+		{
+			[unroll]
+			for (int dx = -1; dx <= 1; ++dx)
+			{
+				int3 NeighborCell = CenterCell + int3(dx, dy, dz);
+				uint Hash = HashCell(NeighborCell);
+
+				uint2 Cell = CellData[Hash];
+				uint StartIndex = Cell.x;
+				uint Count = Cell.y;
+
+				for (uint i = 0; i < Count; ++i)
+				{
+					uint ParticleIdx = SpatialHashParticleIndices[StartIndex + i];
+					if (ParticleIdx >= (uint)ParticleCount)
+						continue;
+
+					float3 ParticlePos = RenderPositions[ParticleIdx];
+
+					// Early distance culling (use max scale for conservative bound)
+					float maxScale = 2.0;  // Assume max anisotropy scale
+					if (length(p - ParticlePos) > (ParticleRadius * maxScale + Smoothness * 2.0f))
+						continue;
+
+					// Read anisotropy data
+					float4 A1 = AnisotropyAxis1[ParticleIdx];
+					float4 A2 = AnisotropyAxis2[ParticleIdx];
+					float4 A3 = AnisotropyAxis3[ParticleIdx];
+
+					float3 axis1 = A1.xyz;
+					float3 axis2 = A2.xyz;
+					float3 axis3 = A3.xyz;
+					float scale1 = A1.w;
+					float scale2 = A2.w;
+					float scale3 = A3.w;
+
+					// Evaluate ellipsoid SDF
+					float d = sdAnisotropicParticle(p, ParticlePos, axis1, axis2, axis3, scale1, scale2, scale3, ParticleRadius);
+
+					if (!bFoundAny)
+					{
+						sdf = d;
+						bFoundAny = true;
+					}
+					else
+					{
+						float h = max(Smoothness - abs(sdf - d), 0.0) / Smoothness;
+						sdf = min(sdf, d) - h * h * Smoothness * 0.25;
+					}
+				}
+			}
+		}
+	}
+
+	return bFoundAny ? sdf : 1e10;
+}
+
+// Analytic Gradient Normal calculation for anisotropic particles
+float3 CalculateNormalAnisotropicWithSpatialHash_SoA(
+	float3 p,
+	float centerSDF,
+	StructuredBuffer<float3> RenderPositions,
+	StructuredBuffer<float4> AnisotropyAxis1,
+	StructuredBuffer<float4> AnisotropyAxis2,
+	StructuredBuffer<float4> AnisotropyAxis3,
+	StructuredBuffer<uint2> CellData,
+	StructuredBuffer<uint> SpatialHashParticleIndices,
+	int ParticleCount,
+	float ParticleRadius,
+	float Smoothness,
+	float CellSize)
+{
+	if (ParticleCount <= 0)
+		return float3(0, 1, 0);
+
+	float3 gradient = float3(0, 0, 0);
+	float totalWeight = 0.0;
+
+	int3 CenterCell = WorldToCell(p, CellSize);
+
+	[unroll]
+	for (int dz = -1; dz <= 1; ++dz)
+	{
+		[unroll]
+		for (int dy = -1; dy <= 1; ++dy)
+		{
+			[unroll]
+			for (int dx = -1; dx <= 1; ++dx)
+			{
+				int3 NeighborCell = CenterCell + int3(dx, dy, dz);
+				uint Hash = HashCell(NeighborCell);
+
+				uint2 Cell = CellData[Hash];
+				uint StartIndex = Cell.x;
+				uint Count = Cell.y;
+
+				for (uint i = 0; i < Count; ++i)
+				{
+					uint ParticleIdx = SpatialHashParticleIndices[StartIndex + i];
+					if (ParticleIdx >= (uint)ParticleCount)
+						continue;
+
+					float3 ParticlePos = RenderPositions[ParticleIdx];
+					float3 r = p - ParticlePos;
+					float dist = length(r);
+
+					if (dist < 0.0001)
+						continue;
+
+					// Read anisotropy data
+					float4 A1 = AnisotropyAxis1[ParticleIdx];
+					float4 A2 = AnisotropyAxis2[ParticleIdx];
+					float4 A3 = AnisotropyAxis3[ParticleIdx];
+
+					float3 axis1 = A1.xyz;
+					float3 axis2 = A2.xyz;
+					float3 axis3 = A3.xyz;
+					float scale1 = A1.w;
+					float scale2 = A2.w;
+					float scale3 = A3.w;
+
+					// Compute ellipsoid SDF for this particle
+					float d = sdAnisotropicParticle(p, ParticlePos, axis1, axis2, axis3, scale1, scale2, scale3, ParticleRadius);
+
+					// smin blend weight
+					float h = max(Smoothness - abs(centerSDF - d), 0.0) / Smoothness;
+					float weight = h * h;
+
+					// Gradient direction: transform r through inverse scale
+					// This gives the "outward" direction in world space accounting for ellipsoid shape
+					float3 pLocal = r;
+					float3 pScaled;
+					pScaled.x = dot(pLocal, axis1) / max(scale1 * scale1, 0.001);
+					pScaled.y = dot(pLocal, axis2) / max(scale2 * scale2, 0.001);
+					pScaled.z = dot(pLocal, axis3) / max(scale3 * scale3, 0.001);
+
+					// Transform back to world space
+					float3 gradDir = axis1 * pScaled.x + axis2 * pScaled.y + axis3 * pScaled.z;
+					float gradLen = length(gradDir);
+					if (gradLen > 0.0001)
+					{
+						gradient += weight * (gradDir / gradLen);
+						totalWeight += weight;
+					}
+				}
+			}
+		}
+	}
+
+	if (totalWeight < 0.0001)
+		return float3(0, 1, 0);
+
+	return normalize(gradient);
+}
+
+// O(N) fallback version (no spatial hash) for anisotropic particles
+float EvaluateAnisotropicSDFFromPositions_SoA(
+	float3 p,
+	StructuredBuffer<float3> RenderPositions,
+	StructuredBuffer<float4> AnisotropyAxis1,
+	StructuredBuffer<float4> AnisotropyAxis2,
+	StructuredBuffer<float4> AnisotropyAxis3,
+	int ParticleCount,
+	float ParticleRadius,
+	float Smoothness)
+{
+	if (ParticleCount <= 0)
+		return 1e10;
+
+	// First particle
+	float4 A1 = AnisotropyAxis1[0];
+	float4 A2 = AnisotropyAxis2[0];
+	float4 A3 = AnisotropyAxis3[0];
+	float sdf = sdAnisotropicParticle(p, RenderPositions[0], A1.xyz, A2.xyz, A3.xyz, A1.w, A2.w, A3.w, ParticleRadius);
+
+	for (int i = 1; i < ParticleCount; ++i)
+	{
+		A1 = AnisotropyAxis1[i];
+		A2 = AnisotropyAxis2[i];
+		A3 = AnisotropyAxis3[i];
+		float d = sdAnisotropicParticle(p, RenderPositions[i], A1.xyz, A2.xyz, A3.xyz, A1.w, A2.w, A3.w, ParticleRadius);
+		sdf = smin(sdf, d, Smoothness);
+	}
+
+	return sdf;
+}
+
+// 3-tap normal for anisotropic (fallback)
+float3 CalculateSDFNormal3Tap_Anisotropic_SoA(
+	float3 p,
+	float centerSDF,
+	StructuredBuffer<float3> RenderPositions,
+	StructuredBuffer<float4> AnisotropyAxis1,
+	StructuredBuffer<float4> AnisotropyAxis2,
+	StructuredBuffer<float4> AnisotropyAxis3,
+	int ParticleCount,
+	float ParticleRadius,
+	float Smoothness)
+{
+	const float eps = 0.5;
+
+	float3 n;
+	n.x = EvaluateAnisotropicSDFFromPositions_SoA(p + float3(eps, 0, 0), RenderPositions, AnisotropyAxis1, AnisotropyAxis2, AnisotropyAxis3, ParticleCount, ParticleRadius, Smoothness) - centerSDF;
+	n.y = EvaluateAnisotropicSDFFromPositions_SoA(p + float3(0, eps, 0), RenderPositions, AnisotropyAxis1, AnisotropyAxis2, AnisotropyAxis3, ParticleCount, ParticleRadius, Smoothness) - centerSDF;
+	n.z = EvaluateAnisotropicSDFFromPositions_SoA(p + float3(0, 0, eps), RenderPositions, AnisotropyAxis1, AnisotropyAxis2, AnisotropyAxis3, ParticleCount, ParticleRadius, Smoothness) - centerSDF;
+
+	return normalize(n);
 }

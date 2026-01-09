@@ -16,6 +16,7 @@ class FSpatialHash;
 class FDensityConstraint;
 class FViscositySolver;
 class FAdhesionSolver;
+class FStackPressureSolver;
 class FGPUFluidSimulator;
 struct FGPUFluidSimulationParams;
 
@@ -252,6 +253,9 @@ protected:
 
 	/** Adhesion solver */
 	TSharedPtr<FAdhesionSolver> AdhesionSolver;
+
+	/** Stack pressure solver (weight transfer from stacked attached particles) */
+	TSharedPtr<FStackPressureSolver> StackPressureSolver;
 
 	/** Flag to check if solvers are initialized */
 	bool bSolversInitialized = false;

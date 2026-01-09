@@ -96,6 +96,15 @@ BEGIN_SHADER_PARAMETER_STRUCT(FFluidRayMarchParameters, )
 	SHADER_PARAMETER(float, SpatialHashCellSize)
 
 	//========================================
+	// Anisotropy Buffers (for ellipsoid rendering)
+	// Each float4 = (axis.xyz, scale.w)
+	// Precomputed by FluidAnisotropyCompute.usf
+	//========================================
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector4f>, AnisotropyAxis1)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector4f>, AnisotropyAxis2)
+	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector4f>, AnisotropyAxis3)
+
+	//========================================
 	// SceneDepth UV Mapping
 	//========================================
 	SHADER_PARAMETER(FVector2f, SceneViewRect)
@@ -171,6 +180,14 @@ class FUseGPUBoundsDim : SHADER_PERMUTATION_BOOL("USE_GPU_BOUNDS");
 class FUseSoABuffersDim : SHADER_PERMUTATION_BOOL("USE_SOA_BUFFERS");
 
 /**
+ * @brief Shader permutation dimension for Anisotropic rendering
+ * When enabled, uses ellipsoid SDF (precomputed anisotropy matrices) instead of sphere SDF.
+ * Produces "baduk stone" shaped particles that align with fluid flow direction.
+ * Requires AnisotropyAxis1/2/3 buffers from FluidAnisotropyCompute pass.
+ */
+class FUseAnisotropyDim : SHADER_PERMUTATION_BOOL("USE_ANISOTROPY");
+
+/**
  * @brief Pixel shader for Ray Marching SDF fluid rendering
  *
  * Performs ray marching through metaball SDF field to render
@@ -194,7 +211,7 @@ public:
 	SHADER_USE_PARAMETER_STRUCT(FFluidRayMarchPS, FGlobalShader);
 
 	using FParameters = FFluidRayMarchParameters;
-	using FPermutationDomain = TShaderPermutationDomain<FUseSDFVolumeDim, FUseSpatialHashDim, FOutputDepthDim, FUseGPUBoundsDim, FUseSoABuffersDim>;
+	using FPermutationDomain = TShaderPermutationDomain<FUseSDFVolumeDim, FUseSpatialHashDim, FOutputDepthDim, FUseGPUBoundsDim, FUseSoABuffersDim, FUseAnisotropyDim>;
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{

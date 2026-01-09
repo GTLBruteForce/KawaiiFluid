@@ -121,6 +121,41 @@ struct FSpatialHashData
 };
 
 /**
+ * Anisotropy data for ellipsoid rendering
+ * Precomputed by FluidAnisotropyCompute shader
+ */
+struct FAnisotropyData
+{
+	/** Whether to use anisotropic rendering */
+	bool bUseAnisotropy = false;
+
+	/** Anisotropy Axis1 buffer SRV: float4(axis.xyz, scale.w) */
+	FRDGBufferSRVRef AnisotropyAxis1SRV = nullptr;
+
+	/** Anisotropy Axis2 buffer SRV: float4(axis.xyz, scale.w) */
+	FRDGBufferSRVRef AnisotropyAxis2SRV = nullptr;
+
+	/** Anisotropy Axis3 buffer SRV: float4(axis.xyz, scale.w) */
+	FRDGBufferSRVRef AnisotropyAxis3SRV = nullptr;
+
+	bool IsValid() const
+	{
+		return bUseAnisotropy &&
+			AnisotropyAxis1SRV != nullptr &&
+			AnisotropyAxis2SRV != nullptr &&
+			AnisotropyAxis3SRV != nullptr;
+	}
+
+	void Reset()
+	{
+		bUseAnisotropy = false;
+		AnisotropyAxis1SRV = nullptr;
+		AnisotropyAxis2SRV = nullptr;
+		AnisotropyAxis3SRV = nullptr;
+	}
+};
+
+/**
  * RayMarching Pipeline data
  * Contains particle buffer information for ray marching
  */
@@ -155,6 +190,9 @@ struct FRayMarchingPipelineData
 	/** Spatial Hash data for accelerated evaluation */
 	FSpatialHashData SpatialHashData;
 
+	/** Anisotropy data for ellipsoid rendering (baduk stone shape) */
+	FAnisotropyData AnisotropyData;
+
 	bool IsValid() const
 	{
 		return ParticleBufferSRV != nullptr && ParticleCount > 0;
@@ -176,5 +214,6 @@ struct FRayMarchingPipelineData
 		ParticleRadius = 0.0f;
 		SDFVolumeData.Reset();
 		SpatialHashData.Reset();
+		AnisotropyData.Reset();
 	}
 };

@@ -444,6 +444,15 @@ void KawaiiRayMarchShading::RenderPostProcessShading(
 		PassParameters->SpatialHashCellSize = PipelineData.SpatialHashData.CellSize;
 	}
 
+	// Anisotropy data for ellipsoid rendering (baduk stone shape)
+	const bool bUseAnisotropy = PipelineData.AnisotropyData.IsValid();
+	if (bUseAnisotropy)
+	{
+		PassParameters->AnisotropyAxis1 = PipelineData.AnisotropyData.AnisotropyAxis1SRV;
+		PassParameters->AnisotropyAxis2 = PipelineData.AnisotropyData.AnisotropyAxis2SRV;
+		PassParameters->AnisotropyAxis3 = PipelineData.AnisotropyData.AnisotropyAxis3SRV;
+	}
+
 	// Ray marching parameters
 	PassParameters->SDFSmoothness = RenderParams.SDFSmoothness;
 	PassParameters->MaxRayMarchSteps = RenderParams.MaxRayMarchSteps;
@@ -530,6 +539,7 @@ void KawaiiRayMarchShading::RenderPostProcessShading(
 	PermutationVector.Set<FOutputDepthDim>(bNeedDepthOutput);  // Enable depth output for scaled-res
 	PermutationVector.Set<FUseGPUBoundsDim>(bUseGPUBounds);    // GPU bounds buffer (no readback)
 	PermutationVector.Set<FUseSoABuffersDim>(bUseSoABuffers);  // SoA buffers (62% bandwidth reduction)
+	PermutationVector.Set<FUseAnisotropyDim>(bUseAnisotropy);  // Anisotropic ellipsoid rendering (baduk stone)
 	TShaderMapRef<FFluidRayMarchPS> PixelShader(GlobalShaderMap, PermutationVector);
 
 	GraphBuilder.AddPass(

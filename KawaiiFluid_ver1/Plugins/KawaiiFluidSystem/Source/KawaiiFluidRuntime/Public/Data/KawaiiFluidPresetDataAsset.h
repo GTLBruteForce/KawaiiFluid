@@ -207,6 +207,35 @@ public:
 	float DetachThreshold = 500.0f;
 
 	//========================================
+	// Stack Pressure Parameters
+	//========================================
+
+	/**
+	 * Enable stack pressure for attached particles
+	 * When enabled, particles stacked on top transfer their weight to particles below,
+	 * causing lower particles to slide down faster - creating realistic dripping behavior
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Stack Pressure")
+	bool bEnableStackPressure = true;
+
+	/**
+	 * Stack pressure strength multiplier
+	 * Higher values = faster dripping, more separation between particles
+	 * Recommended: 50 ~ 200 (due to SPH kernel normalization)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Stack Pressure",
+		meta = (EditCondition = "bEnableStackPressure", ClampMin = "0.0", ClampMax = "1000.0"))
+	float StackPressureScale = 100.0f;
+
+	/**
+	 * Stack pressure neighbor search radius (cm)
+	 * 0 = use SmoothingRadius
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Stack Pressure",
+		meta = (EditCondition = "bEnableStackPressure", ClampMin = "0.0"))
+	float StackPressureRadius = 0.0f;
+
+	//========================================
 	// Collision Parameters
 	//========================================
 

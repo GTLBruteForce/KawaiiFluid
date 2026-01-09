@@ -26,6 +26,16 @@ StructuredBuffer<float3> RenderVelocities;
 #endif
 
 //=============================================================================
+// Anisotropy Buffers (for ellipsoid rendering)
+// Each float4 = (axis.xyz, scale.w) - precomputed by FluidAnisotropyCompute.usf
+//=============================================================================
+#if USE_ANISOTROPY
+StructuredBuffer<float4> AnisotropyAxis1;
+StructuredBuffer<float4> AnisotropyAxis2;
+StructuredBuffer<float4> AnisotropyAxis3;
+#endif
+
+//=============================================================================
 // SDF Volume Parameters (used when USE_SDF_VOLUME is 1)
 //=============================================================================
 #if USE_SDF_VOLUME
@@ -307,8 +317,13 @@ FRayMarchResult RayMarchSDF(float3 ro, float3 rd, float maxDist, float2 screenPo
 		{
 			// Phase 2: Precise evaluation using Spatial Hash (O(k) neighbor lookup)
 		#if USE_SOA_BUFFERS
+			#if USE_ANISOTROPY
+			// Anisotropic ellipsoid SDF (baduk stone shape)
+			float hashSdf = EvaluateAnisotropicSDFWithSpatialHash_SoA(p, RenderPositions, AnisotropyAxis1, AnisotropyAxis2, AnisotropyAxis3, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
+			#else
 			// SoA: 62% bandwidth reduction (12B vs 32B per particle)
 			float hashSdf = EvaluateMetaballSDFWithSpatialHash_SoA(p, RenderPositions, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
+			#endif
 		#else
 			float hashSdf = EvaluateMetaballSDFWithSpatialHash(p, RenderParticles, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
 		#endif
@@ -326,7 +341,12 @@ FRayMarchResult RayMarchSDF(float3 ro, float3 rd, float maxDist, float2 screenPo
 #else
 		// Fallback: Direct O(N) particle iteration (legacy mode, no SDF Volume)
 	#if USE_SOA_BUFFERS
+		#if USE_ANISOTROPY
+		// Anisotropic ellipsoid SDF (baduk stone shape)
+		float sdf = EvaluateAnisotropicSDFFromPositions_SoA(p, RenderPositions, AnisotropyAxis1, AnisotropyAxis2, AnisotropyAxis3, ParticleCount, ParticleRadius, SDFSmoothness);
+		#else
 		float sdf = EvaluateMetaballSDFFromPositions_SoA(p, RenderPositions, ParticleCount, ParticleRadius, SDFSmoothness);
+		#endif
 	#else
 		float sdf = EvaluateMetaballSDFFromRenderParticles(p, RenderParticles, ParticleCount, ParticleRadius, SDFSmoothness);
 	#endif
@@ -349,7 +369,11 @@ FRayMarchResult RayMarchSDF(float3 ro, float3 rd, float maxDist, float2 screenPo
 			{
 				// Analytic gradient normal from Spatial Hash (1-Loop instead of 5-Loop)
 			#if USE_SOA_BUFFERS
+				#if USE_ANISOTROPY
+				result.Normal = CalculateNormalAnisotropicWithSpatialHash_SoA(p, sdf, RenderPositions, AnisotropyAxis1, AnisotropyAxis2, AnisotropyAxis3, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
+				#else
 				result.Normal = CalculateNormalAnalyticWithSpatialHash_SoA(p, sdf, RenderPositions, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
+				#endif
 			#else
 				result.Normal = CalculateNormalAnalyticWithSpatialHash(p, sdf, RenderParticles, CellData, SpatialHashParticleIndices, ParticleCount, ParticleRadius, SDFSmoothness, SpatialHashCellSize);
 			#endif
@@ -366,7 +390,11 @@ FRayMarchResult RayMarchSDF(float3 ro, float3 rd, float maxDist, float2 screenPo
 #else
 			// Fallback: Normal from direct particle evaluation
 		#if USE_SOA_BUFFERS
+			#if USE_ANISOTROPY
+			result.Normal = CalculateSDFNormal3Tap_Anisotropic_SoA(p, sdf, RenderPositions, AnisotropyAxis1, AnisotropyAxis2, AnisotropyAxis3, ParticleCount, ParticleRadius, SDFSmoothness);
+			#else
 			result.Normal = CalculateSDFNormal3Tap_SoA(p, sdf, RenderPositions, ParticleCount, ParticleRadius, SDFSmoothness);
+			#endif
 		#else
 			result.Normal = CalculateSDFNormal3TapFromRenderParticles(p, sdf, RenderParticles, ParticleCount, ParticleRadius, SDFSmoothness);
 		#endif

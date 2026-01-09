@@ -117,7 +117,9 @@ struct FGPUFluidSimulationParams
 	int32 TensileN;               // Exponent n (typically 4)
 	float TensileDeltaQ;          // Reference distance ratio Δq/h (typically 0.2)
 	float InvW_DeltaQ;            // Precomputed 1/W(Δq, h) for efficiency
-	float Padding2;               // Alignment padding
+
+	// Stack Pressure (weight transfer from stacked attached particles)
+	float StackPressureScale;     // Stack pressure strength (0 = disabled, 1.0 = default)
 	float Padding3;               // Alignment padding
 	float Padding4;               // Alignment padding
 
@@ -156,7 +158,7 @@ struct FGPUFluidSimulationParams
 		, TensileN(4)
 		, TensileDeltaQ(0.2f)
 		, InvW_DeltaQ(0.0f)
-		, Padding2(0.0f)
+		, StackPressureScale(0.0f)
 		, Padding3(0.0f)
 		, Padding4(0.0f)
 	{

@@ -7,6 +7,7 @@
 #include "Physics/DensityConstraint.h"
 #include "Physics/ViscositySolver.h"
 #include "Physics/AdhesionSolver.h"
+#include "Physics/StackPressureSolver.h"
 #include "Collision/FluidCollider.h"
 #include "Collision/MeshFluidCollider.h"
 #include "Collision/PerPolygonCollisionProcessor.h"
@@ -57,6 +58,7 @@ void UKawaiiFluidSimulationContext::InitializeSolvers(const UKawaiiFluidPresetDa
 	);
 	ViscositySolver = MakeShared<FViscositySolver>();
 	AdhesionSolver = MakeShared<FAdhesionSolver>();
+	StackPressureSolver = MakeShared<FStackPressureSolver>();
 
 	bSolversInitialized = true;
 }
@@ -121,6 +123,9 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	GPUParams.ViscosityCoefficient = Preset->ViscosityCoefficient;
 	GPUParams.CohesionStrength = Preset->CohesionStrength;
 	GPUParams.GlobalDamping = Preset->GlobalDamping;
+
+	// Stack Pressure (weight transfer from stacked attached particles)
+	GPUParams.StackPressureScale = Preset->bEnableStackPressure ? Preset->StackPressureScale : 0.0f;
 
 	// Gravity from preset
 	GPUParams.Gravity = FVector3f(Preset->Gravity);
@@ -863,6 +868,22 @@ void UKawaiiFluidSimulationContext::SimulateSubstep(
 	{
 		SCOPE_CYCLE_COUNTER(STAT_ContextApplyCohesion);
 		ApplyCohesion(Particles, Preset);
+	}
+
+	// 10. Apply stack pressure (weight transfer from stacked attached particles)
+	if (Preset->bEnableStackPressure && StackPressureSolver.IsValid())
+	{
+		float SearchRadius = Preset->StackPressureRadius > 0.0f
+			? Preset->StackPressureRadius
+			: Preset->SmoothingRadius;
+
+		StackPressureSolver->Apply(
+			Particles,
+			Preset->Gravity,
+			Preset->StackPressureScale,
+			SearchRadius,
+			SubstepDT
+		);
 	}
 }
 

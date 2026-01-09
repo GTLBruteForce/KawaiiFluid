@@ -5,6 +5,7 @@
 #include "Rendering/KawaiiFluidRenderResource.h"
 #include "GPU/GPUFluidSimulator.h"
 #include "GPU/GPUFluidSimulatorShaders.h"
+#include "GPU/FluidAnisotropyComputeShader.h"
 #include "Core/KawaiiRenderParticle.h"
 #include "Rendering/Shaders/FluidSpatialHashShaders.h"
 #include "Rendering/Shaders/ExtractRenderPositionsShaders.h"
@@ -99,6 +100,7 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 	int32 TotalParticleCount = 0;
 	FRDGBufferSRVRef ParticleBufferSRV = nullptr;
 	FRDGBufferSRVRef CachedGPUBoundsBufferSRV = nullptr;  // GPU bounds buffer for same-frame use
+	FRDGBufferSRVRef PhysicsBufferSRVForAnisotropy = nullptr;  // FGPUFluidParticle buffer for anisotropy
 	bool bUsingGPUBuffer = false;
 	TArray<FVector3f> AllParticlePositions; // For CPU mode bounding box calculation
 
@@ -130,6 +132,9 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 					PhysicsPooledBuffer,
 					TEXT("GPUPhysicsParticles"));
 				FRDGBufferSRVRef PhysicsBufferSRV = GraphBuilder.CreateSRV(PhysicsBuffer);
+
+				// Store for anisotropy computation (needs FGPUFluidParticle format)
+				PhysicsBufferSRVForAnisotropy = PhysicsBufferSRV;
 
 				// Create render buffer for converted data (FKawaiiRenderParticle format - 32 bytes)
 				FRDGBufferRef RenderBuffer = GraphBuilder.CreateBuffer(
@@ -193,6 +198,38 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 
 				UE_LOG(LogTemp, Verbose, TEXT("  >>> SoA Buffers extracted directly (GPU mode, %d particles)"),
 					PhysicsParticleCount);
+
+				// ========== ANISOTROPY: Get precomputed buffers from GPU Simulator ==========
+				// Anisotropy is computed during simulation (FluidAnisotropyCS), reuse those buffers
+				if (RenderParams.AnisotropyParams.bEnabled)
+				{
+					TRefCountPtr<FRDGPooledBuffer> Axis1Pooled = GPUSimulator->GetPersistentAnisotropyAxis1Buffer();
+					TRefCountPtr<FRDGPooledBuffer> Axis2Pooled = GPUSimulator->GetPersistentAnisotropyAxis2Buffer();
+					TRefCountPtr<FRDGPooledBuffer> Axis3Pooled = GPUSimulator->GetPersistentAnisotropyAxis3Buffer();
+
+					if (Axis1Pooled.IsValid() && Axis2Pooled.IsValid() && Axis3Pooled.IsValid())
+					{
+						FRDGBufferRef Axis1Buffer = GraphBuilder.RegisterExternalBuffer(Axis1Pooled, TEXT("AnisotropyAxis1"));
+						FRDGBufferRef Axis2Buffer = GraphBuilder.RegisterExternalBuffer(Axis2Pooled, TEXT("AnisotropyAxis2"));
+						FRDGBufferRef Axis3Buffer = GraphBuilder.RegisterExternalBuffer(Axis3Pooled, TEXT("AnisotropyAxis3"));
+
+						CachedPipelineData.AnisotropyData.bUseAnisotropy = true;
+						CachedPipelineData.AnisotropyData.AnisotropyAxis1SRV = GraphBuilder.CreateSRV(Axis1Buffer);
+						CachedPipelineData.AnisotropyData.AnisotropyAxis2SRV = GraphBuilder.CreateSRV(Axis2Buffer);
+						CachedPipelineData.AnisotropyData.AnisotropyAxis3SRV = GraphBuilder.CreateSRV(Axis3Buffer);
+
+						UE_LOG(LogTemp, Verbose, TEXT("  >>> ANISOTROPY: Buffers from GPUSimulator (ellipsoid rendering enabled)"));
+					}
+					else
+					{
+						UE_LOG(LogTemp, Warning, TEXT("  >>> ANISOTROPY: Buffers not ready yet (disabled for this frame)"));
+						CachedPipelineData.AnisotropyData.Reset();
+					}
+				}
+				else
+				{
+					CachedPipelineData.AnisotropyData.Reset();
+				}
 
 				UE_LOG(LogTemp, Verbose, TEXT("  >>> GPU MODE: ExtractRenderData+Bounds MERGED (%d particles, radius: %.2f)"),
 					TotalParticleCount, ParticleRadius);
@@ -300,6 +337,9 @@ bool FKawaiiMetaballRayMarchPipeline::PrepareParticleBuffer(
 
 		CachedPipelineData.PositionBufferSRV = GraphBuilder.CreateSRV(PositionBuffer);
 		CachedPipelineData.bUseSoABuffers = true;
+
+		// CPU mode doesn't support anisotropy (requires GPU simulation)
+		CachedPipelineData.AnisotropyData.Reset();
 	}
 
 	if (ValidCount > 0)

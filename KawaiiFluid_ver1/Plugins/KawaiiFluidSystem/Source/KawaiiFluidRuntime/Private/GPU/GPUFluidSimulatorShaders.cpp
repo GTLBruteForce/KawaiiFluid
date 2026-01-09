@@ -130,6 +130,10 @@ IMPLEMENT_GLOBAL_SHADER(FClearDetachedFlagCS,
 	"/Plugin/KawaiiFluidSystem/Private/FluidAdhesion.usf",
 	"ClearDetachedFlagCS", SF_Compute);
 
+IMPLEMENT_GLOBAL_SHADER(FStackPressureCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidStackPressure.usf",
+	"StackPressureCS", SF_Compute);
+
 //=============================================================================
 // Pass Builder Implementation
 //=============================================================================

@@ -1294,6 +1294,14 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	// Pass 8.5: Apply Cohesion (surface tension between particles)
 	AddApplyCohesionPass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
 
+	// Pass 8.6: Apply Stack Pressure (weight transfer from stacked attached particles)
+	if (Params.StackPressureScale > 0.0f && IsAdhesionEnabled() && PersistentAttachmentBuffer.IsValid())
+	{
+		FRDGBufferRef AttachmentBufferForStackPressure = GraphBuilder.RegisterExternalBuffer(PersistentAttachmentBuffer, TEXT("GPUFluidAttachmentsStackPressure"));
+		FRDGBufferSRVRef AttachmentSRVForStackPressure = GraphBuilder.CreateSRV(AttachmentBufferForStackPressure);
+		AddStackPressurePass(GraphBuilder, ParticlesUAVLocal, AttachmentSRVForStackPressure, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
+	}
+
 	// Pass 9: Clear just-detached flag at end of frame
 	AddClearDetachedFlagPass(GraphBuilder, ParticlesUAVLocal);
 
@@ -1610,6 +1618,98 @@ void FGPUFluidSimulator::AddApplyCohesionPass(
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
 		RDG_EVENT_NAME("GPUFluid::ApplyCohesion"),
+		ComputeShader,
+		PassParameters,
+		FIntVector(NumGroups, 1, 1)
+	);
+}
+
+void FGPUFluidSimulator::AddStackPressurePass(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferUAVRef InParticlesUAV,
+	FRDGBufferSRVRef InAttachmentSRV,
+	FRDGBufferSRVRef InCellCountsSRV,
+	FRDGBufferSRVRef InParticleIndicesSRV,
+	const FGPUFluidSimulationParams& Params)
+{
+	// Skip if stack pressure is disabled or no attachments
+	if (Params.StackPressureScale <= 0.0f || !InAttachmentSRV)
+	{
+		return;
+	}
+
+	// Skip if no bone colliders (no attachments possible)
+	if (!bBoneTransformsValid || CachedBoneTransforms.Num() == 0)
+	{
+		return;
+	}
+
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	TShaderMapRef<FStackPressureCS> ComputeShader(ShaderMap);
+
+	// Create collision primitive buffers (same as Adhesion pass)
+	FRDGBufferDesc DummyDesc = FRDGBufferDesc::CreateStructuredDesc(4, 1);
+
+	FRDGBufferRef SpheresBuffer = CachedSpheres.Num() > 0
+		? CreateStructuredBuffer(GraphBuilder, TEXT("StackPressure_Spheres"),
+			sizeof(FGPUCollisionSphere), CachedSpheres.Num(),
+			CachedSpheres.GetData(), sizeof(FGPUCollisionSphere) * CachedSpheres.Num())
+		: GraphBuilder.CreateBuffer(DummyDesc, TEXT("DummySpheres"));
+
+	FRDGBufferRef CapsulesBuffer = CachedCapsules.Num() > 0
+		? CreateStructuredBuffer(GraphBuilder, TEXT("StackPressure_Capsules"),
+			sizeof(FGPUCollisionCapsule), CachedCapsules.Num(),
+			CachedCapsules.GetData(), sizeof(FGPUCollisionCapsule) * CachedCapsules.Num())
+		: GraphBuilder.CreateBuffer(DummyDesc, TEXT("DummyCapsules"));
+
+	FRDGBufferRef BoxesBuffer = CachedBoxes.Num() > 0
+		? CreateStructuredBuffer(GraphBuilder, TEXT("StackPressure_Boxes"),
+			sizeof(FGPUCollisionBox), CachedBoxes.Num(),
+			CachedBoxes.GetData(), sizeof(FGPUCollisionBox) * CachedBoxes.Num())
+		: GraphBuilder.CreateBuffer(DummyDesc, TEXT("DummyBoxes"));
+
+	FRDGBufferRef ConvexesBuffer = CachedConvexHeaders.Num() > 0
+		? CreateStructuredBuffer(GraphBuilder, TEXT("StackPressure_Convexes"),
+			sizeof(FGPUCollisionConvex), CachedConvexHeaders.Num(),
+			CachedConvexHeaders.GetData(), sizeof(FGPUCollisionConvex) * CachedConvexHeaders.Num())
+		: GraphBuilder.CreateBuffer(DummyDesc, TEXT("DummyConvexes"));
+
+	FRDGBufferRef ConvexPlanesBuffer = CachedConvexPlanes.Num() > 0
+		? CreateStructuredBuffer(GraphBuilder, TEXT("StackPressure_ConvexPlanes"),
+			sizeof(FGPUConvexPlane), CachedConvexPlanes.Num(),
+			CachedConvexPlanes.GetData(), sizeof(FGPUConvexPlane) * CachedConvexPlanes.Num())
+		: GraphBuilder.CreateBuffer(DummyDesc, TEXT("DummyPlanes"));
+
+	FStackPressureCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FStackPressureCS::FParameters>();
+	PassParameters->Particles = InParticlesUAV;
+	PassParameters->Attachments = InAttachmentSRV;
+	PassParameters->CellCounts = InCellCountsSRV;
+	PassParameters->ParticleIndices = InParticleIndicesSRV;
+
+	// Collision primitives for surface normal calculation
+	PassParameters->CollisionSpheres = GraphBuilder.CreateSRV(SpheresBuffer);
+	PassParameters->SphereCount = CachedSpheres.Num();
+	PassParameters->CollisionCapsules = GraphBuilder.CreateSRV(CapsulesBuffer);
+	PassParameters->CapsuleCount = CachedCapsules.Num();
+	PassParameters->CollisionBoxes = GraphBuilder.CreateSRV(BoxesBuffer);
+	PassParameters->BoxCount = CachedBoxes.Num();
+	PassParameters->CollisionConvexes = GraphBuilder.CreateSRV(ConvexesBuffer);
+	PassParameters->ConvexCount = CachedConvexHeaders.Num();
+	PassParameters->ConvexPlanes = GraphBuilder.CreateSRV(ConvexPlanesBuffer);
+
+	// Parameters
+	PassParameters->ParticleCount = CurrentParticleCount;
+	PassParameters->SmoothingRadius = Params.SmoothingRadius;
+	PassParameters->StackPressureScale = Params.StackPressureScale;
+	PassParameters->CellSize = Params.CellSize;
+	PassParameters->Gravity = FVector3f(Params.Gravity);
+	PassParameters->DeltaTime = Params.DeltaTime;
+
+	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FStackPressureCS::ThreadGroupSize);
+
+	FComputeShaderUtils::AddPass(
+		GraphBuilder,
+		RDG_EVENT_NAME("GPUFluid::StackPressure"),
 		ComputeShader,
 		PassParameters,
 		FIntVector(NumGroups, 1, 1)

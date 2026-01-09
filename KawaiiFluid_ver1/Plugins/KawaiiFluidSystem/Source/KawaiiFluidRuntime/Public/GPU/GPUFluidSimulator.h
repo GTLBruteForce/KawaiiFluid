@@ -496,6 +496,15 @@ private:
 		FRDGBufferSRVRef ParticleIndicesSRV,
 		const FGPUFluidSimulationParams& Params);
 
+	/** Add stack pressure pass (weight transfer from stacked attached particles) */
+	void AddStackPressurePass(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferUAVRef ParticlesUAV,
+		FRDGBufferSRVRef AttachmentSRV,
+		FRDGBufferSRVRef CellCountsSRV,
+		FRDGBufferSRVRef ParticleIndicesSRV,
+		const FGPUFluidSimulationParams& Params);
+
 	/** Add bounds collision pass */
 	void AddBoundsCollisionPass(
 		FRDGBuilder& GraphBuilder,

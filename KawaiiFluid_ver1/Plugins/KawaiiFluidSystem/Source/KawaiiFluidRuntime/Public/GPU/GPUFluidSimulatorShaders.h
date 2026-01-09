@@ -1120,3 +1120,62 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
 	}
 };
+
+//=============================================================================
+// Stack Pressure Compute Shader
+// Applies weight transfer from stacked attached particles for realistic dripping
+// Particles higher up transfer their weight to particles below
+//=============================================================================
+
+class FStackPressureCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FStackPressureCS);
+	SHADER_USE_PARAMETER_STRUCT(FStackPressureCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		// Particle and attachment buffers
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUParticleAttachment>, Attachments)
+
+		// Spatial hash for neighbor search
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellCounts)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleIndices)
+
+		// Collision primitives (for surface normal calculation)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUCollisionSphere>, CollisionSpheres)
+		SHADER_PARAMETER(int32, SphereCount)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUCollisionCapsule>, CollisionCapsules)
+		SHADER_PARAMETER(int32, CapsuleCount)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUCollisionBox>, CollisionBoxes)
+		SHADER_PARAMETER(int32, BoxCount)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUCollisionConvex>, CollisionConvexes)
+		SHADER_PARAMETER(int32, ConvexCount)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUConvexPlane>, ConvexPlanes)
+
+		// Parameters
+		SHADER_PARAMETER(int32, ParticleCount)
+		SHADER_PARAMETER(float, SmoothingRadius)
+		SHADER_PARAMETER(float, StackPressureScale)
+		SHADER_PARAMETER(float, CellSize)
+		SHADER_PARAMETER(FVector3f, Gravity)
+		SHADER_PARAMETER(float, DeltaTime)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("SPATIAL_HASH_SIZE"), GPU_SPATIAL_HASH_SIZE);
+		OutEnvironment.SetDefine(TEXT("MAX_PARTICLES_PER_CELL"), GPU_MAX_PARTICLES_PER_CELL);
+	}
+};
