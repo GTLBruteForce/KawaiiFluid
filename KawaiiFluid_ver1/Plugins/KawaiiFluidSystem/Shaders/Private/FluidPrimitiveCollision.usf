@@ -35,6 +35,83 @@ StructuredBuffer<FGPUConvexPlane> ConvexPlanes;
 float CollisionThreshold;
 
 //=============================================================================
+// Collision Feedback Buffer (for Particle -> Player Interaction)
+//=============================================================================
+
+// Feedback buffer for CPU readback
+RWStructuredBuffer<FGPUCollisionFeedback> CollisionFeedback;
+
+// Atomic counter for feedback entries
+RWStructuredBuffer<uint> CollisionCounter;
+
+// Maximum number of feedback entries (prevents buffer overflow)
+int MaxCollisionFeedback;
+
+// Enable/disable feedback recording (0 = disabled, 1 = enabled)
+int bEnableCollisionFeedback;
+
+//=============================================================================
+// Collider Contact Count Buffer (간단한 충돌 카운트용)
+//=============================================================================
+
+// 콜라이더별 충돌 입자 수 (atomic increment)
+RWStructuredBuffer<uint> ColliderContactCounts;
+
+// 최대 콜라이더 수
+int MaxColliderCount;
+
+//=============================================================================
+// Helper Function: Record Collision Feedback
+//=============================================================================
+
+/**
+ * Records collision feedback for CPU readback (particle -> player interaction)
+ * Uses atomic counter to safely write to shared buffer
+ *
+ * @param particleIdx - Index of the colliding particle
+ * @param colliderIdx - Index of the collider (unique across all types)
+ * @param colliderType - Type of collider (0=Sphere, 1=Capsule, 2=Box, 3=Convex)
+ * @param density - Particle density at collision time
+ * @param normal - Collision surface normal
+ * @param penetration - Penetration depth (cm)
+ * @param velocity - Particle velocity (for drag force calculation)
+ * @param ownerID - Unique ID of collider owner (for filtering by actor)
+ */
+void RecordCollisionFeedback(int particleIdx, int colliderIdx, int colliderType,
+                             float density, float3 normal, float penetration, float3 velocity, int ownerID)
+{
+	// 콜라이더별 충돌 카운트 증가 (항상 실행)
+	if (colliderIdx >= 0 && colliderIdx < MaxColliderCount)
+	{
+		uint dummy;
+		InterlockedAdd(ColliderContactCounts[colliderIdx], 1, dummy);
+	}
+
+	// 상세 피드백 기록 (옵션)
+	if (bEnableCollisionFeedback == 0)
+	{
+		return;
+	}
+
+	uint feedbackIdx;
+	InterlockedAdd(CollisionCounter[0], 1, feedbackIdx);
+
+	if ((int)feedbackIdx < MaxCollisionFeedback)
+	{
+		FGPUCollisionFeedback feedback;
+		feedback.ParticleIndex = particleIdx;
+		feedback.ColliderIndex = colliderIdx;
+		feedback.ColliderType = colliderType;
+		feedback.Density = density;
+		feedback.ImpactNormal = normal;
+		feedback.Penetration = penetration;
+		feedback.ParticleVelocity = velocity;
+		feedback.OwnerID = ownerID;
+		CollisionFeedback[feedbackIdx] = feedback;
+	}
+}
+
+//=============================================================================
 // Main Compute Shader
 //=============================================================================
 
@@ -74,6 +151,9 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, sphere.Friction, sphere.Restitution);
 			originalPos = pos;  // Update for subsequent collisions
 			bCollided = true;
+
+			// Record feedback for particle -> player interaction (includes velocity for drag calculation)
+			RecordCollisionFeedback(idx, si, COLLIDER_TYPE_SPHERE, particle.Density, normal, penetration, particle.Velocity, sphere.OwnerID);
 		}
 	}
 
@@ -91,6 +171,9 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, capsule.Friction, capsule.Restitution);
 			originalPos = pos;
 			bCollided = true;
+
+			// Record feedback for particle -> player interaction (includes velocity for drag calculation)
+			RecordCollisionFeedback(idx, SphereCount + ci, COLLIDER_TYPE_CAPSULE, particle.Density, normal, penetration, particle.Velocity, capsule.OwnerID);
 		}
 	}
 
@@ -114,6 +197,9 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			{
 				particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
 			}
+
+			// Record feedback for particle -> player interaction (includes velocity for drag calculation)
+			RecordCollisionFeedback(idx, SphereCount + CapsuleCount + bi, COLLIDER_TYPE_BOX, particle.Density, normal, penetration, particle.Velocity, box.OwnerID);
 		}
 	}
 
@@ -158,6 +244,9 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			{
 				particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
 			}
+
+			// Record feedback for particle -> player interaction (includes velocity for drag calculation)
+			RecordCollisionFeedback(idx, SphereCount + CapsuleCount + BoxCount + cxi, COLLIDER_TYPE_CONVEX, particle.Density, normal, penetration, particle.Velocity, convex.OwnerID);
 		}
 	}
 

@@ -99,7 +99,8 @@ public:
 		TArray<struct FGPUCollisionConvex>& OutConvexes,
 		TArray<struct FGPUConvexPlane>& OutPlanes,
 		float Friction = 0.1f,
-		float Restitution = 0.3f
+		float Restitution = 0.3f,
+		int32 OwnerID = 0  // Unique ID for filtering collision feedback by owner
 	) const;
 
 	/** GPU 충돌용 primitive 데이터 내보내기 (본 트랜스폼 포함) */
@@ -112,7 +113,8 @@ public:
 		TArray<struct FGPUBoneTransform>& OutBoneTransforms,
 		TMap<FName, int32>& BoneNameToIndex,  // Bone name to index mapping (shared across colliders)
 		float Friction = 0.1f,
-		float Restitution = 0.3f
+		float Restitution = 0.3f,
+		int32 OwnerID = 0  // Unique ID for filtering collision feedback by owner
 	) const;
 
 protected:

@@ -1230,7 +1230,8 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 	TArray<FGPUCollisionConvex>& OutConvexes,
 	TArray<FGPUConvexPlane>& OutPlanes,
 	float InFriction,
-	float InRestitution
+	float InRestitution,
+	int32 InOwnerID
 ) const
 {
 	if (!bCacheValid)
@@ -1247,6 +1248,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUSphere.Friction = InFriction;
 		GPUSphere.Restitution = InRestitution;
 		GPUSphere.BoneIndex = -1;  // No bone tracking in legacy function
+		GPUSphere.OwnerID = InOwnerID;
 		OutSpheres.Add(GPUSphere);
 	}
 
@@ -1260,6 +1262,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUCapsule.Friction = InFriction;
 		GPUCapsule.Restitution = InRestitution;
 		GPUCapsule.BoneIndex = -1;  // No bone tracking in legacy function
+		GPUCapsule.OwnerID = InOwnerID;
 		OutCapsules.Add(GPUCapsule);
 	}
 
@@ -1278,6 +1281,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUBox.Friction = InFriction;
 		GPUBox.Restitution = InRestitution;
 		GPUBox.BoneIndex = -1;  // No bone tracking in legacy function
+		GPUBox.OwnerID = InOwnerID;
 		OutBoxes.Add(GPUBox);
 	}
 
@@ -1292,6 +1296,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUConvex.Friction = InFriction;
 		GPUConvex.Restitution = InRestitution;
 		GPUConvex.BoneIndex = -1;  // No bone tracking in legacy function
+		GPUConvex.OwnerID = InOwnerID;
 		OutConvexes.Add(GPUConvex);
 
 		// Add planes to the plane buffer
@@ -1314,12 +1319,22 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 	TArray<FGPUBoneTransform>& OutBoneTransforms,
 	TMap<FName, int32>& BoneNameToIndex,
 	float InFriction,
-	float InRestitution
+	float InRestitution,
+	int32 InOwnerID
 ) const
 {
 	if (!bCacheValid)
 	{
 		return;
+	}
+
+	// Debug: 어떤 primitive가 export되는지 로그 출력 (각 OwnerID당 한 번만)
+	static TSet<int32> LoggedOwnerIDs;
+	if (!LoggedOwnerIDs.Contains(InOwnerID) && (CachedSpheres.Num() > 0 || CachedCapsules.Num() > 0 || CachedBoxes.Num() > 0 || CachedConvexes.Num() > 0))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MeshFluidCollider Export (OwnerID=%d): Spheres=%d, Capsules=%d, Boxes=%d, Convexes=%d"),
+			InOwnerID, CachedSpheres.Num(), CachedCapsules.Num(), CachedBoxes.Num(), CachedConvexes.Num());
+		LoggedOwnerIDs.Add(InOwnerID);
 	}
 
 	// Helper lambda to get or create bone index
@@ -1360,6 +1375,7 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 		GPUSphere.Friction = InFriction;
 		GPUSphere.Restitution = InRestitution;
 		GPUSphere.BoneIndex = GetOrCreateBoneIndex(Sph.BoneName, Sph.BoneTransform);
+		GPUSphere.OwnerID = InOwnerID;
 		OutSpheres.Add(GPUSphere);
 	}
 
@@ -1373,6 +1389,7 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 		GPUCapsule.Friction = InFriction;
 		GPUCapsule.Restitution = InRestitution;
 		GPUCapsule.BoneIndex = GetOrCreateBoneIndex(Cap.BoneName, Cap.BoneTransform);
+		GPUCapsule.OwnerID = InOwnerID;
 		OutCapsules.Add(GPUCapsule);
 	}
 
@@ -1391,6 +1408,7 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 		GPUBox.Friction = InFriction;
 		GPUBox.Restitution = InRestitution;
 		GPUBox.BoneIndex = GetOrCreateBoneIndex(Box.BoneName, Box.BoneTransform);
+		GPUBox.OwnerID = InOwnerID;
 		OutBoxes.Add(GPUBox);
 	}
 
@@ -1405,6 +1423,7 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 		GPUConvex.Friction = InFriction;
 		GPUConvex.Restitution = InRestitution;
 		GPUConvex.BoneIndex = GetOrCreateBoneIndex(Cvx.BoneName, Cvx.BoneTransform);
+		GPUConvex.OwnerID = InOwnerID;
 		OutConvexes.Add(GPUConvex);
 
 		// Add planes to the plane buffer

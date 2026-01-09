@@ -310,3 +310,27 @@ uint ClearFlag(uint flags, uint flag)
 {
 	return flags & ~flag;
 }
+
+//=============================================================================
+// GPU Collision Feedback Structure (must match FGPUCollisionFeedback in C++)
+// Used for particle -> player interaction readback
+// 48 bytes total for drag-based force calculation
+//=============================================================================
+
+struct FGPUCollisionFeedback
+{
+	int ParticleIndex;       // 4 bytes - Index of the colliding particle
+	int ColliderIndex;       // 4 bytes - Index of the collider
+	int ColliderType;        // 4 bytes - 0=Sphere, 1=Capsule, 2=Box, 3=Convex
+	float Density;           // 4 bytes - Particle density at collision time (total: 16)
+	float3 ImpactNormal;     // 12 bytes - Collision surface normal
+	float Penetration;       // 4 bytes - Penetration depth (cm) (total: 32)
+	float3 ParticleVelocity; // 12 bytes - Particle velocity (for drag calculation)
+	int OwnerID;             // 4 bytes - Unique ID of collider owner (total: 48)
+};
+
+// Collision primitive type constants
+#define COLLIDER_TYPE_SPHERE   0
+#define COLLIDER_TYPE_CAPSULE  1
+#define COLLIDER_TYPE_BOX      2
+#define COLLIDER_TYPE_CONVEX   3

@@ -133,6 +133,9 @@ void FGPUFluidSimulator::ReleaseRHI()
 	CachedConvexHeaders.Empty();
 	CachedConvexPlanes.Empty();
 	bCollisionPrimitivesValid = false;
+
+	// Release collision feedback buffers
+	ReleaseCollisionFeedbackBuffers();
 }
 
 void FGPUFluidSimulator::ResizeBuffers(FRHICommandListBase& RHICmdList, int32 NewCapacity)
@@ -659,6 +662,105 @@ void FGPUFluidSimulator::SimulateSubstep(const FGPUFluidSimulationParams& Params
 						UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> READBACK: Copied %d particles for detailed stats"), ParticleCount);
 					}
 				}
+			}
+
+			// =====================================================
+			// Phase 3: Collision Feedback Readback (Particle -> Player Interaction)
+			// Triple-buffered async readback for force calculation
+			// =====================================================
+
+			if (Self->bCollisionFeedbackEnabled && Self->CollisionFeedbackBuffer.IsValid() && Self->CollisionCounterBuffer.IsValid())
+			{
+				// Ensure staging buffers are allocated
+				if (!Self->FeedbackStagingBuffers[0].IsValid())
+				{
+					Self->AllocateCollisionFeedbackBuffers(RHICmdList);
+				}
+
+				const int32 WriteIdx = Self->FeedbackFrameNumber % Self->NUM_FEEDBACK_BUFFERS;
+
+				// Transition buffers for copy
+				RHICmdList.Transition(FRHITransitionInfo(
+					Self->CollisionFeedbackBuffer->GetRHI(),
+					ERHIAccess::UAVCompute,
+					ERHIAccess::CopySrc));
+
+				RHICmdList.Transition(FRHITransitionInfo(
+					Self->CollisionCounterBuffer->GetRHI(),
+					ERHIAccess::UAVCompute,
+					ERHIAccess::CopySrc));
+
+				// Copy to staging buffers
+				RHICmdList.CopyBufferRegion(
+					Self->FeedbackStagingBuffers[WriteIdx],
+					0,
+					Self->CollisionFeedbackBuffer->GetRHI(),
+					0,
+					Self->MAX_COLLISION_FEEDBACK * sizeof(FGPUCollisionFeedback)
+				);
+
+				RHICmdList.CopyBufferRegion(
+					Self->CounterStagingBuffers[WriteIdx],
+					0,
+					Self->CollisionCounterBuffer->GetRHI(),
+					0,
+					sizeof(uint32)
+				);
+
+				// Transition back for next frame
+				RHICmdList.Transition(FRHITransitionInfo(
+					Self->CollisionFeedbackBuffer->GetRHI(),
+					ERHIAccess::CopySrc,
+					ERHIAccess::UAVCompute));
+
+				RHICmdList.Transition(FRHITransitionInfo(
+					Self->CollisionCounterBuffer->GetRHI(),
+					ERHIAccess::CopySrc,
+					ERHIAccess::UAVCompute));
+
+				// Process readback from older frames
+				Self->ProcessCollisionFeedbackReadback(RHICmdList);
+
+				if (bLogThisFrame)
+				{
+					UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> COLLISION FEEDBACK: Copied to staging buffer %d"), WriteIdx);
+				}
+			}
+
+			// =====================================================
+			// Copy Collider Contact Counts to staging (항상 실행 - 간단한 충돌 감지용)
+			// =====================================================
+			if (Self->ColliderContactCountBuffer.IsValid())
+			{
+				// Ensure staging buffer is allocated
+				if (!Self->ColliderContactCountStagingBuffer.IsValid())
+				{
+					Self->AllocateCollisionFeedbackBuffers(RHICmdList);
+				}
+
+				// Transition for copy
+				RHICmdList.Transition(FRHITransitionInfo(
+					Self->ColliderContactCountBuffer->GetRHI(),
+					ERHIAccess::UAVCompute,
+					ERHIAccess::CopySrc));
+
+				// Copy to staging buffer
+				RHICmdList.CopyBufferRegion(
+					Self->ColliderContactCountStagingBuffer,
+					0,
+					Self->ColliderContactCountBuffer->GetRHI(),
+					0,
+					Self->MAX_COLLIDER_COUNT * sizeof(uint32)
+				);
+
+				// Transition back for next frame
+				RHICmdList.Transition(FRHITransitionInfo(
+					Self->ColliderContactCountBuffer->GetRHI(),
+					ERHIAccess::CopySrc,
+					ERHIAccess::UAVCompute));
+
+				// Read back contact counts (직접 읽기 - 1프레임 레이턴시 허용)
+				Self->ProcessColliderContactCountReadback(RHICmdList);
 			}
 
 			// Mark that we have valid GPU results (buffer is ready for rendering)
@@ -1692,22 +1794,132 @@ void FGPUFluidSimulator::AddPrimitiveCollisionPass(
 		ConvexPlanesSRV = GraphBuilder.CreateSRV(ConvexPlanesBuffer);
 	}
 
-	// Use the pass builder
-	FGPUFluidSimulatorPassBuilder::AddPrimitiveCollisionPass(
+	// Create collision feedback buffers (for particle -> player interaction)
+	FRDGBufferRef FeedbackBuffer = nullptr;
+	FRDGBufferRef CounterBuffer = nullptr;
+
+	// Create feedback buffer (persistent across frames for extraction)
+	if (bCollisionFeedbackEnabled)
+	{
+		// Create or reuse feedback buffer
+		if (CollisionFeedbackBuffer.IsValid())
+		{
+			FeedbackBuffer = GraphBuilder.RegisterExternalBuffer(CollisionFeedbackBuffer, TEXT("GPUCollisionFeedback"));
+		}
+		else
+		{
+			FRDGBufferDesc FeedbackDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUCollisionFeedback), MAX_COLLISION_FEEDBACK);
+			FeedbackBuffer = GraphBuilder.CreateBuffer(FeedbackDesc, TEXT("GPUCollisionFeedback"));
+		}
+
+		// Create counter buffer (reset each frame)
+		if (CollisionCounterBuffer.IsValid())
+		{
+			CounterBuffer = GraphBuilder.RegisterExternalBuffer(CollisionCounterBuffer, TEXT("GPUCollisionCounter"));
+		}
+		else
+		{
+			FRDGBufferDesc CounterDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1);
+			CounterBuffer = GraphBuilder.CreateBuffer(CounterDesc, TEXT("GPUCollisionCounter"));
+		}
+
+		// Clear counter at start of frame
+		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(CounterBuffer), 0);
+	}
+	else
+	{
+		// Create dummy buffers when feedback is disabled
+		FRDGBufferDesc DummyFeedbackDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUCollisionFeedback), 1);
+		FeedbackBuffer = GraphBuilder.CreateBuffer(DummyFeedbackDesc, TEXT("GPUCollisionFeedbackDummy"));
+
+		FRDGBufferDesc DummyCounterDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1);
+		CounterBuffer = GraphBuilder.CreateBuffer(DummyCounterDesc, TEXT("GPUCollisionCounterDummy"));
+	}
+
+	// Create collider contact count buffer (항상 생성 - 간단한 충돌 감지용)
+	FRDGBufferRef ContactCountBuffer = nullptr;
+	if (ColliderContactCountBuffer.IsValid())
+	{
+		ContactCountBuffer = GraphBuilder.RegisterExternalBuffer(ColliderContactCountBuffer, TEXT("ColliderContactCounts"));
+	}
+	else
+	{
+		FRDGBufferDesc ContactCountDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), MAX_COLLIDER_COUNT);
+		ContactCountBuffer = GraphBuilder.CreateBuffer(ContactCountDesc, TEXT("ColliderContactCounts"));
+	}
+
+	// Clear contact counts at start of frame
+	AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(ContactCountBuffer), 0);
+
+	// Dispatch primitive collision shader directly (with feedback buffers)
+	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	TShaderMapRef<FPrimitiveCollisionCS> ComputeShader(GlobalShaderMap);
+
+	FPrimitiveCollisionCS::FParameters* PassParameters =
+		GraphBuilder.AllocParameters<FPrimitiveCollisionCS::FParameters>();
+
+	PassParameters->Particles = ParticlesUAV;
+	PassParameters->ParticleCount = CurrentParticleCount;
+	PassParameters->ParticleRadius = Params.ParticleRadius;
+	PassParameters->CollisionThreshold = PrimitiveCollisionThreshold;
+
+	PassParameters->CollisionSpheres = SpheresSRV;
+	PassParameters->SphereCount = CachedSpheres.Num();
+
+	PassParameters->CollisionCapsules = CapsulesSRV;
+	PassParameters->CapsuleCount = CachedCapsules.Num();
+
+	PassParameters->CollisionBoxes = BoxesSRV;
+	PassParameters->BoxCount = CachedBoxes.Num();
+
+	PassParameters->CollisionConvexes = ConvexesSRV;
+	PassParameters->ConvexCount = CachedConvexHeaders.Num();
+
+	PassParameters->ConvexPlanes = ConvexPlanesSRV;
+
+	// Collision feedback parameters
+	PassParameters->CollisionFeedback = GraphBuilder.CreateUAV(FeedbackBuffer);
+	PassParameters->CollisionCounter = GraphBuilder.CreateUAV(CounterBuffer);
+	PassParameters->MaxCollisionFeedback = MAX_COLLISION_FEEDBACK;
+	PassParameters->bEnableCollisionFeedback = bCollisionFeedbackEnabled ? 1 : 0;
+
+	// Collider contact count parameters (항상 활성화 - 간단한 충돌 감지용)
+	PassParameters->ColliderContactCounts = GraphBuilder.CreateUAV(ContactCountBuffer);
+	PassParameters->MaxColliderCount = MAX_COLLIDER_COUNT;
+
+	const int32 ThreadGroupSize = FPrimitiveCollisionCS::ThreadGroupSize;
+	const int32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, ThreadGroupSize);
+
+	FComputeShaderUtils::AddPass(
 		GraphBuilder,
-		ParticlesUAV,
-		SpheresSRV,
-		CapsulesSRV,
-		BoxesSRV,
-		ConvexesSRV,
-		ConvexPlanesSRV,
-		CachedSpheres.Num(),
-		CachedCapsules.Num(),
-		CachedBoxes.Num(),
-		CachedConvexHeaders.Num(),
-		CurrentParticleCount,
-		Params.ParticleRadius,
-		PrimitiveCollisionThreshold
+		RDG_EVENT_NAME("GPUFluid::PrimitiveCollision(%d particles, %d primitives, feedback=%s)",
+			CurrentParticleCount, CachedSpheres.Num() + CachedCapsules.Num() + CachedBoxes.Num() + CachedConvexHeaders.Num(),
+			bCollisionFeedbackEnabled ? TEXT("ON") : TEXT("OFF")),
+		ComputeShader,
+		PassParameters,
+		FIntVector(NumGroups, 1, 1));
+
+	// Extract feedback buffers for next frame (only if feedback is enabled)
+	if (bCollisionFeedbackEnabled)
+	{
+		GraphBuilder.QueueBufferExtraction(
+			FeedbackBuffer,
+			&CollisionFeedbackBuffer,
+			ERHIAccess::UAVCompute
+		);
+
+		GraphBuilder.QueueBufferExtraction(
+			CounterBuffer,
+			&CollisionCounterBuffer,
+			ERHIAccess::UAVCompute
+		);
+	}
+
+	// Always extract collider contact count buffer (간단한 충돌 감지용)
+	GraphBuilder.QueueBufferExtraction(
+		ContactCountBuffer,
+		&ColliderContactCountBuffer,
+		ERHIAccess::UAVCompute
 	);
 }
 
@@ -2678,4 +2890,294 @@ void FGPUFluidSimulator::AddClearDetachedFlagPass(
 		PassParameters,
 		FIntVector(NumGroups, 1, 1)
 	);
+}
+
+//=============================================================================
+// Collision Feedback Implementation (Particle -> Player Interaction)
+// GPU collision data readback for force calculation and event triggering
+//=============================================================================
+
+void FGPUFluidSimulator::AllocateCollisionFeedbackBuffers(FRHICommandListImmediate& RHICmdList)
+{
+	// Allocate staging buffers for triple buffering
+	for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
+	{
+		if (!FeedbackStagingBuffers[i].IsValid())
+		{
+			FRHIResourceCreateInfo CreateInfo(*FString::Printf(TEXT("CollisionFeedbackStaging_%d"), i));
+			FeedbackStagingBuffers[i] = RHICmdList.CreateStructuredBuffer(
+				sizeof(FGPUCollisionFeedback),
+				MAX_COLLISION_FEEDBACK * sizeof(FGPUCollisionFeedback),
+				BUF_None,
+				ERHIAccess::CopyDest,
+				CreateInfo
+			);
+		}
+
+		if (!CounterStagingBuffers[i].IsValid())
+		{
+			FRHIResourceCreateInfo CreateInfo(*FString::Printf(TEXT("CollisionCounterStaging_%d"), i));
+			CounterStagingBuffers[i] = RHICmdList.CreateStructuredBuffer(
+				sizeof(uint32),
+				sizeof(uint32),
+				BUF_None,
+				ERHIAccess::CopyDest,
+				CreateInfo
+			);
+		}
+	}
+
+	// Initialize ready feedback array
+	ReadyFeedback.SetNum(MAX_COLLISION_FEEDBACK);
+	ReadyFeedbackCount = 0;
+
+	// Allocate collider contact count staging buffer
+	if (!ColliderContactCountStagingBuffer.IsValid())
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("ColliderContactCountStaging"));
+		ColliderContactCountStagingBuffer = RHICmdList.CreateStructuredBuffer(
+			sizeof(uint32),
+			MAX_COLLIDER_COUNT * sizeof(uint32),
+			BUF_None,
+			ERHIAccess::CopyDest,
+			CreateInfo
+		);
+	}
+
+	// Initialize ready contact counts array
+	ReadyColliderContactCounts.SetNumZeroed(MAX_COLLIDER_COUNT);
+
+	UE_LOG(LogGPUFluidSimulator, Log, TEXT("Collision Feedback buffers allocated (MaxFeedback=%d, NumBuffers=%d, MaxColliders=%d)"), MAX_COLLISION_FEEDBACK, NUM_FEEDBACK_BUFFERS, MAX_COLLIDER_COUNT);
+}
+
+void FGPUFluidSimulator::ReleaseCollisionFeedbackBuffers()
+{
+	CollisionFeedbackBuffer.SafeRelease();
+	CollisionCounterBuffer.SafeRelease();
+	ColliderContactCountBuffer.SafeRelease();
+	ColliderContactCountStagingBuffer.SafeRelease();
+
+	for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
+	{
+		FeedbackStagingBuffers[i].SafeRelease();
+		CounterStagingBuffers[i].SafeRelease();
+	}
+
+	ReadyFeedback.Empty();
+	ReadyFeedbackCount = 0;
+	ReadyColliderContactCounts.Empty();
+	CurrentFeedbackWriteIndex = 0;
+	CompletedFeedbackFrame.store(-1);
+	FeedbackFrameNumber = 0;
+}
+
+void FGPUFluidSimulator::ProcessCollisionFeedbackReadback(FRHICommandListImmediate& RHICmdList)
+{
+	if (!bCollisionFeedbackEnabled)
+	{
+		return;
+	}
+
+	// Ensure staging buffers are allocated
+	if (!FeedbackStagingBuffers[0].IsValid())
+	{
+		AllocateCollisionFeedbackBuffers(RHICmdList);
+	}
+
+	// Triple buffer write index for this frame
+	const int32 WriteIdx = FeedbackFrameNumber % NUM_FEEDBACK_BUFFERS;
+
+	// Read from buffer that was written 2 frames ago (allowing GPU latency)
+	const int32 ReadIdx = (FeedbackFrameNumber - 2 + NUM_FEEDBACK_BUFFERS) % NUM_FEEDBACK_BUFFERS;
+
+	// Only read if we have completed at least 2 frames
+	if (FeedbackFrameNumber >= 2)
+	{
+		// Read counter first
+		uint32 FeedbackCount = 0;
+		{
+			uint32* CounterData = (uint32*)RHICmdList.LockBuffer(
+				CounterStagingBuffers[ReadIdx], 0, sizeof(uint32), RLM_ReadOnly);
+			if (CounterData)
+			{
+				FeedbackCount = *CounterData;
+			}
+			RHICmdList.UnlockBuffer(CounterStagingBuffers[ReadIdx]);
+		}
+
+		// Clamp to max
+		FeedbackCount = FMath::Min(FeedbackCount, (uint32)MAX_COLLISION_FEEDBACK);
+
+		// Read feedback data if any
+		if (FeedbackCount > 0)
+		{
+			FScopeLock Lock(&FeedbackLock);
+
+			const uint32 CopySize = FeedbackCount * sizeof(FGPUCollisionFeedback);
+			FGPUCollisionFeedback* FeedbackData = (FGPUCollisionFeedback*)RHICmdList.LockBuffer(
+				FeedbackStagingBuffers[ReadIdx], 0, CopySize, RLM_ReadOnly);
+
+			if (FeedbackData)
+			{
+				ReadyFeedback.SetNum(FeedbackCount);
+				FMemory::Memcpy(ReadyFeedback.GetData(), FeedbackData, CopySize);
+				ReadyFeedbackCount = FeedbackCount;
+			}
+
+			RHICmdList.UnlockBuffer(FeedbackStagingBuffers[ReadIdx]);
+
+			UE_LOG(LogGPUFluidSimulator, Verbose, TEXT("Collision Feedback: Read %d entries from frame %d"), FeedbackCount, FeedbackFrameNumber - 2);
+		}
+		else
+		{
+			FScopeLock Lock(&FeedbackLock);
+			ReadyFeedbackCount = 0;
+		}
+	}
+
+	// Copy current frame's feedback to staging buffer (done after RDG execute in SimulateSubstep)
+	// Note: The actual copy is done in SimulateSubstep after the shader writes to the buffers
+
+	FeedbackFrameNumber++;
+}
+
+void FGPUFluidSimulator::ProcessColliderContactCountReadback(FRHICommandListImmediate& RHICmdList)
+{
+	// Ensure staging buffer is valid
+	if (!ColliderContactCountStagingBuffer.IsValid())
+	{
+		return;
+	}
+
+	// Read contact counts from staging buffer
+	uint32* CountData = (uint32*)RHICmdList.LockBuffer(
+		ColliderContactCountStagingBuffer, 0, MAX_COLLIDER_COUNT * sizeof(uint32), RLM_ReadOnly);
+
+	if (CountData)
+	{
+		FScopeLock Lock(&FeedbackLock);
+
+		// Copy to ready array
+		ReadyColliderContactCounts.SetNumUninitialized(MAX_COLLIDER_COUNT);
+		for (int32 i = 0; i < MAX_COLLIDER_COUNT; ++i)
+		{
+			ReadyColliderContactCounts[i] = static_cast<int32>(CountData[i]);
+		}
+	}
+
+	RHICmdList.UnlockBuffer(ColliderContactCountStagingBuffer);
+}
+
+bool FGPUFluidSimulator::GetCollisionFeedbackForCollider(int32 ColliderIndex, TArray<FGPUCollisionFeedback>& OutFeedback, int32& OutCount)
+{
+	FScopeLock Lock(&FeedbackLock);
+
+	OutFeedback.Reset();
+	OutCount = 0;
+
+	if (!bCollisionFeedbackEnabled || ReadyFeedbackCount == 0)
+	{
+		return false;
+	}
+
+	// Filter feedback for this collider
+	for (int32 i = 0; i < ReadyFeedbackCount; ++i)
+	{
+		if (ReadyFeedback[i].ColliderIndex == ColliderIndex)
+		{
+			OutFeedback.Add(ReadyFeedback[i]);
+		}
+	}
+
+	OutCount = OutFeedback.Num();
+	return OutCount > 0;
+}
+
+bool FGPUFluidSimulator::GetAllCollisionFeedback(TArray<FGPUCollisionFeedback>& OutFeedback, int32& OutCount)
+{
+	FScopeLock Lock(&FeedbackLock);
+
+	OutCount = ReadyFeedbackCount;
+
+	if (!bCollisionFeedbackEnabled || ReadyFeedbackCount == 0)
+	{
+		OutFeedback.Reset();
+		return false;
+	}
+
+	OutFeedback.SetNum(ReadyFeedbackCount);
+	FMemory::Memcpy(OutFeedback.GetData(), ReadyFeedback.GetData(), ReadyFeedbackCount * sizeof(FGPUCollisionFeedback));
+
+	return true;
+}
+
+//=============================================================================
+// Collider Contact Count API Implementation
+//=============================================================================
+
+int32 FGPUFluidSimulator::GetColliderContactCount(int32 ColliderIndex) const
+{
+	if (ColliderIndex < 0 || ColliderIndex >= ReadyColliderContactCounts.Num())
+	{
+		return 0;
+	}
+	return ReadyColliderContactCounts[ColliderIndex];
+}
+
+void FGPUFluidSimulator::GetAllColliderContactCounts(TArray<int32>& OutCounts) const
+{
+	OutCounts = ReadyColliderContactCounts;
+}
+
+int32 FGPUFluidSimulator::GetTotalColliderCount() const
+{
+	return CachedSpheres.Num() + CachedCapsules.Num() + CachedBoxes.Num() + CachedConvexHeaders.Num();
+}
+
+int32 FGPUFluidSimulator::GetContactCountForOwner(int32 OwnerID) const
+{
+	int32 TotalCount = 0;
+	int32 ColliderIndex = 0;
+
+	// Spheres: indices 0 to SphereCount-1
+	for (int32 i = 0; i < CachedSpheres.Num(); ++i)
+	{
+		if (CachedSpheres[i].OwnerID == OwnerID)
+		{
+			TotalCount += GetColliderContactCount(ColliderIndex);
+		}
+		ColliderIndex++;
+	}
+
+	// Capsules: indices SphereCount to SphereCount+CapsuleCount-1
+	for (int32 i = 0; i < CachedCapsules.Num(); ++i)
+	{
+		if (CachedCapsules[i].OwnerID == OwnerID)
+		{
+			TotalCount += GetColliderContactCount(ColliderIndex);
+		}
+		ColliderIndex++;
+	}
+
+	// Boxes: indices SphereCount+CapsuleCount to SphereCount+CapsuleCount+BoxCount-1
+	for (int32 i = 0; i < CachedBoxes.Num(); ++i)
+	{
+		if (CachedBoxes[i].OwnerID == OwnerID)
+		{
+			TotalCount += GetColliderContactCount(ColliderIndex);
+		}
+		ColliderIndex++;
+	}
+
+	// Convexes: indices SphereCount+CapsuleCount+BoxCount to Total-1
+	for (int32 i = 0; i < CachedConvexHeaders.Num(); ++i)
+	{
+		if (CachedConvexHeaders[i].OwnerID == OwnerID)
+		{
+			TotalCount += GetColliderContactCount(ColliderIndex);
+		}
+		ColliderIndex++;
+	}
+
+	return TotalCount;
 }

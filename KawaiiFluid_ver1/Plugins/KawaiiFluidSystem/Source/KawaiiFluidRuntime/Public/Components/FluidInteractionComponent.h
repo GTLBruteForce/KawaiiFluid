@@ -8,6 +8,7 @@
 
 class UKawaiiFluidSimulatorSubsystem;
 class UFluidCollider;
+class UMeshFluidCollider;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFluidAttached, int32, ParticleCount);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnFluidDetached);
@@ -22,6 +23,31 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFluidColliding, int32, CollidingC
  * Collider 충돌 종료 (모든 파티클이 Collider에서 벗어남)
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnFluidStopColliding);
+
+//========================================
+// GPU Collision Feedback Delegates (Particle -> Player Interaction)
+//========================================
+
+/**
+ * 특정 유체 영역에 진입했을 때 발생
+ * @param FluidTag 유체 태그 (예: "Water", "Lava")
+ * @param ParticleCount 충돌 중인 파티클 수
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnFluidEnter, FName, FluidTag, int32, ParticleCount);
+
+/**
+ * 특정 유체 영역에서 벗어났을 때 발생
+ * @param FluidTag 유체 태그 (예: "Water", "Lava")
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFluidExit, FName, FluidTag);
+
+/**
+ * 유체로부터 받는 힘이 업데이트될 때 발생 (매 틱)
+ * @param Force 유체로부터 받는 힘 벡터 (cm/s²)
+ * @param Pressure 평균 압력 값
+ * @param ContactCount 접촉 중인 파티클 수
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnFluidForceUpdate, FVector, Force, float, Pressure, int32, ContactCount);
 
 /**
  * 유체 상호작용 컴포넌트
@@ -156,6 +182,104 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Per-Polygon Collision")
 	FBox GetPerPolygonFilterAABB() const;
 
+	//========================================
+	// GPU Collision Feedback (Particle -> Player Interaction)
+	// GPU에서 계산된 충돌 정보를 기반으로 힘 계산 및 이벤트 발생
+	//========================================
+
+	/**
+	 * GPU 충돌 피드백 활성화
+	 * 활성화 시 GPU에서 파티클-콜라이더 충돌 정보를 리드백하여 힘/이벤트 계산
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	          meta = (ToolTip = "GPU 충돌 피드백 활성화.\n활성화 시 GPU에서 파티클-콜라이더 충돌 정보를 리드백하여\n물리적 힘 계산 및 유체 이벤트(OnFluidEnter/Exit)를 발생시킵니다.\n2-3 프레임 지연이 있지만 FPS 영향은 최소화됩니다."))
+	bool bEnableForceFeedback = false;
+
+	/**
+	 * 힘 스무딩 속도 (1/s)
+	 * 높을수록 힘 변화가 빠르고, 낮을수록 부드럽게 변화
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	          meta = (EditCondition = "bEnableForceFeedback", ClampMin = "0.1", ClampMax = "50.0",
+	                  ToolTip = "힘 스무딩 속도 (1/s).\n높을수록 힘 변화가 빠르고, 낮을수록 부드럽게 변화합니다.\n급격한 힘 변화를 방지하려면 5~15 권장."))
+	float ForceSmoothingSpeed = 10.0f;
+
+	/**
+	 * 항력 계수 (C_d)
+	 * 유체 항력 공식에서 사용되는 무차원 계수
+	 * 구체: ~0.47, 캡슐/원통: ~1.0, 사람: ~1.0-1.3
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	          meta = (EditCondition = "bEnableForceFeedback", ClampMin = "0.1", ClampMax = "3.0",
+	                  ToolTip = "항력 계수 (C_d).\n유체 항력 공식 F = ½ρCdA|v|² 에서 사용됩니다.\n구체: ~0.47, 캡슐/원통: ~1.0, 사람: ~1.0-1.3"))
+	float DragCoefficient = 1.0f;
+
+	/**
+	 * 항력 → 힘 변환 배율
+	 * 계산된 항력을 실제 게임 힘으로 변환할 때 적용되는 스케일
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	          meta = (EditCondition = "bEnableForceFeedback", ClampMin = "0.0001", ClampMax = "10.0",
+	                  ToolTip = "항력 → 힘 변환 배율.\n물리적 항력 값을 게임에 맞게 스케일링합니다.\n파도가 캐릭터를 밀어내는 강도를 조절합니다."))
+	float DragForceMultiplier = 0.01f;
+
+	/**
+	 * 유체 태그별 트리거를 위한 최소 파티클 수
+	 * 이 수 이상의 파티클이 충돌해야 OnFluidEnter 이벤트 발생
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	          meta = (EditCondition = "bEnableForceFeedback", ClampMin = "1", ClampMax = "100",
+	                  ToolTip = "OnFluidEnter/Exit 이벤트를 위한 최소 파티클 수.\n이 수 이상의 파티클이 충돌해야 이벤트가 발생합니다.\n노이즈 방지를 위해 5~20 권장."))
+	int32 MinParticleCountForFluidEvent = 5;
+
+	/** 현재 유체로부터 받는 힘 벡터 (스무딩 적용됨) */
+	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Force Feedback")
+	FVector CurrentFluidForce;
+
+	/** 현재 접촉 중인 파티클 수 */
+	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Force Feedback")
+	int32 CurrentContactCount;
+
+	/** 현재 평균 압력 값 */
+	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Force Feedback")
+	float CurrentAveragePressure;
+
+	/** 유체 영역 진입 이벤트 (유체 태그별) */
+	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
+	FOnFluidEnter OnFluidEnter;
+
+	/** 유체 영역 이탈 이벤트 (유체 태그별) */
+	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
+	FOnFluidExit OnFluidExit;
+
+	/** 유체 힘 업데이트 이벤트 (매 틱, Force Feedback 활성화 시) */
+	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
+	FOnFluidForceUpdate OnFluidForceUpdate;
+
+	/** 현재 유체 힘 반환 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	FVector GetCurrentFluidForce() const { return CurrentFluidForce; }
+
+	/** 현재 평균 압력 반환 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	float GetCurrentFluidPressure() const { return CurrentAveragePressure; }
+
+	/**
+	 * 유체 힘을 CharacterMovement에 적용
+	 * CharacterMovementComponent가 있는 액터에서만 작동
+	 * @param ForceScale 힘 스케일 배율 (기본 1.0)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Force Feedback")
+	void ApplyFluidForceToCharacterMovement(float ForceScale = 1.0f);
+
+	/**
+	 * 특정 유체 태그와 현재 충돌 중인지 확인
+	 * @param FluidTag 확인할 유체 태그 (예: "Water", "Lava")
+	 * @return 해당 태그의 유체와 충돌 중이면 true
+	 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	bool IsCollidingWithFluidTag(FName FluidTag) const;
+
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction")
 	int32 GetAttachedParticleCount() const { return AttachedParticleCount; }
 
@@ -182,7 +306,7 @@ protected:
 
 private:
 	UPROPERTY()
-	UFluidCollider* AutoCollider;
+	UMeshFluidCollider* AutoCollider;
 
 	/** 이전 프레임 충돌 상태 */
 	bool bWasColliding = false;
@@ -194,4 +318,32 @@ private:
 
 	/** Collider와 충돌 중인 파티클 감지 */
 	void DetectCollidingParticles();
+
+	//========================================
+	// Force Feedback Internal State
+	//========================================
+
+	/** 스무딩 전 누적 힘 (스무딩에 사용) */
+	FVector SmoothedForce = FVector::ZeroVector;
+
+	/** 유체 태그별 이전 프레임 충돌 상태 (Enter/Exit 이벤트용) */
+	TMap<FName, bool> PreviousFluidTagStates;
+
+	/** 유체 태그별 현재 프레임 충돌 파티클 수 */
+	TMap<FName, int32> CurrentFluidTagCounts;
+
+	/** 이 컴포넌트와 연결된 콜라이더 인덱스 (GPU 피드백 필터링용) */
+	int32 ColliderIndex = -1;
+
+	/** GPU 피드백이 이미 활성화되었는지 여부 */
+	bool bGPUFeedbackEnabled = false;
+
+	/** GPU 피드백 처리 (매 틱 호출) */
+	void ProcessCollisionFeedback(float DeltaTime);
+
+	/** 유체 태그 이벤트 업데이트 (Enter/Exit) */
+	void UpdateFluidTagEvents();
+
+	/** GPU Collision Feedback 자동 활성화 */
+	void EnableGPUCollisionFeedbackIfNeeded();
 };

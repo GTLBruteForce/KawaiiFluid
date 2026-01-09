@@ -318,6 +318,7 @@ public:
 //=============================================================================
 // Primitive Collision Compute Shader
 // Pass 6.5: Apply collision with explicit primitives (spheres, capsules, boxes, convexes)
+// Also records collision feedback for particle -> player interaction (when enabled)
 //=============================================================================
 
 class FPrimitiveCollisionCS : public FGlobalShader
@@ -347,6 +348,16 @@ public:
 		SHADER_PARAMETER(int32, ConvexCount)
 
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUConvexPlane>, ConvexPlanes)
+
+		// Collision Feedback (for particle -> player interaction)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUCollisionFeedback>, CollisionFeedback)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CollisionCounter)
+		SHADER_PARAMETER(int32, MaxCollisionFeedback)
+		SHADER_PARAMETER(int32, bEnableCollisionFeedback)
+
+		// Collider Contact Counts (간단한 충돌 카운트용)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ColliderContactCounts)
+		SHADER_PARAMETER(int32, MaxColliderCount)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;

@@ -414,6 +414,10 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 
 				if (MeshCollider->IsCacheValid())
 				{
+					// Get OwnerID for collision feedback filtering
+					// Use the owner actor's UniqueID to identify which actor owns these primitives
+					int32 OwnerID = ColliderOwner ? ColliderOwner->GetUniqueID() : 0;
+
 					// Use bone-aware export for GPU adhesion
 					if (bUseGPUAdhesion)
 					{
@@ -426,7 +430,8 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 							CollisionPrimitives.BoneTransforms,
 							PersistentBoneNameToIndex,  // Use persistent mapping
 							DefaultFriction,
-							DefaultRestitution
+							DefaultRestitution,
+							OwnerID
 						);
 					}
 					else
@@ -439,7 +444,8 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 							CollisionPrimitives.Convexes,
 							CollisionPrimitives.ConvexPlanes,
 							DefaultFriction,
-							DefaultRestitution
+							DefaultRestitution,
+							OwnerID
 						);
 					}
 				}

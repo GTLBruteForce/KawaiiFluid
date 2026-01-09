@@ -645,13 +645,13 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 	}
 
 	// Debug log - all should be at internal resolution now
-	UE_LOG(LogTemp, Warning, TEXT("=== PrePostProcess TransparencyPass ==="));
-	UE_LOG(LogTemp, Warning, TEXT("ViewRect: Min(%d,%d) Size(%d,%d)"),
-	       ViewRect.Min.X, ViewRect.Min.Y, ViewRect.Width(), ViewRect.Height());
-	UE_LOG(LogTemp, Warning, TEXT("SceneColor Size: (%d,%d)"),
-	       SceneColorTexture->Desc.Extent.X, SceneColorTexture->Desc.Extent.Y);
-	UE_LOG(LogTemp, Warning, TEXT("GBufferA Size: (%d,%d)"),
-	       GBufferATexture->Desc.Extent.X, GBufferATexture->Desc.Extent.Y);
+	//UE_LOG(LogTemp, Warning, TEXT("=== PrePostProcess TransparencyPass ==="));
+	//UE_LOG(LogTemp, Warning, TEXT("ViewRect: Min(%d,%d) Size(%d,%d)"),
+	//       ViewRect.Min.X, ViewRect.Min.Y, ViewRect.Width(), ViewRect.Height());
+	//UE_LOG(LogTemp, Warning, TEXT("SceneColor Size: (%d,%d)"),
+	//       SceneColorTexture->Desc.Extent.X, SceneColorTexture->Desc.Extent.Y);
+	//UE_LOG(LogTemp, Warning, TEXT("GBufferA Size: (%d,%d)"),
+	//       GBufferATexture->Desc.Extent.X, GBufferATexture->Desc.Extent.Y);
 
 	// Create output render target from SceneColor
 	FScreenPassRenderTarget Output(

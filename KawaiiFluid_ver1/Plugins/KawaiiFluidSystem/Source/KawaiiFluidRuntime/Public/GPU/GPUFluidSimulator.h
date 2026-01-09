@@ -314,6 +314,76 @@ public:
 	void ApplyAttachmentUpdates(const TArray<FAttachedParticleUpdate>& Updates);
 
 	//=============================================================================
+	// Collision Feedback (Particle -> Player Interaction)
+	// GPU collision data readback for force calculation and event triggering
+	//=============================================================================
+
+	/**
+	 * Enable or disable collision feedback recording
+	 * When enabled, collision data is written to a GPU buffer and read back to CPU
+	 * @param bEnabled - Whether to enable collision feedback
+	 */
+	void SetCollisionFeedbackEnabled(bool bEnabled) { bCollisionFeedbackEnabled = bEnabled; }
+
+	/**
+	 * Check if collision feedback is enabled
+	 */
+	bool IsCollisionFeedbackEnabled() const { return bCollisionFeedbackEnabled; }
+
+	/**
+	 * Get collision feedback for a specific collider
+	 * Returns all feedback entries where ColliderIndex matches
+	 * @param ColliderIndex - Index of the collider to get feedback for
+	 * @param OutFeedback - Output array of feedback entries
+	 * @param OutCount - Number of feedback entries returned
+	 * @return true if feedback is available
+	 */
+	bool GetCollisionFeedbackForCollider(int32 ColliderIndex, TArray<FGPUCollisionFeedback>& OutFeedback, int32& OutCount);
+
+	/**
+	 * Get all collision feedback (unfiltered)
+	 * @param OutFeedback - Output array of all feedback entries
+	 * @param OutCount - Number of feedback entries
+	 * @return true if feedback is available
+	 */
+	bool GetAllCollisionFeedback(TArray<FGPUCollisionFeedback>& OutFeedback, int32& OutCount);
+
+	/**
+	 * Get current collision feedback count
+	 */
+	int32 GetCollisionFeedbackCount() const { return ReadyFeedbackCount; }
+
+	//=============================================================================
+	// Collider Contact Count API (간단한 충돌 감지용)
+	//=============================================================================
+
+	/**
+	 * Get contact count for a specific collider index
+	 * @param ColliderIndex - Index of the collider (Sphere: 0~N, Capsule: SphereCount+0~M, etc.)
+	 * @return Number of particles colliding with this collider
+	 */
+	int32 GetColliderContactCount(int32 ColliderIndex) const;
+
+	/**
+	 * Get all collider contact counts
+	 * @param OutCounts - Output array of contact counts per collider
+	 */
+	void GetAllColliderContactCounts(TArray<int32>& OutCounts) const;
+
+	/**
+	 * Get total collider count (Spheres + Capsules + Boxes + Convexes)
+	 */
+	int32 GetTotalColliderCount() const;
+
+	/**
+	 * Get total contact count for all colliders with a specific OwnerID
+	 * Sums contact counts across all collider types (sphere, capsule, box, convex)
+	 * @param OwnerID - Owner actor's unique ID (from AActor::GetUniqueID())
+	 * @return Total number of particles colliding with this owner's colliders
+	 */
+	int32 GetContactCountForOwner(int32 OwnerID) const;
+
+	//=============================================================================
 	// GPU Particle Spawning (Thread-Safe)
 	// CPU sends spawn requests, GPU creates particles via atomic counter
 	// This eliminates race conditions between game thread and render thread
@@ -703,6 +773,61 @@ private:
 	void AllocateStreamCompactionBuffers(FRHICommandListImmediate& RHICmdList);
 	void ReleaseStreamCompactionBuffers();
 	void DispatchStreamCompactionShaders(FRHICommandListImmediate& RHICmdList, int32 InParticleCount, int32 InNumAABBs, FShaderResourceViewRHIRef InParticleSRV);
+
+	//=============================================================================
+	// Collision Feedback Buffers (Particle -> Player Interaction)
+	// Triple buffering for async GPU -> CPU readback (2-3 frame delay)
+	//=============================================================================
+
+	static constexpr int32 MAX_COLLISION_FEEDBACK = 1024;
+	static constexpr int32 NUM_FEEDBACK_BUFFERS = 3;
+	static constexpr int32 MAX_COLLIDER_COUNT = 256;  // 최대 콜라이더 수
+
+	// GPU feedback buffer (written by collision shader)
+	TRefCountPtr<FRDGPooledBuffer> CollisionFeedbackBuffer;
+
+	//=============================================================================
+	// Collider Contact Count Buffer (간단한 충돌 카운트용)
+	//=============================================================================
+
+	// GPU buffer: 콜라이더별 충돌 입자 수 (atomic increment)
+	TRefCountPtr<FRDGPooledBuffer> ColliderContactCountBuffer;
+
+	// Staging buffer for readback
+	FBufferRHIRef ColliderContactCountStagingBuffer;
+
+	// Ready contact counts (콜라이더 인덱스 → 충돌 입자 수)
+	TArray<int32> ReadyColliderContactCounts;
+
+	// Atomic counter for feedback entries
+	TRefCountPtr<FRDGPooledBuffer> CollisionCounterBuffer;
+
+	// Staging buffers for CPU readback (triple buffering)
+	FBufferRHIRef FeedbackStagingBuffers[NUM_FEEDBACK_BUFFERS];
+	FBufferRHIRef CounterStagingBuffers[NUM_FEEDBACK_BUFFERS];
+
+	// Ready feedback data (available to game thread)
+	TArray<FGPUCollisionFeedback> ReadyFeedback;
+	int32 ReadyFeedbackCount = 0;
+
+	// Triple buffer indices
+	int32 CurrentFeedbackWriteIndex = 0;
+	std::atomic<int32> CompletedFeedbackFrame{-1};
+
+	// Enable flag
+	bool bCollisionFeedbackEnabled = false;
+
+	// Lock for feedback data access
+	FCriticalSection FeedbackLock;
+
+	// Frame counter for triple buffering
+	int32 FeedbackFrameNumber = 0;
+
+	// Helper methods for collision feedback
+	void AllocateCollisionFeedbackBuffers(FRHICommandListImmediate& RHICmdList);
+	void ReleaseCollisionFeedbackBuffers();
+	void ProcessCollisionFeedbackReadback(FRHICommandListImmediate& RHICmdList);
+	void ProcessColliderContactCountReadback(FRHICommandListImmediate& RHICmdList);
 };
 
 /**

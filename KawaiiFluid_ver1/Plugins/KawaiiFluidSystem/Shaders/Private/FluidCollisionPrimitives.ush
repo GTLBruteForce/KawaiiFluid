@@ -16,7 +16,9 @@ struct FGPUCollisionSphere
 	float Friction;
 	float Restitution;
 	int BoneIndex;     // Index into bone transform buffer (-1 = no bone)
-	float Padding1;
+	int FluidTagID;    // Fluid tag hash for event identification
+	int OwnerID;       // Unique ID of collider owner (actor/component)
+	float Padding;     // Alignment padding
 };
 
 struct FGPUCollisionCapsule
@@ -27,8 +29,8 @@ struct FGPUCollisionCapsule
 	float Friction;
 	float Restitution;
 	int BoneIndex;     // Index into bone transform buffer (-1 = no bone)
-	float Padding1;
-	float Padding2;
+	int FluidTagID;    // Fluid tag hash for event identification
+	int OwnerID;       // Unique ID of collider owner (actor/component)
 };
 
 struct FGPUCollisionBox
@@ -39,7 +41,9 @@ struct FGPUCollisionBox
 	float Restitution;
 	float4 Rotation;  // Quaternion (x, y, z, w)
 	int BoneIndex;    // Index into bone transform buffer (-1 = no bone)
-	float3 Padding;
+	int FluidTagID;   // Fluid tag hash for event identification
+	int OwnerID;      // Unique ID of collider owner (actor/component)
+	float Padding2;
 };
 
 struct FGPUCollisionConvex
@@ -51,7 +55,9 @@ struct FGPUCollisionConvex
 	float Friction;
 	float Restitution;
 	int BoneIndex;    // Index into bone transform buffer (-1 = no bone)
-	float Padding;
+	int FluidTagID;   // Fluid tag hash for event identification
+	int OwnerID;      // Unique ID of collider owner (actor/component)
+	float Padding;    // Alignment padding
 };
 
 struct FGPUConvexPlane

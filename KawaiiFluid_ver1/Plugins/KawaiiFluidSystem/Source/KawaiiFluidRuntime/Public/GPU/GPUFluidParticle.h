@@ -269,7 +269,7 @@ namespace EGPUCollisionPrimitiveType
 }
 
 /**
- * GPU Sphere Primitive (32 bytes)
+ * GPU Sphere Primitive (40 bytes)
  */
 struct FGPUCollisionSphere
 {
@@ -278,8 +278,10 @@ struct FGPUCollisionSphere
 	float Friction;       // 4 bytes
 	float Restitution;    // 4 bytes
 	int32 BoneIndex;      // 4 bytes - Index into bone transform buffer (-1 = no bone)
-	float Padding1;       // 4 bytes
-	
+	int32 FluidTagID;     // 4 bytes - Fluid tag hash for event identification (e.g., "Water", "Lava")
+	int32 OwnerID;        // 4 bytes - Unique ID of collider owner (actor/component)
+	float Padding;        // 4 bytes - Alignment padding
+
 
 	FGPUCollisionSphere()
 		: Center(FVector3f::ZeroVector)
@@ -287,12 +289,14 @@ struct FGPUCollisionSphere
 		, Friction(0.1f)
 		, Restitution(0.3f)
 		, BoneIndex(-1)
-		, Padding1(0.0f)
-		
+		, FluidTagID(0)
+		, OwnerID(0)
+		, Padding(0.0f)
+
 	{
 	}
 };
-static_assert(sizeof(FGPUCollisionSphere) == 32, "FGPUCollisionSphere must be 32 bytes");
+static_assert(sizeof(FGPUCollisionSphere) == 40, "FGPUCollisionSphere must be 40 bytes");
 
 /**
  * GPU Capsule Primitive (48 bytes)
@@ -305,9 +309,9 @@ struct FGPUCollisionCapsule
 	float Friction;       // 4 bytes
 	float Restitution;    // 4 bytes
 	int32 BoneIndex;      // 4 bytes - Index into bone transform buffer (-1 = no bone)
-	float Padding1;       // 4 bytes
-	float Padding2;       // 4 bytes
-	
+	int32 FluidTagID;     // 4 bytes - Fluid tag hash for event identification
+	int32 OwnerID;        // 4 bytes - Unique ID of collider owner (actor/component)
+
 
 	FGPUCollisionCapsule()
 		: Start(FVector3f::ZeroVector)
@@ -316,9 +320,9 @@ struct FGPUCollisionCapsule
 		, Friction(0.1f)
 		, Restitution(0.3f)
 		, BoneIndex(-1)
-		, Padding1(0.0f)
-		, Padding2(0.0f)
-		
+		, FluidTagID(0)
+		, OwnerID(0)
+
 	{
 	}
 };
@@ -335,8 +339,10 @@ struct FGPUCollisionBox
 	float Restitution;    // 4 bytes
 	FVector4f Rotation;   // 16 bytes (quaternion: x, y, z, w)
 	int32 BoneIndex;      // 4 bytes - Index into bone transform buffer (-1 = no bone)
-	FVector3f Padding;    // 12 bytes
-	
+	int32 FluidTagID;     // 4 bytes - Fluid tag hash for event identification
+	int32 OwnerID;        // 4 bytes - Unique ID of collider owner (actor/component)
+	float Padding2;       // 4 bytes
+
 
 	FGPUCollisionBox()
 		: Center(FVector3f::ZeroVector)
@@ -345,8 +351,10 @@ struct FGPUCollisionBox
 		, Restitution(0.3f)
 		, Rotation(FVector4f(0.0f, 0.0f, 0.0f, 1.0f))
 		, BoneIndex(-1)
-		, Padding(FVector3f::ZeroVector)
-		
+		, FluidTagID(0)
+		, OwnerID(0)
+		, Padding2(0.0f)
+
 	{
 	}
 };
@@ -370,7 +378,7 @@ struct FGPUConvexPlane
 static_assert(sizeof(FGPUConvexPlane) == 16, "FGPUConvexPlane must be 16 bytes");
 
 /**
- * GPU Convex Primitive Header (32 bytes)
+ * GPU Convex Primitive Header (48 bytes)
  * References a range of planes in the plane buffer
  */
 struct FGPUCollisionConvex
@@ -382,7 +390,9 @@ struct FGPUCollisionConvex
 	float Friction;       // 4 bytes
 	float Restitution;    // 4 bytes
 	int32 BoneIndex;      // 4 bytes - Index into bone transform buffer (-1 = no bone)
-	float Padding;        // 4 bytes
+	int32 FluidTagID;     // 4 bytes - Fluid tag hash for event identification
+	int32 OwnerID;        // 4 bytes - Unique ID of collider owner (actor/component)
+	float Padding;        // 4 bytes - Alignment padding
 
 	FGPUCollisionConvex()
 		: Center(FVector3f::ZeroVector)
@@ -392,11 +402,13 @@ struct FGPUCollisionConvex
 		, Friction(0.1f)
 		, Restitution(0.3f)
 		, BoneIndex(-1)
+		, FluidTagID(0)
+		, OwnerID(0)
 		, Padding(0.0f)
 	{
 	}
 };
-static_assert(sizeof(FGPUCollisionConvex) == 40, "FGPUCollisionConvex must be 40 bytes");
+static_assert(sizeof(FGPUCollisionConvex) == 48, "FGPUCollisionConvex must be 48 bytes");
 
 /**
  * GPU Bone Transform (64 bytes)
@@ -509,6 +521,45 @@ struct FGPUAdhesionParams
 	}
 };
 static_assert(sizeof(FGPUAdhesionParams) == 56, "FGPUAdhesionParams must be 56 bytes");
+
+//=============================================================================
+// GPU Collision Feedback (for Particle -> Player Interaction)
+// Records collision data for CPU readback
+//=============================================================================
+
+/**
+ * GPU Collision Feedback Structure (48 bytes)
+ * Records collision information for CPU-side force calculation and event triggering
+ * Written by GPU during collision pass, read back to CPU asynchronously (2-3 frame delay)
+ *
+ * Used for drag-based force calculation:
+ *   F_drag = 0.5 * rho * C_d * A * |v_rel| * v_rel
+ *   where v_rel = ParticleVelocity - BodyVelocity
+ */
+struct FGPUCollisionFeedback
+{
+	int32 ParticleIndex;          // 4 bytes - Index of the colliding particle
+	int32 ColliderIndex;          // 4 bytes - Index of the collider (in combined primitive list)
+	int32 ColliderType;           // 4 bytes - 0=Sphere, 1=Capsule, 2=Box, 3=Convex
+	float Density;                // 4 bytes - Particle density at collision time (total: 16)
+	FVector3f ImpactNormal;       // 12 bytes - Collision surface normal
+	float Penetration;            // 4 bytes - Penetration depth (cm) (total: 32)
+	FVector3f ParticleVelocity;   // 12 bytes - Particle velocity at collision (for drag calculation)
+	int32 OwnerID;                // 4 bytes - Unique ID of collider owner (for filtering by actor) (total: 48)
+
+	FGPUCollisionFeedback()
+		: ParticleIndex(0)
+		, ColliderIndex(0)
+		, ColliderType(0)
+		, Density(0.0f)
+		, ImpactNormal(FVector3f::UpVector)
+		, Penetration(0.0f)
+		, ParticleVelocity(FVector3f::ZeroVector)
+		, OwnerID(0)
+	{
+	}
+};
+static_assert(sizeof(FGPUCollisionFeedback) == 48, "FGPUCollisionFeedback must be 48 bytes for GPU alignment");
 
 /**
  * GPU Collision Primitives Collection
