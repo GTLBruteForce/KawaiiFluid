@@ -176,6 +176,17 @@ void KawaiiScreenSpaceShading::RenderPostProcessShading(
 	PassParameters->SpecularRoughness = RenderParams.SpecularRoughness;
 	PassParameters->EnvironmentLightColor = RenderParams.EnvironmentLightColor;
 
+	// Lighting scale parameters
+	PassParameters->AmbientScale = RenderParams.AmbientScale;
+	PassParameters->TransmittanceScale = RenderParams.TransmittanceScale;
+	PassParameters->AlphaThicknessScale = RenderParams.AlphaThicknessScale;
+	PassParameters->RefractionScale = RenderParams.RefractionScale;
+	PassParameters->FresnelReflectionBlend = RenderParams.FresnelReflectionBlend;
+
+	// Subsurface Scattering (SSS)
+	PassParameters->SSSIntensity = RenderParams.SSSIntensity;
+	PassParameters->SSSColor = RenderParams.SSSColor;
+
 	// Reflection Cubemap
 	if (RenderParams.ReflectionCubemap && RenderParams.ReflectionCubemap->GetResource())
 	{

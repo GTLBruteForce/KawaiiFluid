@@ -48,6 +48,21 @@ BEGIN_SHADER_PARAMETER_STRUCT(FFluidCompositeParameters, )
     SHADER_PARAMETER(FLinearColor, EnvironmentLightColor)
 
     // ------------------------------------------------------
+    // Lighting Scale Parameters
+    // ------------------------------------------------------
+    SHADER_PARAMETER(float, AmbientScale)
+    SHADER_PARAMETER(float, TransmittanceScale)
+    SHADER_PARAMETER(float, AlphaThicknessScale)
+    SHADER_PARAMETER(float, RefractionScale)
+    SHADER_PARAMETER(float, FresnelReflectionBlend)
+
+    // ------------------------------------------------------
+    // Subsurface Scattering (SSS)
+    // ------------------------------------------------------
+    SHADER_PARAMETER(float, SSSIntensity)
+    SHADER_PARAMETER(FLinearColor, SSSColor)
+
+    // ------------------------------------------------------
     // Reflection Cubemap
     // ------------------------------------------------------
     SHADER_PARAMETER_TEXTURE(TextureCube, ReflectionCubemap)

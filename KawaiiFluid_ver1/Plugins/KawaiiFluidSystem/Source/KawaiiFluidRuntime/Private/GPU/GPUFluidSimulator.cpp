@@ -1357,7 +1357,7 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		FFluidAnisotropyPassBuilder::CreateAnisotropyBuffers(
 			GraphBuilder, CurrentParticleCount, Axis1Buffer, Axis2Buffer, Axis3Buffer);
 
-		if (Axis1Buffer && Axis2Buffer && Axis3Buffer)
+		if (Axis1Buffer && Axis2Buffer && Axis3Buffer && CellCountsBuffer && ParticleIndicesBuffer)
 		{
 			// Prepare anisotropy compute parameters
 			FAnisotropyComputeParams AnisotropyParams;
@@ -1380,8 +1380,10 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 				AnisotropyParams.AttachmentsSRV = GraphBuilder.CreateSRV(DummyAttachmentBuffer);
 			}
 
-			AnisotropyParams.CellCountsSRV = CellCountsSRVLocal;
-			AnisotropyParams.ParticleIndicesSRV = ParticleIndicesSRVLocal;
+			// Create fresh SRVs for Anisotropy pass to avoid RDG resource state conflicts
+			// Previous SRVs may have been used in passes that also had UAV writes to same buffers
+			AnisotropyParams.CellCountsSRV = GraphBuilder.CreateSRV(CellCountsBuffer);
+			AnisotropyParams.ParticleIndicesSRV = GraphBuilder.CreateSRV(ParticleIndicesBuffer);
 			AnisotropyParams.OutAxis1UAV = GraphBuilder.CreateUAV(Axis1Buffer);
 			AnisotropyParams.OutAxis2UAV = GraphBuilder.CreateUAV(Axis2Buffer);
 			AnisotropyParams.OutAxis3UAV = GraphBuilder.CreateUAV(Axis3Buffer);

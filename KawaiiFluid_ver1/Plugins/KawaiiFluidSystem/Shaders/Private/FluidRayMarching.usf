@@ -98,6 +98,12 @@ float SpecularStrength;
 float SpecularRoughness;
 float4 EnvironmentLightColor;
 
+// Lighting Scale Parameters
+float AmbientScale;
+float TransmittanceScale;
+float AbsorptionBias;
+float FresnelReflectionBlend;
+
 // Reflection Cubemap
 TextureCube ReflectionCubemap;
 SamplerState ReflectionCubemapSampler;
@@ -547,8 +553,9 @@ void MainPS(
 	float3 P = result.Position;
 	float Thickness = result.Thickness;
 
-	// Default light direction (top-down sun angle)
-	float3 L = normalize(float3(0.5, 0.5, -0.707));
+	// Light direction from View uniform (actual scene directional light)
+	float3 L = normalize(-View.DirectionalLightDirection);
+	float3 LightColor = View.DirectionalLightColor.rgb;
 
 	// Fresnel (Schlick approximation with IOR-based F0)
 	// IOR → F0 자동 계산: F0 = ((1 - n) / (1 + n))^2
@@ -559,14 +566,19 @@ void MainPS(
 	float FresnelRaw = SchlickFresnel(NoV, F0);
 	float Fresnel = smoothstep(0.0, 1.0, FresnelRaw) * 0.5;  // Soften and reduce
 
-	// Specular (Blinn-Phong) - softer specular
+	// Diffuse (Standard Lambert) + Ambient (Phong Shading)
 	float NoL = saturate(dot(N, L));
+	float3 DiffuseLighting = NoL * LightColor;
+	float3 AmbientColor = EnvironmentLightColor.rgb * AmbientScale;
+	float3 TotalLighting = DiffuseLighting + AmbientColor;
+
+	// Specular (Blinn-Phong)
 	float SpecularRaw = BlinnPhongSpecular(N, V, L, max(SpecularRoughness, 0.5));  // Min roughness 0.5
-	float Specular = smoothstep(0.0, 1.0, SpecularRaw) * SpecularStrength * NoL * 0.3;  // Reduce intensity
+	float3 Specular = SpecularRaw * SpecularStrength * LightColor * 0.3;
 
 	// Beer's Law: RGB별 두께 기반 투과율 계산
 	float3 AbsorptionRGB = AbsorptionColorCoefficients.rgb * AbsorptionCoefficient;
-	float3 Transmittance = exp(-AbsorptionRGB * Thickness * 0.05);
+	float3 Transmittance = exp(-AbsorptionRGB * Thickness * TransmittanceScale);
 
 	// Refracted background sampling (with Refraction Mask)
 	// ========================================================================
@@ -596,8 +608,9 @@ void MainPS(
 	float3 TransmittedBackground = RefractedBackground * Transmittance;
 	float OverallAbsorption = 1.0 - dot(Transmittance, float3(0.333, 0.333, 0.333));
 
-	// Base color - mostly fluid color with subtle background blend
-	float3 BaseColor = lerp(TransmittedBackground, FluidColor.rgb, saturate(OverallAbsorption + 0.7));
+	// Base color - FluidColor에 조명 적용 (Phong Shading의 Diffuse + Ambient)
+	float3 LitFluidColor = FluidColor.rgb * TotalLighting;
+	float3 BaseColor = lerp(TransmittedBackground, LitFluidColor, saturate(OverallAbsorption + AbsorptionBias));
 
 	//=========================================================================
 	// Subsurface Scattering (SSS) - Jelly Effect (simplified)
@@ -630,11 +643,8 @@ void MainPS(
 		ReflectedColor = EnvironmentLightColor.rgb * Fresnel;
 	}
 
-	// Simple diffuse lighting
-	float Diffuse = NoL * 0.5 + 0.5;  // Half-lambert for softer shading
-
-	// Combine all lighting
-	float3 FinalColor = BaseColor * Diffuse;
+	// Combine all lighting (BaseColor already has Diffuse + Ambient applied)
+	float3 FinalColor = BaseColor;
 	FinalColor += ReflectedColor * 0.3;
 	FinalColor += SSSContribution;
 	FinalColor += Specular;

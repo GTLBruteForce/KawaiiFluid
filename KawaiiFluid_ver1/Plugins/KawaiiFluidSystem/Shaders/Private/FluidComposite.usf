@@ -25,6 +25,17 @@ float SpecularStrength;
 float SpecularRoughness;
 float4 EnvironmentLightColor;
 
+// Lighting Scale Parameters
+float AmbientScale;
+float TransmittanceScale;
+float AlphaThicknessScale;
+float RefractionScale;
+float FresnelReflectionBlend;
+
+// Subsurface Scattering (SSS)
+float SSSIntensity;
+float4 SSSColor;
+
 // Reflection Cubemap
 TextureCube ReflectionCubemap;
 SamplerState ReflectionCubemapSampler;
@@ -136,14 +147,38 @@ void MainPS(
 	float F0 = IOR_F0 * FresnelStrength;
 	float Fresnel = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);
 
-	// B. Specular (하이라이트) - 씬의 실제 Directional Light 사용
+	// B. Diffuse + Specular (Phong Shading) - 씬의 실제 Directional Light 사용
 	float3 LightDir = normalize(-View.DirectionalLightDirection);
+	float3 LightColor = View.DirectionalLightColor.rgb;
+
+	// Diffuse (Lambert)
+	float NoL = saturate(dot(Normal, LightDir));
+	float3 DiffuseLighting = NoL * LightColor;
+
+	// Ambient (환경광 - 완전히 어두운 면 방지)
+	float3 AmbientColor = EnvironmentLightColor.rgb * AmbientScale;
+
+	// Total Lighting
+	float3 TotalLighting = DiffuseLighting + AmbientColor;
+
+	// Specular (Blinn-Phong)
 	float3 HalfDir = normalize(LightDir + ViewDir);
 	float NoH = saturate(dot(Normal, HalfDir));
 
 	// Roughness를 Shininess로 변환 (작은 roughness = 큰 shininess = 날카로운 하이라이트)
 	float Shininess = (1.0 - SpecularRoughness) * 128.0;
-	float Specular = pow(NoH, Shininess) * SpecularStrength;
+	float3 Specular = pow(NoH, Shininess) * SpecularStrength * LightColor;
+
+	// C. Subsurface Scattering (SSS) - Jelly Effect
+	// ========================================================================
+	// Rim-based SSS: 가장자리(NoV가 작은 곳)에서 빛이 내부를 투과해 나오는 효과
+	// - RimFactor: 가장자리일수록 큼 (1.0 - NoV)
+	// - Thickness 연동: 얇은 부분에서 더 강하게 투과
+	// ========================================================================
+	float RimFactor = 1.0 - NoV;
+	float ThicknessSSSMask = exp(-Thickness * 0.05);  // 얇을수록 SSS 강함
+	float SSSFactor = smoothstep(0.3, 1.0, RimFactor) * SSSIntensity * ThicknessSSSMask * 0.5;
+	float3 SSSContribution = SSSColor.rgb * SSSFactor * LightColor;
 
 	// ========================================================================
 	// Color Compositing (Flex-style Simple Approach)
@@ -164,7 +199,7 @@ void MainPS(
 	float RefractionMask = ThicknessMask * EdgeMask;
 
 	// 굴절 오프셋 계산 (마스크 적용)
-	float2 RefractOffset = Normal.xy * RefractiveIndex * 0.05 * RefractionMask;
+	float2 RefractOffset = Normal.xy * RefractiveIndex * RefractionScale * RefractionMask;
 	float2 RefractedUV = UV + RefractOffset;
 	RefractedUV = saturate(RefractedUV);
 
@@ -184,7 +219,7 @@ void MainPS(
 	// 물: R을 많이 흡수 → 파랗게 보임
 	// 슬라임: B를 많이 흡수 → 녹색/노란색 계열
 	float3 AbsorptionRGB = AbsorptionColorCoefficients.rgb * AbsorptionCoefficient;
-	float3 Transmittance = exp(-AbsorptionRGB * Thickness * 0.05);
+	float3 Transmittance = exp(-AbsorptionRGB * Thickness * TransmittanceScale);
 
 	// 투과된 배경색 계산
 	float3 TransmittedBackground = RefractedBackground * Transmittance;
@@ -192,7 +227,10 @@ void MainPS(
 	// 4. 배경과 유체색 혼합
 	// 두께가 두꺼울수록 유체 고유색이 더 보임
 	float OverallAbsorption = 1.0 - dot(Transmittance, float3(0.333, 0.333, 0.333));
-	float3 BaseColor = lerp(TransmittedBackground, FluidColor.rgb, saturate(OverallAbsorption));
+
+	// FluidColor에 조명 적용 (Phong Shading의 Diffuse + Ambient)
+	float3 LitFluidColor = FluidColor.rgb * TotalLighting;
+	float3 BaseColor = lerp(TransmittedBackground, LitFluidColor, saturate(OverallAbsorption));
 
 	// 5. Fresnel 반사 (환경 반사)
 	float3 ReflectedColor;
@@ -219,15 +257,15 @@ void MainPS(
 	}
 
 	// 6. 반사와 투과 혼합
-	BaseColor = lerp(BaseColor, ReflectedColor, Fresnel * 0.5);
+	BaseColor = lerp(BaseColor, ReflectedColor, Fresnel * FresnelReflectionBlend);
 
-	// 7. Specular 추가
-	FinalColor = BaseColor + Specular;
+	// 7. Specular + SSS 추가
+	FinalColor = BaseColor + Specular + SSSContribution;
 
-	// 7. Alpha 계산
+	// 8. Alpha 계산
 	// 두께가 있으면 불투명, 반사가 강하면 불투명
-	float Alpha = saturate(1.0 - exp(-Thickness * 0.02));
-	Alpha = max(Alpha, Fresnel * 0.5);
+	float Alpha = saturate(1.0 - exp(-Thickness * AlphaThicknessScale));
+	Alpha = max(Alpha, Fresnel * FresnelReflectionBlend);
 
 	// C++ BlendState: (SrcAlpha, InvSrcAlpha) 사용 중이므로
 	// RGB에 Alpha를 미리 곱하지 않고 내보냄

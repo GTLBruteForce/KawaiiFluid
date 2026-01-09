@@ -469,6 +469,12 @@ void KawaiiRayMarchShading::RenderPostProcessShading(
 	PassParameters->SpecularRoughness = RenderParams.SpecularRoughness;
 	PassParameters->EnvironmentLightColor = RenderParams.EnvironmentLightColor;
 
+	// Lighting scale parameters
+	PassParameters->AmbientScale = RenderParams.AmbientScale;
+	PassParameters->TransmittanceScale = RenderParams.TransmittanceScale;
+	PassParameters->AbsorptionBias = RenderParams.AbsorptionBias;
+	PassParameters->FresnelReflectionBlend = RenderParams.FresnelReflectionBlend;
+
 	// Reflection Cubemap
 	if (RenderParams.ReflectionCubemap && RenderParams.ReflectionCubemap->GetResource())
 	{
