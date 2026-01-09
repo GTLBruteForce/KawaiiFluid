@@ -1333,6 +1333,23 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	// Runs after simulation is complete, uses spatial hash for neighbor lookup
 	if (CachedAnisotropyParams.bEnabled && CurrentParticleCount > 0)
 	{
+		// Update interval optimization: skip calculation on some frames
+		const int32 UpdateInterval = FMath::Max(1, CachedAnisotropyParams.UpdateInterval);
+		++AnisotropyFrameCounter;
+		const bool bShouldUpdateAnisotropy = (AnisotropyFrameCounter >= UpdateInterval)
+			|| !PersistentAnisotropyAxis1Buffer.IsValid();  // Always update if no buffer exists
+
+		if (bShouldUpdateAnisotropy)
+		{
+			AnisotropyFrameCounter = 0;  // Reset counter
+		}
+		else
+		{
+			// Skip this frame - reuse existing anisotropy buffers
+			// No extraction needed, buffers persist from previous frame
+			goto AnisotropyPassEnd;
+		}
+
 		// Create anisotropy output buffers
 		FRDGBufferRef Axis1Buffer = nullptr;
 		FRDGBufferRef Axis2Buffer = nullptr;
@@ -1345,6 +1362,24 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 			// Prepare anisotropy compute parameters
 			FAnisotropyComputeParams AnisotropyParams;
 			AnisotropyParams.PhysicsParticlesSRV = GraphBuilder.CreateSRV(ParticleBuffer);
+
+			// Pass Attachment buffer for attached particle anisotropy
+			// Always create a valid SRV (dummy if adhesion disabled) to satisfy shader requirements
+			if (IsAdhesionEnabled() && PersistentAttachmentBuffer.IsValid())
+			{
+				FRDGBufferRef AttachmentBufferForAnisotropy = GraphBuilder.RegisterExternalBuffer(
+					PersistentAttachmentBuffer, TEXT("GPUFluidAttachmentsAnisotropy"));
+				AnisotropyParams.AttachmentsSRV = GraphBuilder.CreateSRV(AttachmentBufferForAnisotropy);
+			}
+			else
+			{
+				// Create dummy attachment buffer (shader requires valid SRV)
+				FRDGBufferRef DummyAttachmentBuffer = GraphBuilder.CreateBuffer(
+					FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUParticleAttachment), 1),
+					TEXT("DummyAttachmentBuffer"));
+				AnisotropyParams.AttachmentsSRV = GraphBuilder.CreateSRV(DummyAttachmentBuffer);
+			}
+
 			AnisotropyParams.CellCountsSRV = CellCountsSRVLocal;
 			AnisotropyParams.ParticleIndicesSRV = ParticleIndicesSRVLocal;
 			AnisotropyParams.OutAxis1UAV = GraphBuilder.CreateUAV(Axis1Buffer);
@@ -1416,6 +1451,7 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 			}
 		}
 	}
+AnisotropyPassEnd:
 
 	// Debug: log that we reached the end of simulation
 	if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SIMULATION COMPLETE: All passes added for %d particles"), CurrentParticleCount);

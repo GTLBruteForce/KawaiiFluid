@@ -339,6 +339,7 @@ void AdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		attachment.AdhesionStrength = AdhesionStrength;
 		attachment.LocalOffset = WorldToBoneLocal(pos, bone);
 		attachment.AttachmentTime = CurrentTime;
+		attachment.RelativeVelocity = float3(0, 0, 0);  // No relative velocity on attach
 
 		// Set attached flag on particle
 		particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED);
@@ -379,20 +380,43 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3 followDelta = desiredPos - particle.PredictedPosition;
 	const float DesiredSpeed = length(followDelta) / max(DeltaTime, 0.0001f);
 
-	// Detach if the required follow speed exceeds threshold
-	bool bShouldDetach = (DesiredSpeed > DetachAccelThreshold);
+	// AdhesionStrength affects detach thresholds (0~1 ratio)
+	// 0 = normal detach behavior
+	// 1 = never detach
+	// Formula: EffectiveThreshold = BaseThreshold / (1.0 - AdhesionStrength)
+	const float ClampedStrength = saturate(attachment.AdhesionStrength);  // 0~1로 clamp
+	bool bShouldDetach = false;
 
-	// Additional safety: detach if we drift too far from the surface
-	float predictedSurfaceDistance = ComputeAttachmentSurfaceDistance(particle.PredictedPosition, attachment);
-	if (predictedSurfaceDistance > EffectiveDetachThreshold)
+	if (ClampedStrength >= 0.999f)
 	{
-		bShouldDetach = true;
+		// AdhesionStrength = 1 → 절대 안 떨어짐
+		bShouldDetach = false;
 	}
-
-	float surfaceDistance = ComputeAttachmentSurfaceDistance(desiredPos, attachment);
-	if (surfaceDistance > EffectiveDetachThreshold)
+	else
 	{
-		bShouldDetach = true;
+		// 0~0.999: 점진적으로 떨어지기 어려워짐
+		const float StrengthMultiplier = 1.0f / (1.0f - ClampedStrength);
+		const float EffectiveAccelThreshold = DetachAccelThreshold * StrengthMultiplier;
+		const float EffectiveDistThreshold = EffectiveDetachThreshold * StrengthMultiplier;
+
+		// Detach if the required follow speed exceeds threshold
+		if (DesiredSpeed > EffectiveAccelThreshold)
+		{
+			bShouldDetach = true;
+		}
+
+		// Additional safety: detach if we drift too far from the surface
+		float predictedSurfaceDistance = ComputeAttachmentSurfaceDistance(particle.PredictedPosition, attachment);
+		if (predictedSurfaceDistance > EffectiveDistThreshold)
+		{
+			bShouldDetach = true;
+		}
+
+		float surfaceDistance = ComputeAttachmentSurfaceDistance(desiredPos, attachment);
+		if (surfaceDistance > EffectiveDistThreshold)
+		{
+			bShouldDetach = true;
+		}
 	}
 
 	// Calculate bone velocity for later velocity blending / sliding
@@ -406,6 +430,7 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		attachment.BoneIndex = -1;
 		attachment.AdhesionStrength = 0;
 		attachment.LocalOffset = float3(0, 0, 0);
+		attachment.RelativeVelocity = float3(0, 0, 0);  // Reset relative velocity
 
 		particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED);
 		particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_JUST_DETACHED);
@@ -503,6 +528,10 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float3 desiredVelocity = boneVelocity;
 			particle.Velocity = lerp(previousVelocity, desiredVelocity, saturate(BoneVelocityScale));
 		}
+
+		// Store relative velocity for anisotropy (particle velocity - bone velocity)
+		// This ensures anisotropy only reflects movement ON the surface, not with the bone
+		attachment.RelativeVelocity = particle.Velocity - boneVelocity;
 	}
 
 	Particles[idx] = particle;

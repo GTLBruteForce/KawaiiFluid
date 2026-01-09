@@ -78,6 +78,11 @@ struct KAWAIIFLUIDRUNTIME_API FFluidAnisotropyParams
 	/** Weight for density-based component in hybrid mode (0 = velocity only, 1 = density only) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Anisotropy", meta = (ClampMin = "0", ClampMax = "1", UIMin = "0", UIMax = "1", EditCondition = "Mode == EFluidAnisotropyMode::Hybrid"))
 	float DensityWeight = 0.5f;
+
+	/** Update interval in frames (1 = every frame, 2 = every other frame, etc.)
+	 *  Higher values reduce GPU cost but may cause visual lag on fast movement */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Anisotropy|Optimization", meta = (ClampMin = "1", ClampMax = "10", UIMin = "1", UIMax = "10"))
+	int32 UpdateInterval = 1;
 };
 
 // FAnisotropyComputeParams is defined in GPU/FluidAnisotropyComputeShader.h

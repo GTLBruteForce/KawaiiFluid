@@ -92,6 +92,8 @@ struct FGPUParticleAttachment
 	float AdhesionStrength; // Current adhesion strength
 	float3 LocalOffset;     // Position in bone-local space
 	float AttachmentTime;   // Time when attached
+	float3 RelativeVelocity;  // Velocity relative to bone (for anisotropy)
+	float Padding;          // Alignment padding
 };
 
 //=============================================================================

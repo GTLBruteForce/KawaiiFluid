@@ -654,6 +654,7 @@ private:
 	TRefCountPtr<FRDGPooledBuffer> PersistentAnisotropyAxis1Buffer;
 	TRefCountPtr<FRDGPooledBuffer> PersistentAnisotropyAxis2Buffer;
 	TRefCountPtr<FRDGPooledBuffer> PersistentAnisotropyAxis3Buffer;
+	int32 AnisotropyFrameCounter = 0;  // Frame counter for UpdateInterval optimization
 
 	// Distance Field Collision
 	FGPUDistanceFieldCollisionParams DFCollisionParams;

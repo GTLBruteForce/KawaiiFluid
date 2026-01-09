@@ -45,6 +45,7 @@ void FFluidAnisotropyPassBuilder::AddAnisotropyPass(
 
 	// Input buffers
 	PassParameters->InPhysicsParticles = Params.PhysicsParticlesSRV;
+	PassParameters->InAttachments = Params.AttachmentsSRV;
 	PassParameters->CellCounts = Params.CellCountsSRV;
 	PassParameters->ParticleIndices = Params.ParticleIndicesSRV;
 
@@ -63,6 +64,10 @@ void FFluidAnisotropyPassBuilder::AddAnisotropyPass(
 	PassParameters->DensityWeight = Params.DensityWeight;
 	PassParameters->SmoothingRadius = Params.SmoothingRadius;
 	PassParameters->CellSize = Params.CellSize;
+
+	// Attached particle anisotropy params
+	PassParameters->AttachedFlattenScale = Params.AttachedFlattenScale;
+	PassParameters->AttachedStretchScale = Params.AttachedStretchScale;
 
 	const int32 ThreadGroupSize = FFluidAnisotropyCS::ThreadGroupSize;
 	const int32 NumGroups = FMath::DivideAndRoundUp(Params.ParticleCount, ThreadGroupSize);

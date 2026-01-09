@@ -11,6 +11,7 @@
 
 // Forward declaration
 struct FGPUFluidParticle;
+struct FGPUParticleAttachment;
 
 //=============================================================================
 // GPU Compute Parameters for Anisotropy Shader Dispatch
@@ -21,6 +22,7 @@ struct KAWAIIFLUIDRUNTIME_API FAnisotropyComputeParams
 {
 	// Input buffers
 	FRDGBufferSRVRef PhysicsParticlesSRV = nullptr;	// FGPUFluidParticle buffer
+	FRDGBufferSRVRef AttachmentsSRV = nullptr;		// FGPUParticleAttachment buffer (for surface normal)
 	FRDGBufferSRVRef CellCountsSRV = nullptr;		// Spatial hash cell counts
 	FRDGBufferSRVRef ParticleIndicesSRV = nullptr;	// Spatial hash particle indices
 
@@ -45,6 +47,10 @@ struct KAWAIIFLUIDRUNTIME_API FAnisotropyComputeParams
 	float DensityWeight = 0.5f;
 	float SmoothingRadius = 10.0f;
 	float CellSize = 10.0f;
+
+	// Attached particle anisotropy params
+	float AttachedFlattenScale = 0.3f;	// How much to flatten attached particles (0.3 = 30% of original height)
+	float AttachedStretchScale = 1.5f;	// How much to stretch perpendicular to normal
 };
 
 // Constants (must match FluidSpatialHash.ush and FluidAnisotropyCompute.usf)
@@ -67,6 +73,9 @@ public:
 		// Input: Physics particle buffer (FGPUFluidParticle)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, InPhysicsParticles)
 
+		// Input: Attachment buffer (FGPUParticleAttachment) - for surface normal of attached particles
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUParticleAttachment>, InAttachments)
+
 		// Spatial hash buffers (for neighbor search in DensityBased mode)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellCounts)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleIndices)
@@ -86,6 +95,10 @@ public:
 		SHADER_PARAMETER(float, DensityWeight)  // For Hybrid mode
 		SHADER_PARAMETER(float, SmoothingRadius)
 		SHADER_PARAMETER(float, CellSize)
+
+		// Attached particle anisotropy params
+		SHADER_PARAMETER(float, AttachedFlattenScale)  // How flat (0.3 = 30% height)
+		SHADER_PARAMETER(float, AttachedStretchScale)  // Perpendicular stretch
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 64;

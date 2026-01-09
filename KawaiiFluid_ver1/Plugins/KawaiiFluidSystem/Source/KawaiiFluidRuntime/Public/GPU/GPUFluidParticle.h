@@ -452,7 +452,7 @@ struct FGPUBoneTransform
 static_assert(sizeof(FGPUBoneTransform) == 64, "FGPUBoneTransform must be 64 bytes");
 
 /**
- * GPU Particle Attachment Data (32 bytes)
+ * GPU Particle Attachment Data (48 bytes)
  * Stores attachment info for particles attached to bone colliders
  * Managed as a separate buffer indexed by particle index
  */
@@ -464,6 +464,8 @@ struct FGPUParticleAttachment
 	float AdhesionStrength;   // 4 bytes - Current adhesion strength (can decay)
 	FVector3f LocalOffset;    // 12 bytes - Position in bone-local space
 	float AttachmentTime;     // 4 bytes - Time when attached
+	FVector3f RelativeVelocity;  // 12 bytes - Velocity relative to bone (for anisotropy)
+	float Padding;            // 4 bytes - Padding for 16-byte alignment
 
 	FGPUParticleAttachment()
 		: PrimitiveType(-1)
@@ -472,6 +474,8 @@ struct FGPUParticleAttachment
 		, AdhesionStrength(0.0f)
 		, LocalOffset(FVector3f::ZeroVector)
 		, AttachmentTime(0.0f)
+		, RelativeVelocity(FVector3f::ZeroVector)
+		, Padding(0.0f)
 	{
 	}
 
@@ -485,9 +489,11 @@ struct FGPUParticleAttachment
 		AdhesionStrength = 0.0f;
 		LocalOffset = FVector3f::ZeroVector;
 		AttachmentTime = 0.0f;
+		RelativeVelocity = FVector3f::ZeroVector;
+		Padding = 0.0f;
 	}
 };
-static_assert(sizeof(FGPUParticleAttachment) == 32, "FGPUParticleAttachment must be 32 bytes");
+static_assert(sizeof(FGPUParticleAttachment) == 48, "FGPUParticleAttachment must be 48 bytes");
 
 /**
  * GPU Adhesion Parameters

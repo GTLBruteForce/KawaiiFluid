@@ -27,6 +27,25 @@ struct FGPUFluidParticle
 	uint NeighborCount;        // 4 bytes
 };
 
+// GPU Particle Attachment Structure (must match FGPUParticleAttachment in C++)
+struct FGPUParticleAttachment
+{
+	int PrimitiveType;         // 4 bytes
+	int PrimitiveIndex;        // 4 bytes
+	int BoneIndex;             // 4 bytes
+	float AdhesionStrength;    // 4 bytes
+	float3 LocalOffset;        // 12 bytes
+	float AttachmentTime;      // 4 bytes
+	float3 RelativeVelocity;   // 12 bytes - Velocity relative to bone
+	float Padding;             // 4 bytes
+};
+
+// Particle Flags (must match EGPUParticleFlags in C++)
+#define FLAG_IS_ATTACHED (1 << 0)
+#define FLAG_IS_SURFACE (1 << 1)
+#define FLAG_IS_CORE (1 << 2)
+#define FLAG_JUST_DETACHED (1 << 3)
+
 // Anisotropy Mode
 #define MODE_VELOCITY_BASED 0
 #define MODE_DENSITY_BASED 1
@@ -34,6 +53,9 @@ struct FGPUFluidParticle
 
 // Input: GPU Particle buffer (from simulation)
 StructuredBuffer<FGPUFluidParticle> InPhysicsParticles;
+
+// Input: Attachment buffer (for surface normal of attached particles)
+StructuredBuffer<FGPUParticleAttachment> InAttachments;
 
 // Spatial Hash buffers (for DensityBased mode)
 StructuredBuffer<uint> CellCounts;
@@ -54,6 +76,10 @@ float AnisotropyMax;
 float DensityWeight;  // For Hybrid mode
 float SmoothingRadius;
 float CellSize;
+
+// Attached particle anisotropy params
+float AttachedFlattenScale;   // How flat (0.3 = 30% height along normal)
+float AttachedStretchScale;   // Perpendicular stretch (1.5 = 150%)
 
 //-----------------------------------------------------------------------------
 // FleX / Yu & Turk Style Constants
@@ -235,10 +261,10 @@ void SymmetricEigen3x3(
 }
 
 //-----------------------------------------------------------------------------
-// Velocity-Based Anisotropy
+// Velocity-Based Anisotropy (with explicit velocity parameter)
 //-----------------------------------------------------------------------------
-void CalculateVelocityBased(
-	uint ParticleIndex,
+void CalculateVelocityBasedWithVelocity(
+	float3 Velocity,
 	out float3 Axis1, out float3 Axis2, out float3 Axis3,
 	out float Scale1, out float Scale2, out float Scale3)
 {
@@ -248,12 +274,11 @@ void CalculateVelocityBased(
 	Axis3 = float3(0, 0, 1);
 	Scale1 = Scale2 = Scale3 = 1.0f;
 
-	FGPUFluidParticle P = InPhysicsParticles[ParticleIndex];
-	float Speed = length(P.Velocity);
+	float Speed = length(Velocity);
 
 	if (Speed > 0.001f)
 	{
-		Axis1 = P.Velocity / Speed;
+		Axis1 = Velocity / Speed;
 		BuildOrthonormalBasis(Axis1, Axis2, Axis3);
 
 		// Stretch along velocity
@@ -274,6 +299,16 @@ void CalculateVelocityBased(
 			Scale3 /= VolumeNorm;
 		}
 	}
+}
+
+// Wrapper for backward compatibility
+void CalculateVelocityBased(
+	uint ParticleIndex,
+	out float3 Axis1, out float3 Axis2, out float3 Axis3,
+	out float Scale1, out float Scale2, out float Scale3)
+{
+	FGPUFluidParticle P = InPhysicsParticles[ParticleIndex];
+	CalculateVelocityBasedWithVelocity(P.Velocity, Axis1, Axis2, Axis3, Scale1, Scale2, Scale3);
 }
 
 //-----------------------------------------------------------------------------
@@ -558,6 +593,63 @@ void ApplyVelocityStretching(
 }
 
 //-----------------------------------------------------------------------------
+// Attached Particle Anisotropy
+// Flattens particle along surface normal (baduk stone effect)
+// Normal direction becomes the shortest axis
+//-----------------------------------------------------------------------------
+void CalculateAttachedAnisotropy(
+	uint ParticleIndex,
+	out float3 Axis1, out float3 Axis2, out float3 Axis3,
+	out float Scale1, out float Scale2, out float Scale3)
+{
+	// Default: identity (sphere)
+	Axis1 = float3(1, 0, 0);
+	Axis2 = float3(0, 1, 0);
+	Axis3 = float3(0, 0, 1);
+	Scale1 = Scale2 = Scale3 = 1.0f;
+
+	// Read surface normal from attachment data
+	FGPUParticleAttachment Attachment = InAttachments[ParticleIndex];
+	float3 SurfaceNormal = Attachment.SurfaceNormal;
+
+	// Validate normal
+	float NormalLen = length(SurfaceNormal);
+	if (NormalLen < 0.001f)
+	{
+		// Invalid normal, use up vector as fallback
+		SurfaceNormal = float3(0, 0, 1);
+	}
+	else
+	{
+		SurfaceNormal = SurfaceNormal / NormalLen;
+	}
+
+	// Build orthonormal basis with normal as Axis3 (shortest axis)
+	// Normal direction = flattened direction (smallest scale)
+	Axis3 = SurfaceNormal;
+	BuildOrthonormalBasis(Axis3, Axis1, Axis2);
+
+	// Apply flattening: normal direction gets smaller scale
+	// AttachedFlattenScale = 0.3 means 30% of original height
+	Scale3 = clamp(AttachedFlattenScale * AnisotropyScale, AnisotropyMin, AnisotropyMax);
+
+	// Perpendicular directions get stretched to compensate (volume preservation)
+	// AttachedStretchScale = 1.5 means 150% in perpendicular directions
+	Scale1 = clamp(AttachedStretchScale * AnisotropyScale, AnisotropyMin, AnisotropyMax);
+	Scale2 = Scale1;
+
+	// Volume preservation: Scale1 * Scale2 * Scale3 = 1.0
+	float Volume = Scale1 * Scale2 * Scale3;
+	if (Volume > 0.001f && abs(Volume - 1.0f) > 0.001f)
+	{
+		float VolumeNorm = pow(Volume, 1.0f / 3.0f);
+		Scale1 /= VolumeNorm;
+		Scale2 /= VolumeNorm;
+		Scale3 /= VolumeNorm;
+	}
+}
+
+//-----------------------------------------------------------------------------
 // Main Compute Shader
 //-----------------------------------------------------------------------------
 [numthreads(THREADGROUP_SIZE, 1, 1)]
@@ -573,10 +665,25 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float Scale1, Scale2, Scale3;
 	int NeighborCount = 0;
 
+	// Read particle data
+	FGPUFluidParticle P = InPhysicsParticles[Idx];
+	bool bIsAttached = (P.Flags & FLAG_IS_ATTACHED) != 0;
+
+	// Get effective velocity for anisotropy calculation
+	// For attached particles: use velocity relative to bone (excludes player movement)
+	// For detached particles: use actual particle velocity
+	float3 EffectiveVelocity = P.Velocity;
+	if (bIsAttached)
+	{
+		FGPUParticleAttachment Attachment = InAttachments[Idx];
+		EffectiveVelocity = Attachment.RelativeVelocity;
+	}
+
+	// Select anisotropy calculation based on mode
 	if (AnisotropyMode == MODE_VELOCITY_BASED)
 	{
 		// Pure velocity-based: axes from velocity direction
-		CalculateVelocityBased(Idx, Axis1, Axis2, Axis3, Scale1, Scale2, Scale3);
+		CalculateVelocityBasedWithVelocity(EffectiveVelocity, Axis1, Axis2, Axis3, Scale1, Scale2, Scale3);
 	}
 	else if (AnisotropyMode == MODE_DENSITY_BASED)
 	{
@@ -585,9 +692,25 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 	else // MODE_HYBRID
 	{
-		// Hybrid: density axes + velocity stretching
+		// Hybrid: density axes + velocity stretching (use effective velocity)
 		CalculateDensityBased(Idx, Axis1, Axis2, Axis3, Scale1, Scale2, Scale3, NeighborCount);
-		ApplyVelocityStretching(Idx, Axis1, Axis2, Axis3, Scale1, Scale2, Scale3);
+		// Apply velocity stretching with effective velocity
+		float Speed = length(EffectiveVelocity);
+		if (Speed > 0.001f)
+		{
+			float3 VelDir = EffectiveVelocity / Speed;
+			float VelStretch = 1.0f + Speed * VelocityStretchFactor * AnisotropyScale;
+			VelStretch = clamp(VelStretch, 1.0f, AnisotropyMax);
+			float Proj1 = abs(dot(VelDir, Axis1));
+			float Proj2 = abs(dot(VelDir, Axis2));
+			float Proj3 = abs(dot(VelDir, Axis3));
+			Scale1 *= lerp(1.0f, VelStretch, Proj1);
+			Scale2 *= lerp(1.0f, VelStretch, Proj2);
+			Scale3 *= lerp(1.0f, VelStretch, Proj3);
+			Scale1 = clamp(Scale1, AnisotropyMin, AnisotropyMax);
+			Scale2 = clamp(Scale2, AnisotropyMin, AnisotropyMax);
+			Scale3 = clamp(Scale3, AnisotropyMin, AnisotropyMax);
+		}
 	}
 
 	// Write output (direction.xyz + scale.w)
