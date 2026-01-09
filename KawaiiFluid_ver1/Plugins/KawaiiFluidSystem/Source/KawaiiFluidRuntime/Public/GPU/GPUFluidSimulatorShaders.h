@@ -201,6 +201,11 @@ public:
 		SHADER_PARAMETER(float, SmoothingRadius)
 		SHADER_PARAMETER(float, CohesionStrength)
 		SHADER_PARAMETER(float, CellSize)
+		// Akinci 2013 surface tension parameters
+		SHADER_PARAMETER(float, DeltaTime)
+		SHADER_PARAMETER(float, RestDensity)
+		SHADER_PARAMETER(float, Poly6Coeff)           // For normal calculation
+		SHADER_PARAMETER(float, MaxSurfaceTensionForce)  // Force clamping
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;

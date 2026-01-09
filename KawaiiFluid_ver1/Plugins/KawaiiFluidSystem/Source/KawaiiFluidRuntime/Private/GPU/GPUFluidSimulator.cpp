@@ -1672,6 +1672,15 @@ void FGPUFluidSimulator::AddApplyCohesionPass(
 	PassParameters->SmoothingRadius = Params.SmoothingRadius;
 	PassParameters->CohesionStrength = Params.CohesionStrength;
 	PassParameters->CellSize = Params.CellSize;
+	// Akinci 2013 surface tension parameters
+	PassParameters->DeltaTime = Params.DeltaTime;
+	PassParameters->RestDensity = Params.RestDensity;
+	PassParameters->Poly6Coeff = Params.Poly6Coeff;
+	// MaxSurfaceTensionForce: limit force to prevent instability
+	// Scale based on particle mass and smoothing radius
+	// Typical value: CohesionStrength * RestDensity * h^3 * 1000 (empirical)
+	const float h_m = Params.SmoothingRadius * 0.01f;  // cm to m
+	PassParameters->MaxSurfaceTensionForce = Params.CohesionStrength * Params.RestDensity * h_m * h_m * h_m * 1000.0f;
 
 	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FApplyCohesionCS::ThreadGroupSize);
 

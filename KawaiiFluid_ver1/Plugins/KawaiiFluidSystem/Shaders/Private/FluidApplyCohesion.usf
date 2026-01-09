@@ -1,6 +1,12 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
-// GPU Fluid Physics - Apply Cohesion Pass
-// Applies surface tension / cohesion forces between particles (Akinci 2013)
+// GPU Fluid Physics - Apply Surface Tension Pass
+// Implements Akinci et al. 2013 "Versatile Surface Tension and Adhesion for SPH Fluids"
+//
+// Key components:
+// 1. Cohesion force with repulsion for close particles (Eq. 1-2)
+// 2. Curvature minimization force for surface area minimization (Eq. 3)
+// 3. K_ij correction factor for particle deficiency (Eq. 4)
+// 4. Combined surface tension force (Eq. 5)
 
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"
@@ -17,12 +23,104 @@ StructuredBuffer<uint> ParticleIndices;
 
 int ParticleCount;
 float SmoothingRadius;
-float CohesionStrength;
+float CohesionStrength;      // γ in paper (surface tension coefficient)
 float CellSize;
+
+// Akinci 2013 parameters
+float DeltaTime;
+float RestDensity;
+float Poly6Coeff;              // For normal calculation
+float MaxSurfaceTensionForce;  // Force clamping for stability
+
+//=============================================================================
+// Akinci 2013 Surface Tension Implementation
+//=============================================================================
+
+/**
+ * Compute surface normal using SPH gradient of smoothed color field
+ * n_i = h * Σ_j (m_j / ρ_j) * ∇W(|x_i - x_j|)
+ *
+ * The magnitude of n is proportional to curvature:
+ * - Near zero inside fluid
+ * - Large at free surface, proportional to curvature
+ */
+float3 ComputeSurfaceNormal(
+	float3 pos,
+	float h_m,             // Smoothing radius in meters
+	int3 centerCell,
+	int cellRadius,
+	uint selfIdx)
+{
+	float3 normal = float3(0.0f, 0.0f, 0.0f);
+
+	float h2 = h_m * h_m;
+
+	for (int dz = -cellRadius; dz <= cellRadius; ++dz)
+	{
+		for (int dy = -cellRadius; dy <= cellRadius; ++dy)
+		{
+			for (int dx = -cellRadius; dx <= cellRadius; ++dx)
+			{
+				int3 neighborCell = centerCell + int3(dx, dy, dz);
+				uint hash = HashCell(neighborCell);
+				uint count = min(CellCounts[hash], (uint)MAX_PARTICLES_PER_CELL);
+				uint startIdx = hash * MAX_PARTICLES_PER_CELL;
+
+				for (uint i = 0; i < count; ++i)
+				{
+					uint neighborIdx = ParticleIndices[startIdx + i];
+
+					if (neighborIdx == selfIdx || neighborIdx >= (uint)ParticleCount)
+					{
+						continue;
+					}
+
+					FGPUFluidParticle neighbor = Particles[neighborIdx];
+
+					// Skip attached neighbors for normal calculation
+					if (HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+					{
+						continue;
+					}
+
+					float3 r_cm = pos - neighbor.PredictedPosition;
+					float dist_cm = length(r_cm);
+
+					if (dist_cm < SMALL_NUMBER || dist_cm > SmoothingRadius)
+					{
+						continue;
+					}
+
+					// Convert to meters for kernel
+					float dist_m = dist_cm * CM_TO_M;
+					float r2 = dist_m * dist_m;
+					float diff = h2 - r2;
+
+					if (diff > 0.0f && neighbor.Density > SMALL_NUMBER)
+					{
+						// Gradient direction (normalized)
+						float3 gradDir = r_cm / dist_cm;
+
+						// Gradient of Poly6 kernel:
+						// ∇W = -6 * coeff * (h² - r²)² * r * r_hat
+						// We use simplified version for efficiency
+						float gradMag = -6.0f * Poly6Coeff * diff * diff * dist_m;
+
+						// Accumulate: (m_j / ρ_j) * ∇W
+						float volumeContrib = neighbor.Mass / neighbor.Density;
+						normal += volumeContrib * gradMag * gradDir;
+					}
+				}
+			}
+		}
+	}
+
+	// Scale by h to make normal scale-independent (as per Akinci paper)
+	return normal * h_m;
+}
 
 //=============================================================================
 // Main Compute Shader
-// Note: CohesionKernel is defined in FluidGPUPhysics.ush (Akinci 2013)
 //=============================================================================
 
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
@@ -42,23 +140,29 @@ void ApplyCohesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
-	// Skip if cohesion is disabled
+	// Skip if surface tension is disabled
 	if (CohesionStrength <= 0.0f)
 	{
 		return;
 	}
 
 	float3 pos = particle.PredictedPosition;
+	float h_m = SmoothingRadius * CM_TO_M;  // Smoothing radius in meters
+	float rho_i = particle.Density;
+	float m_i = particle.Mass;
 
-	// IMPORTANT: Convert smoothing radius from cm to m for kernel calculations
-	float h = SmoothingRadius * CM_TO_M;
-
-	// Cohesion force accumulator
-	float3 cohesionForce = float3(0.0f, 0.0f, 0.0f);
-
-	// Get cell coordinate for this particle (use cm for spatial hash)
+	// Get cell coordinate for this particle
 	int3 centerCell = WorldToCell(pos, CellSize);
 	int cellRadius = (int)ceil(SmoothingRadius / CellSize);
+
+	// Compute surface normal for this particle (for curvature term)
+	float3 n_i = ComputeSurfaceNormal(pos, h_m, centerCell, cellRadius, idx);
+
+	// Surface tension force accumulators
+	float3 cohesionForce = float3(0.0f, 0.0f, 0.0f);
+	float3 curvatureForce = float3(0.0f, 0.0f, 0.0f);
+
+	float h2 = h_m * h_m;
 
 	// Iterate over neighboring cells
 	for (int dz = -cellRadius; dz <= cellRadius; ++dz)
@@ -91,8 +195,8 @@ void ApplyCohesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 					}
 
 					float3 neighborPos = neighbor.PredictedPosition;
-					float3 r_cm = pos - neighborPos;           // Distance vector in cm
-					float dist_cm = length(r_cm);              // Distance in cm
+					float3 r_cm = pos - neighborPos;
+					float dist_cm = length(r_cm);
 
 					// Skip if too close or too far
 					if (dist_cm < SMALL_NUMBER || dist_cm > SmoothingRadius)
@@ -100,27 +204,103 @@ void ApplyCohesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 						continue;
 					}
 
-					// Convert to meters for kernel calculation
 					float dist_m = dist_cm * CM_TO_M;
+					float m_j = neighbor.Mass;
+					float rho_j = neighbor.Density;
 
-					// Cohesion kernel weight
-					float cohesionWeight = CohesionKernel(dist_m, h);
-
-					if (cohesionWeight > SMALL_NUMBER)
+					//==========================================================
+					// K_ij: Particle deficiency correction factor (Akinci Eq. 4)
+					// Amplifies forces for particles with neighborhood deficiency
+					// K_ij = 2 * ρ_0 / (ρ_i + ρ_j)
+					//==========================================================
+					float K_ij = 1.0f;
+					if (rho_i > SMALL_NUMBER && rho_j > SMALL_NUMBER)
 					{
-						// Direction toward neighbor (cohesion pulls particles together)
+						K_ij = (2.0f * RestDensity) / (rho_i + rho_j);
+						// Clamp to prevent extreme amplification
+						K_ij = clamp(K_ij, 0.5f, 2.0f);
+					}
+
+					//==========================================================
+					// Cohesion Force (Akinci Eq. 1-2)
+					// F_cohesion = -γ * m_i * m_j * C(r) * direction
+					//
+					// C(r) has both positive (attraction) and negative (repulsion):
+					// - r > h/2: attraction (pulls particles together)
+					// - r < h/2: repulsion (prevents clustering)
+					//==========================================================
+					float cohesionWeight = CohesionKernel(dist_m, h_m);
+
+					// IMPORTANT: Don't skip negative values - they provide repulsion!
+					// Previous bug: if (cohesionWeight > SMALL_NUMBER) skipped repulsion
+					if (abs(cohesionWeight) > SMALL_NUMBER * 0.001f)
+					{
+						// Direction toward neighbor
 						float3 direction = -r_cm / dist_cm;
 
-						// Accumulate cohesion force
-						cohesionForce += CohesionStrength * cohesionWeight * direction;
+						// Akinci Eq. 1: F = -γ * m_i * m_j * C(r) * direction
+						float forceMag = m_i * m_j * cohesionWeight;
+						cohesionForce += K_ij * forceMag * direction;
 					}
+
+					//==========================================================
+					// Curvature Minimization Force (Akinci Eq. 3)
+					// F_curvature = -γ * m_i * (n_i - n_j)
+					//
+					// This force minimizes surface area without explicit curvature
+					// - Zero in flat regions (n_i ≈ n_j)
+					// - Zero inside fluid (n_i ≈ 0, n_j ≈ 0)
+					// - Large at curved surfaces
+					//==========================================================
+					// Approximate n_j using local gradient contribution
+					float3 n_j = float3(0.0f, 0.0f, 0.0f);
+					float r2 = dist_m * dist_m;
+					float diff = h2 - r2;
+
+					if (diff > 0.0f && rho_j > SMALL_NUMBER)
+					{
+						float3 gradDir = -r_cm / dist_cm;  // Opposite direction for j
+						float gradMag = -6.0f * Poly6Coeff * diff * diff * dist_m;
+						// BUG FIX: Use m_j / rho_j for neighbor's volume, not m_i / rho_i
+						n_j = (m_j / rho_j) * gradMag * gradDir * h_m;
+					}
+
+					// Curvature force: F = -γ * m_i * (n_i - n_j)
+					// Scale down to avoid double-counting (symmetric pair contribution)
+					curvatureForce += K_ij * (-m_i * (n_i - n_j)) * 0.5f;
 				}
 			}
 		}
 	}
 
-	// Apply cohesion force to velocity
-	particle.Velocity += cohesionForce;
+	//==========================================================
+	// Combined Surface Tension Force (Akinci Eq. 5)
+	// F_st = F_cohesion + F_curvature
+	// (K_ij already applied per-pair)
+	//==========================================================
+	float3 totalForce = CohesionStrength * (cohesionForce + curvatureForce);
+
+	// Convert force to acceleration: a = F / m
+	float3 acceleration = totalForce / max(m_i, SMALL_NUMBER);
+
+	// Clamp maximum acceleration for stability
+	if (MaxSurfaceTensionForce > 0.0f)
+	{
+		float maxAccel = MaxSurfaceTensionForce / max(m_i, SMALL_NUMBER);
+		float accelMag = length(acceleration);
+		if (accelMag > maxAccel && accelMag > SMALL_NUMBER)
+		{
+			acceleration = acceleration * (maxAccel / accelMag);
+		}
+	}
+
+	// Apply to velocity with DeltaTime
+	// v += a * dt
+	// IMPORTANT: Acceleration is computed in meters (kernel uses m units),
+	// but particle.Velocity is in cm/s (Unreal units).
+	// Must convert m/s to cm/s by multiplying by M_TO_CM (100)
+	#define M_TO_CM 100.0f
+	particle.Velocity += acceleration * DeltaTime * M_TO_CM;
 
 	Particles[idx] = particle;
 }
