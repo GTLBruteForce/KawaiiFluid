@@ -6,6 +6,9 @@
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Components/KawaiiFluidComponent.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
+#include "Modules/KawaiiFluidRenderingModule.h"
+#include "Rendering/KawaiiFluidMetaballRenderer.h"
+#include "Rendering/KawaiiFluidRenderResource.h"
 #include "Components/FluidInteractionComponent.h"
 #include "Collision/FluidCollider.h"
 
@@ -126,6 +129,26 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 						Module->SetGPUSimulator(Context->GetGPUSimulator());
 						Module->SetGPUSimulationActive(true);
 						UE_LOG(LogTemp, Log, TEXT("SimulationModule: GPU simulation initialized at registration"));
+					}
+				}
+
+				// Initialize Context's RenderResource for batch rendering
+				if (!Context->HasValidRenderResource())
+				{
+					Context->InitializeRenderResource();
+				}
+
+				// Connect MetaballRenderer to SimulationContext
+				// Same Context → Same RenderResource → Single Draw Call
+				if (UKawaiiFluidComponent* OwnerComp = Cast<UKawaiiFluidComponent>(Module->GetOuter()))
+				{
+					if (UKawaiiFluidRenderingModule* RenderingMod = OwnerComp->GetRenderingModule())
+					{
+						if (UKawaiiFluidMetaballRenderer* MR = RenderingMod->GetMetaballRenderer())
+						{
+							MR->SetSimulationContext(Context);
+							UE_LOG(LogTemp, Log, TEXT("SimulationModule: Connected MetaballRenderer to Context"));
+						}
 					}
 				}
 			}

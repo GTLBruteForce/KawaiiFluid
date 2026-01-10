@@ -17,6 +17,7 @@
 #include "RenderingThread.h"
 #include "GPU/GPUFluidSimulator.h"
 #include "GPU/GPUFluidParticle.h"
+#include "Rendering/KawaiiFluidRenderResource.h"
 #include "Engine/EngineTypes.h"
 #include "Engine/OverlapResult.h"
 
@@ -41,6 +42,7 @@ UKawaiiFluidSimulationContext::~UKawaiiFluidSimulationContext()
 {
 	// Explicitly reset to ensure complete type is available for destruction
 	PerPolygonProcessor.Reset();
+	ReleaseRenderResource();
 	ReleaseGPUSimulator();
 }
 
@@ -100,6 +102,47 @@ void UKawaiiFluidSimulationContext::ReleaseGPUSimulator()
 	{
 		GPUSimulator->Release();
 		GPUSimulator.Reset();
+	}
+}
+
+//=============================================================================
+// Render Resource Methods (배치 렌더링용)
+//=============================================================================
+
+void UKawaiiFluidSimulationContext::InitializeRenderResource()
+{
+	if (RenderResource.IsValid())
+	{
+		return; // Already initialized
+	}
+
+	RenderResource = MakeShared<FKawaiiFluidRenderResource>();
+
+	// Initialize on render thread
+	ENQUEUE_RENDER_COMMAND(InitContextRenderResource)(
+		[RenderResourcePtr = RenderResource.Get()](FRHICommandListImmediate& RHICmdList)
+		{
+			RenderResourcePtr->InitResource(RHICmdList);
+		}
+	);
+
+	UE_LOG(LogTemp, Log, TEXT("SimulationContext: RenderResource initialized"));
+}
+
+void UKawaiiFluidSimulationContext::ReleaseRenderResource()
+{
+	if (RenderResource.IsValid())
+	{
+		ENQUEUE_RENDER_COMMAND(ReleaseContextRenderResource)(
+			[RenderResource = MoveTemp(RenderResource)](FRHICommandListImmediate& RHICmdList) mutable
+			{
+				if (RenderResource.IsValid())
+				{
+					RenderResource->ReleaseResource();
+					RenderResource.Reset();
+				}
+			}
+		);
 	}
 }
 

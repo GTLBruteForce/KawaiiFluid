@@ -4,9 +4,11 @@
 #include "Interfaces/IKawaiiFluidDataProvider.h"
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/KawaiiFluidRenderResource.h"
+#include "Core/KawaiiFluidSimulationContext.h"
 #include "Core/KawaiiRenderParticle.h"
 #include "DrawDebugHelpers.h"
 #include "RenderGraphResources.h"
+#include "RenderingThread.h"
 #include "GPU/GPUFluidSimulator.h"
 
 // Pipeline architecture (Pipeline handles ShadingMode internally)
@@ -46,16 +48,6 @@ void UKawaiiFluidMetaballRenderer::Initialize(UWorld* InWorld, USceneComponent* 
 		}
 	}
 
-	// Create GPU render resource
-	RenderResource = MakeShared<FKawaiiFluidRenderResource>();
-
-	// Initialize on render thread
-	ENQUEUE_RENDER_COMMAND(InitMetaballRenderResource)(
-		[RenderResourcePtr = RenderResource.Get()](FRHICommandListImmediate& RHICmdList)
-		{
-			RenderResourcePtr->InitResource(RHICmdList);
-		}
-	);
 
 	// Create Pipeline based on Preset
 	if (CachedPreset)
@@ -69,20 +61,8 @@ void UKawaiiFluidMetaballRenderer::Initialize(UWorld* InWorld, USceneComponent* 
 
 void UKawaiiFluidMetaballRenderer::Cleanup()
 {
-	// Release render resource
-	if (RenderResource.IsValid())
-	{
-		ENQUEUE_RENDER_COMMAND(ReleaseMetaballRenderResource)(
-			[RenderResource = MoveTemp(RenderResource)](FRHICommandListImmediate& RHICmdList) mutable
-			{
-				if (RenderResource.IsValid())
-				{
-					RenderResource->ReleaseResource();
-					RenderResource.Reset();
-				}
-			}
-		);
-	}
+	// Clear context reference - Context owns the RenderResource
+	CachedSimulationContext.Reset();
 
 	// Clear cached data
 	CachedParticlePositions.Empty();
@@ -108,11 +88,6 @@ void UKawaiiFluidMetaballRenderer::ApplySettings(const FKawaiiFluidMetaballRende
 	if (!bEnabled)
 	{
 		bIsRenderingActive = false;
-		// Clear GPU resources to stop rendering
-		if (RenderResource.IsValid())
-		{
-			RenderResource->UpdateParticleData(TArray<FKawaiiRenderParticle>());
-		}
 	}
 
 	// Map settings to LocalParameters
@@ -180,12 +155,6 @@ void UKawaiiFluidMetaballRenderer::SetEnabled(bool bInEnabled)
 	{
 		// Clear rendering state when disabled
 		bIsRenderingActive = false;
-
-		// Clear GPU resources to stop rendering
-		if (RenderResource.IsValid())
-		{
-			RenderResource->UpdateParticleData(TArray<FKawaiiRenderParticle>());
-		}
 	}
 }
 
@@ -230,9 +199,9 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 			const int32 GPUParticleCount = Simulator->GetPersistentParticleCount();
 
 			// 렌더 스레드에서 RenderResource를 통해 GPU 버퍼에 접근
-			if (RenderResource.IsValid())
+			if (FKawaiiFluidRenderResource* RR = GetFluidRenderResource())
 			{
-				RenderResource->SetGPUSimulatorReference(Simulator, GPUParticleCount, RenderRadius);
+				RR->SetGPUSimulatorReference(Simulator, GPUParticleCount, RenderRadius);
 			}
 
 			// Update stats
@@ -256,9 +225,9 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 	}
 
 	// CPU 모드: GPU 시뮬레이터 참조 해제
-	if (RenderResource.IsValid())
+	if (FKawaiiFluidRenderResource* RR = GetFluidRenderResource())
 	{
-		RenderResource->ClearGPUSimulatorReference();
+		RR->ClearGPUSimulatorReference();
 	}
 
 	// =====================================================
@@ -310,10 +279,17 @@ void UKawaiiFluidMetaballRenderer::UpdateGPUResources(const TArray<FFluidParticl
 	UE_LOG(LogTemp, Log, TEXT("Metaball: Rendered particles = %d / Total = %d (SurfaceOnly: %s)"),
 		RenderParticlesCache.Num(), Particles.Num(), bRenderSurfaceOnly ? TEXT("true") : TEXT("false"));
 
-	// Upload to GPU (via RenderResource)
-	if (RenderResource.IsValid())
+	// 스냅샷 방식: 렌더 스레드로 파티클 데이터 전송 (배칭 렌더링용)
+	// ENQUEUE_RENDER_COMMAND로 안전하게 전달, 렌더 스레드에서 Append
+	if (CachedSimulationContext.IsValid() && CachedSimulationContext->HasValidRenderResource())
 	{
-		RenderResource->UpdateParticleData(RenderParticlesCache);
+		FKawaiiFluidRenderResource* RR = CachedSimulationContext->GetRenderResource();
+		ENQUEUE_RENDER_COMMAND(AppendParticlesSnapshot)(
+			[RR, Snapshot = MoveTemp(RenderParticlesCache)](FRHICommandListImmediate& RHICmdList) mutable
+			{
+				RR->AppendParticlesSnapshot(MoveTemp(Snapshot));
+			}
+		);
 	}
 
 	// Cache particle radius for ViewExtension access
@@ -339,9 +315,9 @@ void UKawaiiFluidMetaballRenderer::UpdateGPUResourcesFromGPUBuffer(
 	}
 
 	// Update render resource using GPU→GPU copy (no CPU involvement)
-	if (RenderResource.IsValid())
+	if (FKawaiiFluidRenderResource* RR = GetFluidRenderResource())
 	{
-		RenderResource->UpdateFromGPUBuffer(PhysicsPooledBuffer, ParticleCount, ParticleRadius);
+		RR->UpdateFromGPUBuffer(PhysicsPooledBuffer, ParticleCount, ParticleRadius);
 	}
 
 	// Cache particle radius for ViewExtension access
@@ -358,12 +334,24 @@ void UKawaiiFluidMetaballRenderer::UpdateGPUResourcesFromGPUBuffer(
 
 FKawaiiFluidRenderResource* UKawaiiFluidMetaballRenderer::GetFluidRenderResource() const
 {
-	return RenderResource.Get();
+	if (CachedSimulationContext.IsValid())
+	{
+		return CachedSimulationContext->GetRenderResource();
+	}
+	return nullptr;
+}
+
+void UKawaiiFluidMetaballRenderer::SetSimulationContext(UKawaiiFluidSimulationContext* InContext)
+{
+	CachedSimulationContext = InContext;
+
+	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: %s SimulationContext"),
+		InContext ? TEXT("Set") : TEXT("Cleared"));
 }
 
 bool UKawaiiFluidMetaballRenderer::IsRenderingActive() const
 {
-	return bIsRenderingActive && RenderResource.IsValid();
+	return bIsRenderingActive && CachedSimulationContext.IsValid() && CachedSimulationContext->HasValidRenderResource();
 }
 
 void UKawaiiFluidMetaballRenderer::UpdatePipeline()

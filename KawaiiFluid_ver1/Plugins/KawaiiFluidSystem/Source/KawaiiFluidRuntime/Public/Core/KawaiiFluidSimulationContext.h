@@ -18,6 +18,7 @@ class FViscositySolver;
 class FAdhesionSolver;
 class FStackPressureSolver;
 class FGPUFluidSimulator;
+class FKawaiiFluidRenderResource;
 struct FGPUFluidSimulationParams;
 
 /**
@@ -87,6 +88,38 @@ public:
 	 * Set the preset associated with this context
 	 */
 	void SetCachedPreset(UKawaiiFluidPresetDataAsset* InPreset) { CachedPreset = InPreset; }
+
+	//========================================
+	// Render Resource (배치 렌더링용)
+	// Context가 소유하여 같은 Context를 공유하는 렌더러들이
+	// 동일한 RenderResource를 사용 → Draw Call 감소
+	//========================================
+
+	/**
+	 * Initialize render resource for this context
+	 * Called when context is first used for rendering
+	 */
+	void InitializeRenderResource();
+
+	/**
+	 * Release render resource
+	 */
+	void ReleaseRenderResource();
+
+	/**
+	 * Get shared render resource raw pointer (for quick access)
+	 */
+	FKawaiiFluidRenderResource* GetRenderResource() const { return RenderResource.Get(); }
+
+	/**
+	 * Get shared render resource as TSharedPtr (for sharing ownership)
+	 */
+	TSharedPtr<FKawaiiFluidRenderResource> GetRenderResourceShared() const { return RenderResource; }
+
+	/**
+	 * Check if render resource is valid
+	 */
+	bool HasValidRenderResource() const { return RenderResource.IsValid(); }
 
 	/**
 	 * Main simulation entry point (Stateless)
@@ -269,6 +302,13 @@ protected:
 
 	/** GPU fluid simulator instance */
 	TSharedPtr<FGPUFluidSimulator> GPUSimulator;
+
+	//========================================
+	// Render Resource (배치 렌더링용)
+	//========================================
+
+	/** Shared render resource for all renderers using this context */
+	TSharedPtr<FKawaiiFluidRenderResource> RenderResource;
 
 	/** Per-Polygon collision processor for CPU-based skeletal mesh triangle collision */
 	TUniquePtr<FPerPolygonCollisionProcessor> PerPolygonProcessor;

@@ -326,6 +326,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Fluid")
 	UKawaiiFluidSimulationModule* GetSimulationModule() const { return SimulationModule; }
 
+	/** Returns rendering module - provides access to renderers */
+	UKawaiiFluidRenderingModule* GetRenderingModule() const { return RenderingModule; }
+
 	//========================================
 	// Preset Configuration
 	//========================================

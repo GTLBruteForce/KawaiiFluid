@@ -38,10 +38,12 @@ public:
 	//========================================
 
 	/**
-	 * 파티클 데이터 업데이트 (게임 스레드 -> 렌더 스레드)
-	 * @param InParticles 렌더링용 파티클 배열
+	 * 스냅샷 방식 파티클 추가 (렌더 스레드 전용)
+	 * 게임 스레드에서 ENQUEUE_RENDER_COMMAND로 호출
+	 * 새 프레임이면 자동 Clear 후 Append
+	 * @param InParticles 추가할 파티클 배열 (MoveTemp로 전달)
 	 */
-	void UpdateParticleData(const TArray<FKawaiiRenderParticle>& InParticles);
+	void AppendParticlesSnapshot(TArray<FKawaiiRenderParticle>&& InParticles);
 
 	/**
 	 * GPU 버퍼에서 직접 복사 (Phase 2: GPU → GPU, no CPU involvement)
@@ -295,6 +297,9 @@ private:
 	 * RenderGraph Pass에서 Position 추출용으로 사용
 	 */
 	TArray<FKawaiiRenderParticle> CachedParticles;
+
+	/** 마지막 스냅샷 프레임 번호 (렌더 스레드 전용, 자동 Clear용) */
+	uint32 LastSnapshotFrame = 0;
 
 	//========================================
 	// 내부 헬퍼

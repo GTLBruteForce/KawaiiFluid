@@ -652,8 +652,9 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 				continue;
 			}
 
-			// Determine GPU mode from renderer's GPUSimulator
-			bool bUseGPU = (MetaballRenderer->GetGPUSimulator() != nullptr);
+			// Determine GPU mode from RenderResource (Single Source of Truth)
+			FKawaiiFluidRenderResource* RR = MetaballRenderer->GetFluidRenderResource();
+			bool bUseGPU = (RR && RR->HasGPUSimulator());
 			FContextCacheKey BatchKey(Preset, bUseGPU);
 
 			// Get rendering params from preset
@@ -849,8 +850,9 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 				continue;
 			}
 
-			// Determine GPU mode from renderer's GPUSimulator
-			bool bUseGPU = (MetaballRenderer->GetGPUSimulator() != nullptr);
+			// Determine GPU mode from RenderResource (Single Source of Truth)
+			FKawaiiFluidRenderResource* RR = MetaballRenderer->GetFluidRenderResource();
+			bool bUseGPU = (RR && RR->HasGPUSimulator());
 			FContextCacheKey BatchKey(Preset, bUseGPU);
 
 			// Get rendering params from preset

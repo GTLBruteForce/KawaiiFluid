@@ -38,6 +38,9 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 	// Create simulation context (physics solver)
 	SimulationContext = NewObject<UKawaiiFluidSimulationContext>(GetTransientPackage(), NAME_None, RF_Transient);
 
+	// Initialize Context's RenderResource for rendering
+	SimulationContext->InitializeRenderResource();
+
 	// Create visualization components (including PreviewActor)
 	CreateVisualizationComponents();
 
@@ -59,6 +62,12 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 		}
 
 		// Metaball settings come from Preset->RenderingParameters (set in SetPreset)
+
+		// Connect MetaballRenderer to SimulationContext for batched rendering
+		if (UKawaiiFluidMetaballRenderer* MR = RenderingModule->GetMetaballRenderer())
+		{
+			MR->SetSimulationContext(SimulationContext);
+		}
 
 		// Register to FluidRendererSubsystem (required for Metaball ViewExtension!)
 		if (UWorld* World = GetWorld())

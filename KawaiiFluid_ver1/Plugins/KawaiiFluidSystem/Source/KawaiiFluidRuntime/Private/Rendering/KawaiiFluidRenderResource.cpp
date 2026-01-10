@@ -51,43 +51,44 @@ void FKawaiiFluidRenderResource::ReleaseRHI()
 	bBufferReadyForRendering.store(false);
 }
 
-void FKawaiiFluidRenderResource::UpdateParticleData(const TArray<FKawaiiRenderParticle>& InParticles)
+void FKawaiiFluidRenderResource::AppendParticlesSnapshot(TArray<FKawaiiRenderParticle>&& InParticles)
 {
-	// Mark as CPU mode (not GPU mode)
+	// 렌더 스레드 전용 - ENQUEUE_RENDER_COMMAND 내부에서 호출됨
+	check(IsInRenderingThread());
+
+	// CPU 모드로 마킹
 	bIsInGPUMode.store(false);
 
-	int32 NewCount = InParticles.Num();
-
-	if (NewCount == 0)
+	if (InParticles.Num() == 0)
 	{
-		ParticleCount = 0;
-		CachedParticles.Empty();
-		bBufferReadyForRendering.store(false);
 		return;
 	}
 
-	// CPU 측 캐시 업데이트 (게임 스레드)
-	// ViewExtension에서 렌더 스레드에서 GPU 버퍼로 업로드됨
-	CachedParticles = InParticles;
-	CachedParticleRadius.store(InParticles[0].Radius);
-
-	// 버퍼 크기 조정 필요 시 렌더 스레드에서 ResizeBuffer 호출
-	const bool bNeedsResizeNow = NeedsResize(NewCount);
-	if (bNeedsResizeNow)
+	// 새 프레임이면 자동 Clear
+	uint32 CurrentFrame = GFrameCounterRenderThread;
+	if (LastSnapshotFrame != CurrentFrame)
 	{
-		FKawaiiFluidRenderResource* RenderResource = this;
-
-		ENQUEUE_RENDER_COMMAND(ResizeBufferForCPUMode)(
-			[RenderResource, NewCount](FRHICommandListImmediate& RHICmdList)
-			{
-				int32 NewCapacity = FMath::Max(NewCount, RenderResource->BufferCapacity * 2);
-				RenderResource->ResizeBuffer(RHICmdList, NewCapacity);
-			}
-		);
+		CachedParticles.Empty();
+		LastSnapshotFrame = CurrentFrame;
 	}
 
-	// ParticleCount는 ViewExtension에서 설정됨
-	// 여기서는 캐시만 업데이트
+	// 파티클 추가
+	CachedParticles.Append(MoveTemp(InParticles));
+
+	// Radius 업데이트 (첫 파티클 기준)
+	if (CachedParticles.Num() > 0)
+	{
+		CachedParticleRadius.store(CachedParticles[0].Radius);
+	}
+
+	// 버퍼 크기 조정 필요 시 즉시 ResizeBuffer 호출 (이미 렌더 스레드)
+	const int32 TotalCount = CachedParticles.Num();
+	if (NeedsResize(TotalCount))
+	{
+		FRHICommandListImmediate& RHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
+		int32 NewCapacity = FMath::Max(TotalCount, BufferCapacity * 2);
+		ResizeBuffer(RHICmdList, NewCapacity);
+	}
 }
 
 bool FKawaiiFluidRenderResource::NeedsResize(int32 NewCount) const

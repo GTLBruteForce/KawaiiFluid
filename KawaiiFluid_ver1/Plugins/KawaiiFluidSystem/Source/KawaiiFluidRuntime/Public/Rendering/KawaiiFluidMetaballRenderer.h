@@ -16,6 +16,7 @@ class UFluidRendererSubsystem;
 class FKawaiiFluidRenderResource;
 class IKawaiiMetaballRenderingPipeline;
 class FGPUFluidSimulator;
+class UKawaiiFluidSimulationContext;
 
 /**
  * Metaball Renderer (UObject-based)
@@ -83,6 +84,12 @@ public:
 	/** Get GPU render resource (for ViewExtension access) */
 	FKawaiiFluidRenderResource* GetFluidRenderResource() const;
 
+	/**
+	 * Set simulation context (for accessing shared RenderResource)
+	 * Context owns the RenderResource for batched rendering
+	 */
+	void SetSimulationContext(UKawaiiFluidSimulationContext* InContext);
+
 	/** Check if rendering is active and resource is valid */
 	bool IsRenderingActive() const;
 
@@ -98,20 +105,7 @@ public:
 
 	/** Get rendering pipeline (handles ShadingMode internally) */
 	TSharedPtr<IKawaiiMetaballRenderingPipeline> GetPipeline() const { return Pipeline; }
-
-	//========================================
-	// GPU Simulator Access (for ViewExtension render thread)
-	//========================================
-
-	/** Get cached GPU simulator (for render thread direct access) */
-	FGPUFluidSimulator* GetGPUSimulator() const { return CachedGPUSimulator; }
-
-	/** Set GPU simulator reference (called from game thread) */
-	void SetGPUSimulator(FGPUFluidSimulator* InSimulator) { CachedGPUSimulator = InSimulator; }
-
-	/** Check if GPU simulation mode is active */
-	bool IsGPUSimulationMode() const { return CachedGPUSimulator != nullptr; }
-
+	
 	/** Get spawn position hint for initial bounds (from owner component location) */
 	FVector GetSpawnPositionHint() const { return CachedOwnerComponent ? CachedOwnerComponent->GetComponentLocation() : FVector::ZeroVector; }
 
@@ -217,8 +211,8 @@ private:
 	// GPU Resources
 	//========================================
 
-	/** GPU render resource (manages structured buffers) */
-	TSharedPtr<FKawaiiFluidRenderResource> RenderResource;
+	/** Cached simulation context (owns the shared RenderResource) */
+	TWeakObjectPtr<UKawaiiFluidSimulationContext> CachedSimulationContext;
 
 	/** Converted render particles cache (FFluidParticle -> FKawaiiRenderParticle) */
 	TArray<FKawaiiRenderParticle> RenderParticlesCache;
@@ -232,13 +226,6 @@ private:
 
 	/** Cached pipeline type (to detect changes) */
 	EMetaballPipelineType CachedPipelineType = EMetaballPipelineType::ScreenSpace;
-
-	//========================================
-	// GPU Simulator Reference
-	//========================================
-
-	/** Cached GPU simulator pointer (for render thread direct buffer access) */
-	FGPUFluidSimulator* CachedGPUSimulator = nullptr;
 
 	//========================================
 	// Preset Reference
