@@ -1102,7 +1102,7 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 		}
 	}
 
-	UE_LOG(LogTemp, Log,
-	       TEXT("KawaiiFluid: PrePostProcess rendered - Translucent:%d ScreenSpace:%d"),
-	       TranslucentBatches.Num(), ScreenSpaceBatches.Num());
+	// UE_LOG(LogTemp, Log,
+	//        TEXT("KawaiiFluid: PrePostProcess rendered - Translucent:%d ScreenSpace:%d"),
+	//        TranslucentBatches.Num(), ScreenSpaceBatches.Num());
 }

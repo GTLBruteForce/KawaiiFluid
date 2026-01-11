@@ -83,8 +83,8 @@ void RenderFluidNormalPass(
 
 	PassParameters->OutputNormalTexture = GraphBuilder.CreateUAV(OutNormalTexture);
 
-	UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: Rendering FluidNormalPass. Extent: %d x %d"),
-	       Extent.X, Extent.Y);
+	// UE_LOG(LogTemp, Log, TEXT("KawaiiFluid: Rendering FluidNormalPass. Extent: %d x %d"),
+	//        Extent.X, Extent.Y);
 
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,

@@ -251,14 +251,14 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 		if (UFluidRendererSubsystem* RendererSubsystem = World->GetSubsystem<UFluidRendererSubsystem>())
 		{
 			// Debug log (throttled)
-			static int32 VSMLogCounter = 0;
-			if (++VSMLogCounter % 300 == 1)
-			{
-				UE_LOG(LogTemp, Log, TEXT("KFC VSM Check: bEnable=%d, Particles=%d, Material=%s"),
-					RendererSubsystem->bEnableVSMIntegration,
-					SimulationModule->GetParticleCount(),
-					RendererSubsystem->ShadowMaterial ? *RendererSubsystem->ShadowMaterial->GetName() : TEXT("NULL"));
-			}
+			// static int32 VSMLogCounter = 0;
+			// if (++VSMLogCounter % 300 == 1)
+			// {
+			// 	UE_LOG(LogTemp, Log, TEXT("KFC VSM Check: bEnable=%d, Particles=%d, Material=%s"),
+			// 		RendererSubsystem->bEnableVSMIntegration,
+			// 		SimulationModule->GetParticleCount(),
+			// 		RendererSubsystem->ShadowMaterial ? *RendererSubsystem->ShadowMaterial->GetName() : TEXT("NULL"));
+			// }
 
 			if (RendererSubsystem->bEnableVSMIntegration)
 			{
