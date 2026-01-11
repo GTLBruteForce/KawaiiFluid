@@ -85,7 +85,10 @@ enum class EDepthSmoothingFilter : uint8
 	Bilateral UMETA(DisplayName = "Bilateral Filter"),
 
 	/** Narrow-Range filter (Truong & Yuksel 2018) - better edge preservation, especially with anisotropy */
-	NarrowRange UMETA(DisplayName = "Narrow-Range Filter")
+	NarrowRange UMETA(DisplayName = "Narrow-Range Filter"),
+
+	/** Curvature Flow (van der Laan 2009) - Laplacian diffusion, reduces grazing angle artifacts */
+	CurvatureFlow UMETA(DisplayName = "Curvature Flow")
 };
 
 /**
@@ -121,13 +124,92 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float SmoothingStrength = 0.5f;
 
-	/** Bilateral filter 반경 (픽셀) */
+	/** Bilateral/Narrow-Range filter 반경 (픽셀) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing", meta = (ClampMin = "1", ClampMax = "50"))
 	int32 BilateralFilterRadius = 20;
 
 	/** Depth threshold (bilateral filter용) - 동적 계산 사용으로 deprecated */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing", meta = (ClampMin = "0.001", ClampMax = "100.0"))
 	float DepthThreshold = 10.0f;
+
+	//========================================
+	// Narrow-Range Filter Parameters
+	//========================================
+
+	/**
+	 * Narrow-Range threshold 비율
+	 * threshold = ParticleRadius × 이 값
+	 * 낮을수록 엣지 보존 강함, 높을수록 스무딩 강함
+	 * 1.0~3.0: 타이트한 엣지, 5.0~10.0: 부드러운 표면
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+		meta = (EditCondition = "SmoothingFilter == EDepthSmoothingFilter::NarrowRange",
+		        ClampMin = "0.5", ClampMax = "20.0"))
+	float NarrowRangeThresholdRatio = 3.0f;
+
+	/**
+	 * Narrow-Range clamp 비율
+	 * 앞쪽(카메라 방향) 샘플 클램핑 강도
+	 * ParticleRadius × 이 값으로 제한
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+		meta = (EditCondition = "SmoothingFilter == EDepthSmoothingFilter::NarrowRange",
+		        ClampMin = "0.1", ClampMax = "5.0"))
+	float NarrowRangeClampRatio = 1.0f;
+
+	/**
+	 * Narrow-Range Grazing Angle 부스트 강도
+	 * 얕은 각도에서 threshold를 높여 더 많은 샘플 포함
+	 * 0 = 부스트 없음, 1 = 그레이징 시 2배 threshold
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+		meta = (EditCondition = "SmoothingFilter == EDepthSmoothingFilter::NarrowRange",
+		        ClampMin = "0.0", ClampMax = "2.0"))
+	float NarrowRangeGrazingBoost = 1.0f;
+
+	//========================================
+	// Curvature Flow Parameters
+	//========================================
+
+	/**
+	 * Curvature Flow 시간 단계 (Dt)
+	 * 높을수록 한 iteration당 더 많이 스무딩됨
+	 * 0.05~0.15 권장 (안정성)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+		meta = (EditCondition = "SmoothingFilter == EDepthSmoothingFilter::CurvatureFlow",
+		        ClampMin = "0.01", ClampMax = "0.5"))
+	float CurvatureFlowDt = 0.1f;
+
+	/**
+	 * Curvature Flow 깊이 임계값
+	 * 이 값보다 큰 깊이 차이는 실루엣으로 간주하여 스무딩 안 함
+	 * 파티클 반지름의 3-10배 권장
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+		meta = (EditCondition = "SmoothingFilter == EDepthSmoothingFilter::CurvatureFlow",
+		        ClampMin = "1.0", ClampMax = "500.0"))
+	float CurvatureFlowDepthThreshold = 100.0f;
+
+	/**
+	 * Curvature Flow iteration 횟수
+	 * 높을수록 부드럽지만 비용 증가
+	 * Grazing angle 해결에는 50+ 권장
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+		meta = (EditCondition = "SmoothingFilter == EDepthSmoothingFilter::CurvatureFlow",
+		        ClampMin = "1", ClampMax = "200"))
+	int32 CurvatureFlowIterations = 50;
+
+	/**
+	 * Grazing Angle 부스트 강도
+	 * 얕은 각도에서 보일 때 스무딩을 더 강하게 적용
+	 * 0 = 부스트 없음, 1 = 그레이징 시 2배 스무딩
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+		meta = (EditCondition = "SmoothingFilter == EDepthSmoothingFilter::CurvatureFlow",
+		        ClampMin = "0.0", ClampMax = "2.0"))
+	float CurvatureFlowGrazingBoost = 1.0f;
 
 	/** 유체 색상 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance")
@@ -210,9 +292,10 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	 * Fresnel 반사 혼합 비율
 	 * BaseColor와 ReflectedColor 혼합 시 Fresnel 영향 정도
 	 * 0 = 반사 없음, 1 = 강한 반사
+	 * 0.8+ 권장: grazing angle에서 반사가 강해져 표면 디테일이 자연스럽게 가려짐
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float FresnelReflectionBlend = 0.5f;
+	float FresnelReflectionBlend = 0.8f;
 
 	/**
 	 * 흡수 바이어스 (Ray Marching용)
@@ -338,6 +421,15 @@ FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
 	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Params.SmoothingFilter)));
 	Hash = HashCombine(Hash, GetTypeHash(Params.SmoothingStrength));
 	Hash = HashCombine(Hash, GetTypeHash(Params.BilateralFilterRadius));
+	// Narrow-Range parameters
+	Hash = HashCombine(Hash, GetTypeHash(Params.NarrowRangeThresholdRatio));
+	Hash = HashCombine(Hash, GetTypeHash(Params.NarrowRangeClampRatio));
+	Hash = HashCombine(Hash, GetTypeHash(Params.NarrowRangeGrazingBoost));
+	// Curvature Flow parameters
+	Hash = HashCombine(Hash, GetTypeHash(Params.CurvatureFlowDt));
+	Hash = HashCombine(Hash, GetTypeHash(Params.CurvatureFlowDepthThreshold));
+	Hash = HashCombine(Hash, GetTypeHash(Params.CurvatureFlowIterations));
+	Hash = HashCombine(Hash, GetTypeHash(Params.CurvatureFlowGrazingBoost));
 	// Anisotropy parameters
 	Hash = HashCombine(Hash, GetTypeHash(Params.AnisotropyParams.bEnabled));
 	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Params.AnisotropyParams.Mode)));
@@ -390,6 +482,15 @@ FORCEINLINE bool operator==(const FFluidRenderingParameters& A, const FFluidRend
 	       A.SmoothingFilter == B.SmoothingFilter &&
 	       FMath::IsNearlyEqual(A.SmoothingStrength, B.SmoothingStrength, 0.001f) &&
 	       A.BilateralFilterRadius == B.BilateralFilterRadius &&
+	       // Narrow-Range parameters
+	       FMath::IsNearlyEqual(A.NarrowRangeThresholdRatio, B.NarrowRangeThresholdRatio, 0.01f) &&
+	       FMath::IsNearlyEqual(A.NarrowRangeClampRatio, B.NarrowRangeClampRatio, 0.01f) &&
+	       FMath::IsNearlyEqual(A.NarrowRangeGrazingBoost, B.NarrowRangeGrazingBoost, 0.01f) &&
+	       // Curvature Flow parameters
+	       FMath::IsNearlyEqual(A.CurvatureFlowDt, B.CurvatureFlowDt, 0.001f) &&
+	       FMath::IsNearlyEqual(A.CurvatureFlowDepthThreshold, B.CurvatureFlowDepthThreshold, 0.1f) &&
+	       A.CurvatureFlowIterations == B.CurvatureFlowIterations &&
+	       FMath::IsNearlyEqual(A.CurvatureFlowGrazingBoost, B.CurvatureFlowGrazingBoost, 0.01f) &&
 	       // Anisotropy parameters
 	       A.AnisotropyParams.bEnabled == B.AnisotropyParams.bEnabled &&
 	       A.AnisotropyParams.Mode == B.AnisotropyParams.Mode &&

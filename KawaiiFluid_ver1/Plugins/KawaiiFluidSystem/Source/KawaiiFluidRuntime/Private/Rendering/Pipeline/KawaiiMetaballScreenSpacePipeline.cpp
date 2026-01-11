@@ -71,18 +71,35 @@ static bool GenerateIntermediateTextures(
 
 	// 2. Smoothing Pass - select filter based on parameter
 	FRDGTextureRef SmoothedDepthTexture = nullptr;
-	if (RenderParams.SmoothingFilter == EDepthSmoothingFilter::NarrowRange)
+
+	// Calculate adjusted particle radius for anisotropy
+	float AdjustedParticleRadius = AverageParticleRadius;
+	if (RenderParams.AnisotropyParams.bEnabled)
 	{
-		// Narrow-Range Filter (Truong & Yuksel 2018) - better edge preservation
-		// Adjust particle radius for anisotropy (ellipsoids create larger depth variations)
-		float AdjustedParticleRadius = AverageParticleRadius;
-		if (RenderParams.AnisotropyParams.bEnabled)
-		{
-			float AnisotropyMultiplier = FMath::Max(1.0f, RenderParams.AnisotropyParams.AnisotropyMax);
-			AdjustedParticleRadius *= AnisotropyMultiplier;
-		}
+		float AnisotropyMultiplier = FMath::Max(1.0f, RenderParams.AnisotropyParams.AnisotropyMax);
+		AdjustedParticleRadius *= AnisotropyMultiplier;
+	}
+
+	if (RenderParams.SmoothingFilter == EDepthSmoothingFilter::CurvatureFlow)
+	{
+		// Curvature Flow (van der Laan 2009) - Laplacian diffusion with grazing-aware weighting
+		RenderFluidCurvatureFlowSmoothingPass(
+			GraphBuilder, View, DepthTexture, SmoothedDepthTexture,
+			AdjustedParticleRadius,
+			RenderParams.CurvatureFlowDt,
+			RenderParams.CurvatureFlowDepthThreshold,
+			RenderParams.CurvatureFlowIterations,
+			RenderParams.CurvatureFlowGrazingBoost);
+	}
+	else if (RenderParams.SmoothingFilter == EDepthSmoothingFilter::NarrowRange)
+	{
+		// Narrow-Range Filter (Truong & Yuksel 2018) - better edge preservation with grazing-aware threshold
 		RenderFluidNarrowRangeSmoothingPass(GraphBuilder, View, DepthTexture, SmoothedDepthTexture,
-		                                    BlurRadius, AdjustedParticleRadius, NumIterations);
+		                                    BlurRadius, AdjustedParticleRadius,
+		                                    RenderParams.NarrowRangeThresholdRatio,
+		                                    RenderParams.NarrowRangeClampRatio,
+		                                    NumIterations,
+		                                    RenderParams.NarrowRangeGrazingBoost);
 	}
 	else
 	{

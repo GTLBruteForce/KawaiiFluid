@@ -29,7 +29,7 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidISMRendererSettings
 
 	/** Enable/disable ISM renderer */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control")
-	bool bEnabled = true;
+	bool bEnabled = false;
 
 	//========================================
 	// Configuration

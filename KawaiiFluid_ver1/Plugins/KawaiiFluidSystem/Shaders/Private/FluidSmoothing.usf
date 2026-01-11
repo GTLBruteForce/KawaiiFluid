@@ -15,9 +15,10 @@ float ParticleRadius;  // For Narrow-Range Filter threshold calculation
 // 배경 깊이 임계값 (Depth Pass의 Clear 값에 맞춰 설정해 둠)
 #define BACKGROUND_DEPTH_THRESH 3.0e30f
 
-// Narrow-Range Filter 파라미터 (Truong & Yuksel 2018)
-#define NR_THRESHOLD_RATIO 10.5f  // threshold = ParticleRadius * NR_THRESHOLD_RATIO
-#define NR_CLAMP_RATIO 1.0f       // clamp threshold = ParticleRadius * NR_CLAMP_RATIO 
+// Narrow-Range Filter 파라미터 (에디터에서 설정)
+float NarrowRangeThresholdRatio;  // threshold = ParticleRadius * ThresholdRatio
+float NarrowRangeClampRatio;      // clamp = ParticleRadius * ClampRatio
+float NarrowRangeGrazingBoost;    // Grazing angle boost (0 = none, 1 = 2x at grazing)
 
 // 가우시안 가중치 계산 함수
 float GetGaussianWeight(float Distance, float Sigma)
@@ -139,11 +140,32 @@ void NarrowRangeFilterCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
-	// Narrow-Range Filter parameters
+	// Sample neighbors to compute depth gradient for grazing angle detection
+	float zL = InputTexture.Load(int3(clamp(CenterCoord + int2(-1, 0), int2(0,0), int2(TextureSize)-1), 0));
+	float zR = InputTexture.Load(int3(clamp(CenterCoord + int2( 1, 0), int2(0,0), int2(TextureSize)-1), 0));
+	float zT = InputTexture.Load(int3(clamp(CenterCoord + int2( 0,-1), int2(0,0), int2(TextureSize)-1), 0));
+	float zB = InputTexture.Load(int3(clamp(CenterCoord + int2( 0, 1), int2(0,0), int2(TextureSize)-1), 0));
+
+	// Replace background with center depth for gradient calculation
+	zL = (zL > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zL;
+	zR = (zR > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zR;
+	zT = (zT > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zT;
+	zB = (zB > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zB;
+
+	// Compute depth gradient magnitude
+	float zx = (zR - zL) * 0.5f;
+	float zy = (zB - zT) * 0.5f;
+	float GradMag = sqrt(zx * zx + zy * zy);
+
+	// Grazing factor: large gradient = grazing angle
+	float GrazingFactor = saturate(GradMag / (ParticleRadius * 2.0f));
+
+	// Narrow-Range Filter parameters with grazing-aware threshold
 	const int KernelRadius = int(BlurRadius);
 	const float Sigma = BlurRadius / 3.0f;
-	const float Threshold = ParticleRadius * NR_THRESHOLD_RATIO;
-	const float ClampThreshold = ParticleRadius * NR_CLAMP_RATIO;
+	const float BaseThreshold = ParticleRadius * NarrowRangeThresholdRatio;
+	const float Threshold = BaseThreshold * (1.0f + NarrowRangeGrazingBoost * GrazingFactor);
+	const float ClampThreshold = ParticleRadius * NarrowRangeClampRatio * (1.0f + NarrowRangeGrazingBoost * GrazingFactor);
 
 	// Dynamic range bounds - start from center depth
 	float Upper = CenterDepth + Threshold;
@@ -261,4 +283,106 @@ void ThicknessGaussianBlurCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	OutputTexture[CenterCoord] = FinalThickness;
+}
+
+//=============================================================================
+// Mean Curvature Flow Smoothing
+// Based on "Screen Space Fluid Rendering with Curvature Flow" (van der Laan et al.)
+//
+// Key insight: Diffuses depth based on mean curvature, which naturally:
+// - Smooths bumpy surfaces (high curvature regions)
+// - Preserves flat areas and sharp edges
+// - Reduces grazing angle artifacts by smoothing surface normals
+//
+// Mean Curvature H = div(∇z / ||∇z||)
+// Update: z_new = z + dt * H
+//=============================================================================
+
+// Curvature Flow parameters
+float CurvatureFlowDt;           // Time step for diffusion
+float CurvatureFlowThreshold;    // Depth discontinuity threshold
+float CurvatureFlowGrazingBoost; // Grazing angle boost (0 = none, 1 = 2x at grazing)
+
+[numthreads(THREADGROUP_SIZE, THREADGROUP_SIZE, 1)]
+void CurvatureFlowCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	// Bounds check
+	if (any(DispatchThreadId.xy >= uint2(TextureSize)))
+	{
+		return;
+	}
+
+	int2 CenterCoord = int2(DispatchThreadId.xy);
+	float CenterDepth = InputTexture.Load(int3(CenterCoord, 0));
+
+	// Background: pass through
+	if (CenterDepth > BACKGROUND_DEPTH_THRESH)
+	{
+		OutputTexture[CenterCoord] = CenterDepth;
+		return;
+	}
+
+	// Sample neighbors for gradient and curvature computation
+	// Use 3x3 stencil for second-order derivatives
+	float zL = InputTexture.Load(int3(clamp(CenterCoord + int2(-1, 0), int2(0,0), int2(TextureSize)-1), 0));
+	float zR = InputTexture.Load(int3(clamp(CenterCoord + int2( 1, 0), int2(0,0), int2(TextureSize)-1), 0));
+	float zT = InputTexture.Load(int3(clamp(CenterCoord + int2( 0,-1), int2(0,0), int2(TextureSize)-1), 0));
+	float zB = InputTexture.Load(int3(clamp(CenterCoord + int2( 0, 1), int2(0,0), int2(TextureSize)-1), 0));
+
+	// Diagonal neighbors for mixed derivative
+	float zTL = InputTexture.Load(int3(clamp(CenterCoord + int2(-1,-1), int2(0,0), int2(TextureSize)-1), 0));
+	float zTR = InputTexture.Load(int3(clamp(CenterCoord + int2( 1,-1), int2(0,0), int2(TextureSize)-1), 0));
+	float zBL = InputTexture.Load(int3(clamp(CenterCoord + int2(-1, 1), int2(0,0), int2(TextureSize)-1), 0));
+	float zBR = InputTexture.Load(int3(clamp(CenterCoord + int2( 1, 1), int2(0,0), int2(TextureSize)-1), 0));
+
+	// Check for depth discontinuities (silhouette edges)
+	// Don't smooth across large depth jumps
+	float MaxDepthDiff = max(max(abs(zL - CenterDepth), abs(zR - CenterDepth)),
+	                        max(abs(zT - CenterDepth), abs(zB - CenterDepth)));
+
+	if (MaxDepthDiff > CurvatureFlowThreshold)
+	{
+		// Near silhouette edge - use bilateral fallback or skip
+		OutputTexture[CenterCoord] = CenterDepth;
+		return;
+	}
+
+	// Replace background samples with center depth to avoid edge artifacts
+	zL = (zL > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zL;
+	zR = (zR > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zR;
+	zT = (zT > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zT;
+	zB = (zB > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zB;
+	zTL = (zTL > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zTL;
+	zTR = (zTR > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zTR;
+	zBL = (zBL > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zBL;
+	zBR = (zBR > BACKGROUND_DEPTH_THRESH) ? CenterDepth : zBR;
+
+	// First derivatives (for grazing angle detection)
+	float zx = (zR - zL) * 0.5f;
+	float zy = (zB - zT) * 0.5f;
+	float GradMag = sqrt(zx * zx + zy * zy);
+
+	// Second derivatives (Laplacian components)
+	float zxx = zL - 2.0f * CenterDepth + zR;
+	float zyy = zT - 2.0f * CenterDepth + zB;
+
+	// Laplacian-based curvature flow (practical SSFR approach)
+	// This is the standard approach used in van der Laan et al. and NVIDIA FleX
+	float Laplacian = zxx + zyy;
+
+	// Grazing-aware time step:
+	// At grazing angles, depth gradient is large -> boost smoothing strength
+	// GrazingFactor: 0 at normal view, approaches 1 at grazing angles
+	// The gradient magnitude correlates with view angle - larger at grazing
+	float GrazingFactor = saturate(GradMag / (ParticleRadius * 2.0f));
+	float AdaptiveDt = CurvatureFlowDt * (1.0f + CurvatureFlowGrazingBoost * GrazingFactor);
+
+	// Curvature flow update: z_new = z + dt * Laplacian
+	float NewDepth = CenterDepth + AdaptiveDt * Laplacian;
+
+	// Clamp to prevent extreme changes (stability)
+	float MaxChange = ParticleRadius * 0.5f;
+	NewDepth = clamp(NewDepth, CenterDepth - MaxChange, CenterDepth + MaxChange);
+
+	OutputTexture[CenterCoord] = NewDepth;
 }

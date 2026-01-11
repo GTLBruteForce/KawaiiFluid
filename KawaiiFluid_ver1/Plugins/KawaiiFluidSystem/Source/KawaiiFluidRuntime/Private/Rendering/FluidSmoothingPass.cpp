@@ -60,6 +60,9 @@ class FFluidNarrowRangeFilterCS : public FGlobalShader
 		SHADER_PARAMETER(float, BlurRadius)
 		SHADER_PARAMETER(float, BlurDepthFalloff)  // Unused but kept for consistency
 		SHADER_PARAMETER(float, ParticleRadius)
+		SHADER_PARAMETER(float, NarrowRangeThresholdRatio)
+		SHADER_PARAMETER(float, NarrowRangeClampRatio)
+		SHADER_PARAMETER(float, NarrowRangeGrazingBoost)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, OutputTexture)
 	END_SHADER_PARAMETER_STRUCT()
 
@@ -111,6 +114,44 @@ class FFluidThicknessGaussianBlurCS : public FGlobalShader
 
 IMPLEMENT_GLOBAL_SHADER(FFluidThicknessGaussianBlurCS,
                         "/Plugin/KawaiiFluidSystem/Private/FluidSmoothing.usf", "ThicknessGaussianBlurCS",
+                        SF_Compute);
+
+//=============================================================================
+// Curvature Flow Compute Shader (van der Laan et al.)
+//=============================================================================
+
+class FFluidCurvatureFlowCS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FFluidCurvatureFlowCS);
+	SHADER_USE_PARAMETER_STRUCT(FFluidCurvatureFlowCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputTexture)
+		SHADER_PARAMETER(FVector2f, TextureSize)
+		SHADER_PARAMETER(float, BlurRadius)  // Unused but kept for interface consistency
+		SHADER_PARAMETER(float, BlurDepthFalloff)  // Unused
+		SHADER_PARAMETER(float, ParticleRadius)
+		SHADER_PARAMETER(float, CurvatureFlowDt)
+		SHADER_PARAMETER(float, CurvatureFlowThreshold)
+		SHADER_PARAMETER(float, CurvatureFlowGrazingBoost)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, OutputTexture)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters,
+	                                         FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE"), 8);
+	}
+};
+
+IMPLEMENT_GLOBAL_SHADER(FFluidCurvatureFlowCS,
+                        "/Plugin/KawaiiFluidSystem/Private/FluidSmoothing.usf", "CurvatureFlowCS",
                         SF_Compute);
 
 //=============================================================================
@@ -194,12 +235,15 @@ void RenderFluidNarrowRangeSmoothingPass(
 	FRDGTextureRef& OutSmoothedDepthTexture,
 	float FilterRadius,
 	float ParticleRadius,
-	int32 NumIterations)
+	float ThresholdRatio,
+	float ClampRatio,
+	int32 NumIterations,
+	float GrazingBoost)
 {
 	RDG_EVENT_SCOPE(GraphBuilder, "FluidNarrowRangeFilter (Multi-Iteration)");
 	check(InputDepthTexture);
 
-	NumIterations = FMath::Clamp(NumIterations, 1, 5);
+	NumIterations = FMath::Clamp(NumIterations, 1, 10);
 
 	FIntPoint TextureSize = InputDepthTexture->Desc.Extent;
 
@@ -226,6 +270,9 @@ void RenderFluidNarrowRangeSmoothingPass(
 		PassParameters->BlurRadius = FilterRadius;
 		PassParameters->BlurDepthFalloff = 0.0f;  // Unused in narrow-range
 		PassParameters->ParticleRadius = ParticleRadius;
+		PassParameters->NarrowRangeThresholdRatio = ThresholdRatio;
+		PassParameters->NarrowRangeClampRatio = ClampRatio;
+		PassParameters->NarrowRangeGrazingBoost = GrazingBoost;
 		PassParameters->OutputTexture = GraphBuilder.CreateUAV(IterationOutput);
 
 		FComputeShaderUtils::AddPass(
@@ -295,4 +342,67 @@ void RenderFluidThicknessSmoothingPass(
 	}
 
 	OutSmoothedThicknessTexture = CurrentInput;
+}
+
+//=============================================================================
+// Curvature Flow Smoothing Pass (van der Laan et al.)
+//=============================================================================
+
+void RenderFluidCurvatureFlowSmoothingPass(
+	FRDGBuilder& GraphBuilder,
+	const FSceneView& View,
+	FRDGTextureRef InputDepthTexture,
+	FRDGTextureRef& OutSmoothedDepthTexture,
+	float ParticleRadius,
+	float Dt,
+	float DepthThreshold,
+	int32 NumIterations,
+	float GrazingBoost)
+{
+	RDG_EVENT_SCOPE(GraphBuilder, "FluidCurvatureFlowSmoothing");
+	check(InputDepthTexture);
+
+	NumIterations = FMath::Clamp(NumIterations, 1, 200);
+
+	FIntPoint TextureSize = InputDepthTexture->Desc.Extent;
+
+	FRDGTextureDesc IntermediateDesc = FRDGTextureDesc::Create2D(
+		TextureSize,
+		PF_R32_FLOAT,
+		FClearValueBinding::None,
+		TexCreate_ShaderResource | TexCreate_UAV);
+
+	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	TShaderMapRef<FFluidCurvatureFlowCS> ComputeShader(GlobalShaderMap);
+
+	FRDGTextureRef CurrentInput = InputDepthTexture;
+
+	for (int32 Iteration = 0; Iteration < NumIterations; ++Iteration)
+	{
+		FRDGTextureRef IterationOutput = GraphBuilder.CreateTexture(
+			IntermediateDesc, TEXT("FluidDepthCurvatureFlow"));
+
+		auto* PassParameters = GraphBuilder.AllocParameters<FFluidCurvatureFlowCS::FParameters>();
+
+		PassParameters->InputTexture = CurrentInput;
+		PassParameters->TextureSize = FVector2f(TextureSize.X, TextureSize.Y);
+		PassParameters->BlurRadius = 0.0f;  // Unused
+		PassParameters->BlurDepthFalloff = 0.0f;  // Unused
+		PassParameters->ParticleRadius = ParticleRadius;
+		PassParameters->CurvatureFlowDt = Dt;
+		PassParameters->CurvatureFlowThreshold = DepthThreshold;
+		PassParameters->CurvatureFlowGrazingBoost = GrazingBoost;
+		PassParameters->OutputTexture = GraphBuilder.CreateUAV(IterationOutput);
+
+		FComputeShaderUtils::AddPass(
+			GraphBuilder,
+			RDG_EVENT_NAME("CurvatureFlow_Iteration%d", Iteration),
+			ComputeShader,
+			PassParameters,
+			FComputeShaderUtils::GetGroupCount(TextureSize, 8));
+
+		CurrentInput = IterationOutput;
+	}
+
+	OutSmoothedDepthTexture = CurrentInput;
 }
