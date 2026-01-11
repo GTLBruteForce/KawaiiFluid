@@ -478,6 +478,12 @@ void UFluidInteractionComponent::ProcessCollisionFeedback(float DeltaTime)
 		int32 FeedbackCount = 0;
 		GPUSimulator->GetAllCollisionFeedback(AllFeedback, FeedbackCount);
 
+		// 본별 힘 처리 (Per-Bone Force)
+		if (bEnablePerBoneForce)
+		{
+			ProcessPerBoneForces(DeltaTime, AllFeedback, FeedbackCount);
+		}
+
 		if (FeedbackCount > 0)
 		{
 			// 항력 계산 파라미터
@@ -669,4 +675,301 @@ void UFluidInteractionComponent::EnableGPUCollisionFeedbackIfNeeded()
 			}
 		}
 	}
+}
+
+//=============================================================================
+// Per-Bone Force Implementation
+//=============================================================================
+
+void UFluidInteractionComponent::InitializeBoneNameCache()
+{
+	if (bBoneNameCacheInitialized)
+	{
+		return;
+	}
+
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
+	USkeletalMeshComponent* SkelMesh = Owner->FindComponentByClass<USkeletalMeshComponent>();
+	if (!SkelMesh || !SkelMesh->GetSkeletalMeshAsset())
+	{
+		return;
+	}
+
+	const FReferenceSkeleton& RefSkeleton = SkelMesh->GetSkeletalMeshAsset()->GetRefSkeleton();
+	const int32 BoneCount = RefSkeleton.GetNum();
+
+	BoneIndexToNameCache.Empty(BoneCount);
+	for (int32 i = 0; i < BoneCount; ++i)
+	{
+		BoneIndexToNameCache.Add(i, RefSkeleton.GetBoneName(i));
+	}
+
+	bBoneNameCacheInitialized = true;
+}
+
+void UFluidInteractionComponent::ProcessPerBoneForces(float DeltaTime, const TArray<FGPUCollisionFeedback>& AllFeedback, int32 FeedbackCount)
+{
+	AActor* Owner = GetOwner();
+	const int32 MyOwnerID = Owner ? Owner->GetUniqueID() : 0;
+
+	// 본 이름 캐시 초기화 (첫 호출 시)
+	if (!bBoneNameCacheInitialized)
+	{
+		InitializeBoneNameCache();
+	}
+
+	// 본별 원시 힘 집계 (이번 프레임)
+	TMap<int32, FVector> RawBoneForces;
+	TMap<int32, int32> BoneContactCounts;
+
+	// 캐릭터/오브젝트 속도 가져오기
+	FVector BodyVelocity = FVector::ZeroVector;
+	if (Owner)
+	{
+		if (UCharacterMovementComponent* MovementComp = Owner->FindComponentByClass<UCharacterMovementComponent>())
+		{
+			BodyVelocity = MovementComp->Velocity;
+		}
+		else if (UPrimitiveComponent* RootPrimitive = Cast<UPrimitiveComponent>(Owner->GetRootComponent()))
+		{
+			BodyVelocity = RootPrimitive->GetPhysicsLinearVelocity();
+		}
+	}
+	const FVector BodyVelocityInMS = BodyVelocity * 0.01f;  // cm/s → m/s
+
+	// 항력 계산 파라미터
+	const float ParticleRadius = 3.0f;  // cm (기본값)
+	const float ParticleArea = PI * ParticleRadius * ParticleRadius;  // cm²
+	const float AreaInM2 = ParticleArea * 0.0001f;  // m² (cm² → m²)
+
+	for (int32 i = 0; i < FeedbackCount; ++i)
+	{
+		const FGPUCollisionFeedback& Feedback = AllFeedback[i];
+
+		// OwnerID 필터링
+		if (Feedback.OwnerID != 0 && Feedback.OwnerID != MyOwnerID)
+		{
+			continue;
+		}
+
+		// BoneIndex가 유효한 경우에만 처리
+		if (Feedback.BoneIndex < 0)
+		{
+			continue;
+		}
+
+		// 파티클 속도 (cm/s → m/s)
+		FVector ParticleVelocity(Feedback.ParticleVelocity.X, Feedback.ParticleVelocity.Y, Feedback.ParticleVelocity.Z);
+		FVector ParticleVelocityInMS = ParticleVelocity * 0.01f;
+
+		// 상대 속도
+		FVector RelativeVelocity = ParticleVelocityInMS - BodyVelocityInMS;
+		float RelativeSpeed = RelativeVelocity.Size();
+
+		if (RelativeSpeed < SMALL_NUMBER)
+		{
+			continue;
+		}
+
+		// 항력 공식: F = ½ρCdA|v|²
+		float DragMagnitude = 0.5f * Feedback.Density * DragCoefficient * AreaInM2 * RelativeSpeed * RelativeSpeed;
+		FVector DragDirection = RelativeVelocity / RelativeSpeed;
+		FVector DragForce = DragDirection * DragMagnitude;
+
+		// cm 단위로 변환 후 배율 적용
+		DragForce *= 100.0f * PerBoneForceMultiplier;
+
+		// 본별 힘 누적
+		FVector& BoneForce = RawBoneForces.FindOrAdd(Feedback.BoneIndex, FVector::ZeroVector);
+		BoneForce += DragForce;
+
+		int32& ContactCount = BoneContactCounts.FindOrAdd(Feedback.BoneIndex, 0);
+		ContactCount++;
+	}
+
+	// 스무딩 적용 및 결과 저장
+	// 먼저 기존 본들 감쇠
+	TArray<int32> BonesToRemove;
+	for (auto& Pair : SmoothedPerBoneForces)
+	{
+		const int32 BoneIdx = Pair.Key;
+		FVector& SmoothedForceRef = Pair.Value;
+
+		FVector* RawForce = RawBoneForces.Find(BoneIdx);
+		FVector TargetForce = RawForce ? *RawForce : FVector::ZeroVector;
+
+		SmoothedForceRef = FMath::VInterpTo(SmoothedForceRef, TargetForce, DeltaTime, PerBoneForceSmoothingSpeed);
+		CurrentPerBoneForces.FindOrAdd(BoneIdx) = SmoothedForceRef;
+
+		// 힘이 거의 0이면 제거 대상
+		if (SmoothedForceRef.SizeSquared() < 0.01f && !RawForce)
+		{
+			BonesToRemove.Add(BoneIdx);
+		}
+	}
+
+	// 새로운 본들 추가
+	for (const auto& Pair : RawBoneForces)
+	{
+		const int32 BoneIdx = Pair.Key;
+		if (!SmoothedPerBoneForces.Contains(BoneIdx))
+		{
+			FVector& SmoothedForceRef = SmoothedPerBoneForces.Add(BoneIdx, FVector::ZeroVector);
+			SmoothedForceRef = FMath::VInterpTo(SmoothedForceRef, Pair.Value, DeltaTime, PerBoneForceSmoothingSpeed);
+			CurrentPerBoneForces.FindOrAdd(BoneIdx) = SmoothedForceRef;
+		}
+	}
+
+	// 0에 가까운 본 제거
+	for (int32 BoneIdx : BonesToRemove)
+	{
+		SmoothedPerBoneForces.Remove(BoneIdx);
+		CurrentPerBoneForces.Remove(BoneIdx);
+	}
+
+	// =====================================================
+	// 디버그 로그: 3초마다 본별 항력 출력
+	// =====================================================
+	PerBoneForceDebugTimer += DeltaTime;
+	if (PerBoneForceDebugTimer >= 3.0f)
+	{
+		PerBoneForceDebugTimer = 0.0f;
+
+		// 피드백 데이터 분석 로그
+		int32 TotalFeedback = FeedbackCount;
+		int32 MatchedOwner = 0;
+		int32 ValidBoneIndex = 0;
+		int32 InvalidBoneIndex = 0;
+
+		for (int32 i = 0; i < FeedbackCount; ++i)
+		{
+			const FGPUCollisionFeedback& Feedback = AllFeedback[i];
+
+			if (Feedback.OwnerID == 0 || Feedback.OwnerID == MyOwnerID)
+			{
+				MatchedOwner++;
+				if (Feedback.BoneIndex >= 0)
+				{
+					ValidBoneIndex++;
+				}
+				else
+				{
+					InvalidBoneIndex++;
+				}
+			}
+		}
+
+		// 피드백 OwnerID 샘플 수집
+		TSet<int32> UniqueOwnerIDs;
+		for (int32 i = 0; i < FMath::Min(FeedbackCount, 100); ++i)
+		{
+			UniqueOwnerIDs.Add(AllFeedback[i].OwnerID);
+		}
+		FString OwnerIDSamples;
+		for (int32 ID : UniqueOwnerIDs)
+		{
+			OwnerIDSamples += FString::Printf(TEXT("%d, "), ID);
+		}
+
+		UE_LOG(LogTemp, Warning, TEXT("========== Per-Bone Force Debug (Owner: %s, ID: %d) =========="),
+			Owner ? *Owner->GetName() : TEXT("None"), MyOwnerID);
+		UE_LOG(LogTemp, Warning, TEXT("  Feedback: Total=%d, MatchedOwner=%d, ValidBone=%d, InvalidBone(=-1)=%d"),
+			TotalFeedback, MatchedOwner, ValidBoneIndex, InvalidBoneIndex);
+		UE_LOG(LogTemp, Warning, TEXT("  Feedback OwnerIDs 샘플: [%s]"), *OwnerIDSamples);
+
+		if (CurrentPerBoneForces.Num() > 0)
+		{
+			for (const auto& Pair : CurrentPerBoneForces)
+			{
+				const int32 BoneIdx = Pair.Key;
+				const FVector& Force = Pair.Value;
+				const float ForceMagnitude = Force.Size();
+
+				// 본 이름 가져오기
+				FName BoneName = NAME_None;
+				if (const FName* CachedName = BoneIndexToNameCache.Find(BoneIdx))
+				{
+					BoneName = *CachedName;
+				}
+
+				UE_LOG(LogTemp, Warning, TEXT("  [%d] %s: Force=(%.2f, %.2f, %.2f) Magnitude=%.2f"),
+					BoneIdx,
+					*BoneName.ToString(),
+					Force.X, Force.Y, Force.Z,
+					ForceMagnitude);
+			}
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("  -> No active bone forces"));
+		}
+
+		UE_LOG(LogTemp, Warning, TEXT("================================================================"));
+	}
+}
+
+FVector UFluidInteractionComponent::GetFluidForceForBone(int32 BoneIndex) const
+{
+	const FVector* Force = CurrentPerBoneForces.Find(BoneIndex);
+	return Force ? *Force : FVector::ZeroVector;
+}
+
+FVector UFluidInteractionComponent::GetFluidForceForBoneByName(FName BoneName) const
+{
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return FVector::ZeroVector;
+	}
+
+	USkeletalMeshComponent* SkelMesh = Owner->FindComponentByClass<USkeletalMeshComponent>();
+	if (!SkelMesh)
+	{
+		return FVector::ZeroVector;
+	}
+
+	int32 BoneIndex = SkelMesh->GetBoneIndex(BoneName);
+	if (BoneIndex == INDEX_NONE)
+	{
+		return FVector::ZeroVector;
+	}
+
+	return GetFluidForceForBone(BoneIndex);
+}
+
+void UFluidInteractionComponent::GetActiveBoneIndices(TArray<int32>& OutBoneIndices) const
+{
+	OutBoneIndices.Empty(CurrentPerBoneForces.Num());
+	for (const auto& Pair : CurrentPerBoneForces)
+	{
+		if (Pair.Value.SizeSquared() > 0.01f)
+		{
+			OutBoneIndices.Add(Pair.Key);
+		}
+	}
+}
+
+bool UFluidInteractionComponent::GetStrongestBoneForce(int32& OutBoneIndex, FVector& OutForce) const
+{
+	OutBoneIndex = -1;
+	OutForce = FVector::ZeroVector;
+	float MaxForceSq = 0.0f;
+
+	for (const auto& Pair : CurrentPerBoneForces)
+	{
+		float ForceSq = Pair.Value.SizeSquared();
+		if (ForceSq > MaxForceSq)
+		{
+			MaxForceSq = ForceSq;
+			OutBoneIndex = Pair.Key;
+			OutForce = Pair.Value;
+		}
+	}
+
+	return OutBoneIndex >= 0;
 }

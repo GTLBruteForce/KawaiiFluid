@@ -753,6 +753,14 @@ void FGPUFluidSimulator::SimulateSubstep(const FGPUFluidSimulationParams& Params
 				// Triple buffer index for this frame
 				const int32 WriteIdx = Self->ContactCountFrameNumber % Self->NUM_FEEDBACK_BUFFERS;
 
+				// 디버그 로그 (60프레임마다)
+				static int32 EnqueueDebugFrame = 0;
+				if (EnqueueDebugFrame++ % 60 == 0)
+				{
+					UE_LOG(LogGPUFluidSimulator, Log, TEXT("[ContactCount EnqueueCopy] WriteIdx=%d, FrameNum=%d, BufferValid=YES"),
+						WriteIdx, Self->ContactCountFrameNumber);
+				}
+
 				// Transition for copy
 				RHICmdList.Transition(FRHITransitionInfo(
 					Self->ColliderContactCountBuffer->GetRHI(),
@@ -774,6 +782,15 @@ void FGPUFluidSimulator::SimulateSubstep(const FGPUFluidSimulationParams& Params
 
 				// Increment frame counter AFTER EnqueueCopy
 				Self->ContactCountFrameNumber++;
+			}
+			else
+			{
+				// 버퍼가 유효하지 않음!
+				static int32 InvalidBufferLogFrame = 0;
+				if (InvalidBufferLogFrame++ % 60 == 0)
+				{
+					UE_LOG(LogGPUFluidSimulator, Warning, TEXT("[ContactCount EnqueueCopy] ColliderContactCountBuffer가 유효하지 않음!"));
+				}
 			}
 
 			// Mark that we have valid GPU results (buffer is ready for rendering)
@@ -3248,55 +3265,60 @@ void FGPUFluidSimulator::ProcessCollisionFeedbackReadback(FRHICommandListImmedia
 	}
 
 	// Read from readback that was enqueued 2 frames ago (allowing GPU latency)
-	const int32 ReadIdx = (FeedbackFrameNumber - 2 + NUM_FEEDBACK_BUFFERS) % NUM_FEEDBACK_BUFFERS;
-
-	// Only read if we have completed at least 2 frames
-	if (FeedbackFrameNumber >= 2)
+	// Workaround: Search for any ready buffer instead of calculated index
+	int32 ReadIdx = -1;
+	for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
 	{
-		// Check if counter readback is ready (non-blocking!)
-		if (CounterReadbacks[ReadIdx]->IsReady())
+		if (CounterReadbacks[i] && CounterReadbacks[i]->IsReady())
 		{
-			// Read counter first
-			uint32 FeedbackCount = 0;
-			{
-				const uint32* CounterData = (const uint32*)CounterReadbacks[ReadIdx]->Lock(sizeof(uint32));
-				if (CounterData)
-				{
-					FeedbackCount = *CounterData;
-				}
-				CounterReadbacks[ReadIdx]->Unlock();
-			}
-
-			// Clamp to max
-			FeedbackCount = FMath::Min(FeedbackCount, (uint32)MAX_COLLISION_FEEDBACK);
-
-			// Read feedback data if any and if ready
-			if (FeedbackCount > 0 && FeedbackReadbacks[ReadIdx]->IsReady())
-			{
-				FScopeLock Lock(&FeedbackLock);
-
-				const uint32 CopySize = FeedbackCount * sizeof(FGPUCollisionFeedback);
-				const FGPUCollisionFeedback* FeedbackData = (const FGPUCollisionFeedback*)FeedbackReadbacks[ReadIdx]->Lock(CopySize);
-
-				if (FeedbackData)
-				{
-					ReadyFeedback.SetNum(FeedbackCount);
-					FMemory::Memcpy(ReadyFeedback.GetData(), FeedbackData, CopySize);
-					ReadyFeedbackCount = FeedbackCount;
-				}
-
-				FeedbackReadbacks[ReadIdx]->Unlock();
-
-				UE_LOG(LogGPUFluidSimulator, Verbose, TEXT("Collision Feedback: Read %d entries from readback %d"), FeedbackCount, ReadIdx);
-			}
-			else if (FeedbackCount == 0)
-			{
-				FScopeLock Lock(&FeedbackLock);
-				ReadyFeedbackCount = 0;
-			}
+			ReadIdx = i;
+			break;
 		}
-		// If not ready yet, skip this frame (data will be available next frame)
 	}
+
+	// Only read if we have completed at least 2 frames and found a ready buffer
+	if (FeedbackFrameNumber >= 2 && ReadIdx >= 0)
+	{
+		// Read counter first
+		uint32 FeedbackCount = 0;
+		{
+			const uint32* CounterData = (const uint32*)CounterReadbacks[ReadIdx]->Lock(sizeof(uint32));
+			if (CounterData)
+			{
+				FeedbackCount = *CounterData;
+			}
+			CounterReadbacks[ReadIdx]->Unlock();
+		}
+
+		// Clamp to max
+		FeedbackCount = FMath::Min(FeedbackCount, (uint32)MAX_COLLISION_FEEDBACK);
+
+		// Read feedback data if any and if ready
+		if (FeedbackCount > 0 && FeedbackReadbacks[ReadIdx]->IsReady())
+		{
+			FScopeLock Lock(&FeedbackLock);
+
+			const uint32 CopySize = FeedbackCount * sizeof(FGPUCollisionFeedback);
+			const FGPUCollisionFeedback* FeedbackData = (const FGPUCollisionFeedback*)FeedbackReadbacks[ReadIdx]->Lock(CopySize);
+
+			if (FeedbackData)
+			{
+				ReadyFeedback.SetNum(FeedbackCount);
+				FMemory::Memcpy(ReadyFeedback.GetData(), FeedbackData, CopySize);
+				ReadyFeedbackCount = FeedbackCount;
+			}
+
+			FeedbackReadbacks[ReadIdx]->Unlock();
+
+			UE_LOG(LogGPUFluidSimulator, Verbose, TEXT("Collision Feedback: Read %d entries from readback %d"), FeedbackCount, ReadIdx);
+		}
+		else if (FeedbackCount == 0)
+		{
+			FScopeLock Lock(&FeedbackLock);
+			ReadyFeedbackCount = 0;
+		}
+	}
+	// If not ready yet, skip this frame (data will be available next frame)
 
 	// Note: Frame counter is incremented in SimulateSubstep AFTER EnqueueCopy, not here
 }
@@ -3305,39 +3327,75 @@ void FGPUFluidSimulator::ProcessColliderContactCountReadback(FRHICommandListImme
 {
 	// FRHIGPUBufferReadback: Check IsReady() before Lock() to avoid flush
 
+	// 디버그 로깅 (60프레임마다, 약 1초)
+	static int32 ContactCountDebugFrame = 0;
+	const bool bLogThisFrame = (ContactCountDebugFrame++ % 60 == 0);
+
 	// Ensure readback objects are valid
 	if (ContactCountReadbacks[0] == nullptr)
 	{
+		if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Warning, TEXT("[ContactCount] Readback 객체 미할당"));
 		return;  // Will be allocated in SimulateSubstep
 	}
 
 	// Read from readback that was enqueued 2 frames ago (allowing GPU latency)
-	const int32 ReadIdx = (ContactCountFrameNumber - 2 + NUM_FEEDBACK_BUFFERS) % NUM_FEEDBACK_BUFFERS;
-
-	// Only read if we have completed at least 2 frames
-	if (ContactCountFrameNumber >= 2)
+	// Workaround: Search for any ready buffer instead of calculated index
+	int32 ReadIdx = -1;
+	for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
 	{
-		// Check if readback is ready (non-blocking!)
-		if (ContactCountReadbacks[ReadIdx]->IsReady())
+		if (ContactCountReadbacks[i] && ContactCountReadbacks[i]->IsReady())
 		{
-			// Read contact counts - GPU has already completed the copy
-			const uint32* CountData = (const uint32*)ContactCountReadbacks[ReadIdx]->Lock(MAX_COLLIDER_COUNT * sizeof(uint32));
+			ReadIdx = i;
+			break;
+		}
+	}
 
-			if (CountData)
+	if (bLogThisFrame)
+	{
+		UE_LOG(LogGPUFluidSimulator, Log, TEXT("[ContactCount] FrameNum=%d, ReadIdx=%d (searched), 조건(>=2)=%s"),
+			ContactCountFrameNumber, ReadIdx, ContactCountFrameNumber >= 2 ? TEXT("TRUE") : TEXT("FALSE"));
+	}
+
+	// Only read if we have completed at least 2 frames and found a ready buffer
+	if (ContactCountFrameNumber >= 2 && ReadIdx >= 0)
+	{
+		// Read contact counts - GPU has already completed the copy
+		const uint32* CountData = (const uint32*)ContactCountReadbacks[ReadIdx]->Lock(MAX_COLLIDER_COUNT * sizeof(uint32));
+
+		if (CountData)
+		{
+			FScopeLock Lock(&FeedbackLock);
+
+			// Copy to ready array
+			ReadyColliderContactCounts.SetNumUninitialized(MAX_COLLIDER_COUNT);
+			int32 TotalContactCount = 0;
+			int32 NonZeroColliders = 0;
+			for (int32 i = 0; i < MAX_COLLIDER_COUNT; ++i)
 			{
-				FScopeLock Lock(&FeedbackLock);
-
-				// Copy to ready array
-				ReadyColliderContactCounts.SetNumUninitialized(MAX_COLLIDER_COUNT);
-				for (int32 i = 0; i < MAX_COLLIDER_COUNT; ++i)
+				ReadyColliderContactCounts[i] = static_cast<int32>(CountData[i]);
+				if (CountData[i] > 0)
 				{
-					ReadyColliderContactCounts[i] = static_cast<int32>(CountData[i]);
+					TotalContactCount += CountData[i];
+					NonZeroColliders++;
 				}
 			}
 
-			ContactCountReadbacks[ReadIdx]->Unlock();
+			if (bLogThisFrame)
+			{
+				UE_LOG(LogGPUFluidSimulator, Log, TEXT("[ContactCount] 읽기 성공: 총접촉=%d, 비영콜라이더=%d"),
+					TotalContactCount, NonZeroColliders);
+			}
 		}
-		// If not ready yet, skip this frame (data will be available next frame)
+		else
+		{
+			if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Warning, TEXT("[ContactCount] Lock() 실패 - nullptr 반환"));
+		}
+
+		ContactCountReadbacks[ReadIdx]->Unlock();
+	}
+	else if (bLogThisFrame)
+	{
+		UE_LOG(LogGPUFluidSimulator, Warning, TEXT("[ContactCount] Ready 버퍼 없음 (ReadIdx=%d) - 데이터 업데이트 건너뜀"), ReadIdx);
 	}
 
 	// Note: Frame counter is incremented in SimulateSubstep AFTER EnqueueCopy, not here
@@ -3411,8 +3469,13 @@ int32 FGPUFluidSimulator::GetTotalColliderCount() const
 
 int32 FGPUFluidSimulator::GetContactCountForOwner(int32 OwnerID) const
 {
+	// 디버그 로깅 (60프레임마다)
+	static int32 OwnerCountDebugFrame = 0;
+	const bool bLogThisFrame = (OwnerCountDebugFrame++ % 60 == 0);
+
 	int32 TotalCount = 0;
 	int32 ColliderIndex = 0;
+	int32 MatchedColliders = 0;
 
 	// Spheres: indices 0 to SphereCount-1
 	for (int32 i = 0; i < CachedSpheres.Num(); ++i)
@@ -3420,6 +3483,7 @@ int32 FGPUFluidSimulator::GetContactCountForOwner(int32 OwnerID) const
 		if (CachedSpheres[i].OwnerID == OwnerID)
 		{
 			TotalCount += GetColliderContactCount(ColliderIndex);
+			MatchedColliders++;
 		}
 		ColliderIndex++;
 	}
@@ -3430,6 +3494,7 @@ int32 FGPUFluidSimulator::GetContactCountForOwner(int32 OwnerID) const
 		if (CachedCapsules[i].OwnerID == OwnerID)
 		{
 			TotalCount += GetColliderContactCount(ColliderIndex);
+			MatchedColliders++;
 		}
 		ColliderIndex++;
 	}
@@ -3440,6 +3505,7 @@ int32 FGPUFluidSimulator::GetContactCountForOwner(int32 OwnerID) const
 		if (CachedBoxes[i].OwnerID == OwnerID)
 		{
 			TotalCount += GetColliderContactCount(ColliderIndex);
+			MatchedColliders++;
 		}
 		ColliderIndex++;
 	}
@@ -3450,8 +3516,15 @@ int32 FGPUFluidSimulator::GetContactCountForOwner(int32 OwnerID) const
 		if (CachedConvexHeaders[i].OwnerID == OwnerID)
 		{
 			TotalCount += GetColliderContactCount(ColliderIndex);
+			MatchedColliders++;
 		}
 		ColliderIndex++;
+	}
+
+	if (bLogThisFrame)
+	{
+		UE_LOG(LogGPUFluidSimulator, Log, TEXT("[GetContactCountForOwner] OwnerID=%d, 매칭콜라이더=%d, 총접촉=%d, ReadyArray크기=%d"),
+			OwnerID, MatchedColliders, TotalCount, ReadyColliderContactCounts.Num());
 	}
 
 	return TotalCount;

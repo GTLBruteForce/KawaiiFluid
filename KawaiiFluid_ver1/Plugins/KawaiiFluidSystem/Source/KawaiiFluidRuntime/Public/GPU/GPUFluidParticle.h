@@ -536,13 +536,15 @@ static_assert(sizeof(FGPUAdhesionParams) == 56, "FGPUAdhesionParams must be 56 b
 //=============================================================================
 
 /**
- * GPU Collision Feedback Structure (48 bytes)
+ * GPU Collision Feedback Structure (64 bytes)
  * Records collision information for CPU-side force calculation and event triggering
  * Written by GPU during collision pass, read back to CPU asynchronously (2-3 frame delay)
  *
  * Used for drag-based force calculation:
  *   F_drag = 0.5 * rho * C_d * A * |v_rel| * v_rel
  *   where v_rel = ParticleVelocity - BodyVelocity
+ *
+ * BoneIndex enables per-bone force aggregation for additive animation / spring reactions
  */
 struct FGPUCollisionFeedback
 {
@@ -554,6 +556,10 @@ struct FGPUCollisionFeedback
 	float Penetration;            // 4 bytes - Penetration depth (cm) (total: 32)
 	FVector3f ParticleVelocity;   // 12 bytes - Particle velocity at collision (for drag calculation)
 	int32 OwnerID;                // 4 bytes - Unique ID of collider owner (for filtering by actor) (total: 48)
+	int32 BoneIndex;              // 4 bytes - Bone index for per-bone force calculation (-1 = no bone)
+	int32 Padding1;               // 4 bytes - Alignment padding
+	int32 Padding2;               // 4 bytes - Alignment padding
+	int32 Padding3;               // 4 bytes - Alignment padding (total: 64)
 
 	FGPUCollisionFeedback()
 		: ParticleIndex(0)
@@ -564,10 +570,14 @@ struct FGPUCollisionFeedback
 		, Penetration(0.0f)
 		, ParticleVelocity(FVector3f::ZeroVector)
 		, OwnerID(0)
+		, BoneIndex(-1)
+		, Padding1(0)
+		, Padding2(0)
+		, Padding3(0)
 	{
 	}
 };
-static_assert(sizeof(FGPUCollisionFeedback) == 48, "FGPUCollisionFeedback must be 48 bytes for GPU alignment");
+static_assert(sizeof(FGPUCollisionFeedback) == 64, "FGPUCollisionFeedback must be 64 bytes for GPU alignment");
 
 /**
  * GPU Collision Primitives Collection

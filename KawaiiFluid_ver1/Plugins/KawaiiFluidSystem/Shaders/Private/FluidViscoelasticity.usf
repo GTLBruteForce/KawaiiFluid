@@ -1,0 +1,476 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Viscoelasticity Pass
+// Implements dynamic spring-based viscoelastic behavior for stretchy fluids
+//
+// Based on Clavet et al. 2005 "Particle-based Viscoelastic Fluid Simulation"
+// Key features:
+// 1. Dynamic spring creation between nearby particles
+// 2. Elastic forces for stretchy behavior
+// 3. Plastic deformation for viscous flow
+// 4. Spring breaking for fluid separation
+//
+// Two passes:
+// - UpdateSpringsCS: Create/update/destroy springs
+// - ApplySpringForcesCS: Apply spring forces to particles
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+#include "FluidSpatialHash.ush"
+
+//=============================================================================
+// Viscoelastic Data Structure (must match C++ FGPUViscoelasticData)
+//=============================================================================
+
+#define MAX_SPRINGS_PER_PARTICLE 8
+
+struct FViscoelasticData
+{
+	int4 SpringNeighbors0;    // Springs 0-3 neighbor indices (-1 = inactive)
+	int4 SpringNeighbors1;    // Springs 4-7 neighbor indices
+	float4 SpringRestLengths0; // Springs 0-3 rest lengths
+	float4 SpringRestLengths1; // Springs 4-7 rest lengths
+};
+
+//=============================================================================
+// Shader Parameters (shared between both passes)
+//=============================================================================
+
+RWStructuredBuffer<FGPUFluidParticle> Particles;
+RWStructuredBuffer<FViscoelasticData> ViscoelasticBuffer;
+
+// Spatial hash for neighbor iteration (read-only)
+StructuredBuffer<uint> CellCounts;
+StructuredBuffer<uint> ParticleIndices;
+
+// Parameters
+int ParticleCount;
+float SmoothingRadius;
+float CellSize;
+float DeltaTime;
+float ParticleMass;
+
+// Viscoelasticity parameters
+float SpringStiffness;      // k: spring force coefficient
+float YieldRatio;           // Plastic deformation threshold
+float Plasticity;           // Plastic deformation rate
+float SpringBreakDistance;  // Absolute distance for spring breaking
+float SpringCreateDistance; // Absolute distance for spring creation
+
+//=============================================================================
+// Helper Functions
+//=============================================================================
+
+// Get spring neighbor index from viscoelastic data
+int GetSpringNeighbor(FViscoelasticData data, int slot)
+{
+	if (slot < 4)
+	{
+		return data.SpringNeighbors0[slot];
+	}
+	else
+	{
+		return data.SpringNeighbors1[slot - 4];
+	}
+}
+
+// Set spring neighbor index in viscoelastic data
+void SetSpringNeighbor(inout FViscoelasticData data, int slot, int neighborIdx)
+{
+	if (slot < 4)
+	{
+		data.SpringNeighbors0[slot] = neighborIdx;
+	}
+	else
+	{
+		data.SpringNeighbors1[slot - 4] = neighborIdx;
+	}
+}
+
+// Get spring rest length from viscoelastic data
+float GetSpringRestLength(FViscoelasticData data, int slot)
+{
+	if (slot < 4)
+	{
+		return data.SpringRestLengths0[slot];
+	}
+	else
+	{
+		return data.SpringRestLengths1[slot - 4];
+	}
+}
+
+// Set spring rest length in viscoelastic data
+void SetSpringRestLength(inout FViscoelasticData data, int slot, float restLength)
+{
+	if (slot < 4)
+	{
+		data.SpringRestLengths0[slot] = restLength;
+	}
+	else
+	{
+		data.SpringRestLengths1[slot - 4] = restLength;
+	}
+}
+
+// Find slot containing specific neighbor, returns -1 if not found
+int FindSpringSlot(FViscoelasticData data, int neighborIdx)
+{
+	[unroll]
+	for (int i = 0; i < MAX_SPRINGS_PER_PARTICLE; ++i)
+	{
+		if (GetSpringNeighbor(data, i) == neighborIdx)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+// Find first empty slot, returns -1 if none available
+int FindEmptySlot(FViscoelasticData data)
+{
+	[unroll]
+	for (int i = 0; i < MAX_SPRINGS_PER_PARTICLE; ++i)
+	{
+		if (GetSpringNeighbor(data, i) < 0)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+// Count active springs
+int CountActiveSprings(FViscoelasticData data)
+{
+	int count = 0;
+	[unroll]
+	for (int i = 0; i < MAX_SPRINGS_PER_PARTICLE; ++i)
+	{
+		if (GetSpringNeighbor(data, i) >= 0)
+		{
+			count++;
+		}
+	}
+	return count;
+}
+
+//=============================================================================
+// Pass 1: Update Springs
+// Creates new springs, applies plastic deformation, removes broken springs
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void UpdateSpringsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	FGPUFluidParticle particle = Particles[idx];
+	FViscoelasticData springs = ViscoelasticBuffer[idx];
+
+	// Skip attached particles (they don't participate in viscoelasticity)
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+	{
+		return;
+	}
+
+	float3 pos = particle.PredictedPosition;
+
+	// Phase 1: Update existing springs (plasticity & breaking)
+	[unroll]
+	for (int slot = 0; slot < MAX_SPRINGS_PER_PARTICLE; ++slot)
+	{
+		int neighborIdx = GetSpringNeighbor(springs, slot);
+		if (neighborIdx < 0 || neighborIdx >= ParticleCount)
+		{
+			continue;
+		}
+
+		FGPUFluidParticle neighbor = Particles[neighborIdx];
+
+		// Skip if neighbor is now attached
+		if (HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+		{
+			// Remove spring
+			SetSpringNeighbor(springs, slot, -1);
+			SetSpringRestLength(springs, slot, 0.0f);
+			continue;
+		}
+
+		float3 neighborPos = neighbor.PredictedPosition;
+		float dist = length(pos - neighborPos);
+		float restLength = GetSpringRestLength(springs, slot);
+
+		// Check for spring breaking
+		if (dist > SpringBreakDistance)
+		{
+			// Remove spring
+			SetSpringNeighbor(springs, slot, -1);
+			SetSpringRestLength(springs, slot, 0.0f);
+			continue;
+		}
+
+		// Apply plastic deformation (rest length adapts to current distance)
+		float stretch = dist - restLength;
+		float yieldThreshold = YieldRatio * restLength;
+
+		if (abs(stretch) > yieldThreshold)
+		{
+			// Plastic deformation: rest length moves toward current distance
+			float adjustment = Plasticity * stretch * DeltaTime * 60.0f; // Scale by ~60fps base
+			restLength += adjustment;
+
+			// Clamp rest length to reasonable bounds
+			restLength = clamp(restLength, 0.1f, SpringBreakDistance * 0.9f);
+			SetSpringRestLength(springs, slot, restLength);
+		}
+	}
+
+	// Phase 2: Create new springs with neighbors
+	// Get cell coordinate for this particle
+	int3 centerCell = WorldToCell(pos, CellSize);
+	int cellRadius = 1; // Only immediate neighbors for spring creation
+
+	for (int dz = -cellRadius; dz <= cellRadius; ++dz)
+	{
+		for (int dy = -cellRadius; dy <= cellRadius; ++dy)
+		{
+			for (int dx = -cellRadius; dx <= cellRadius; ++dx)
+			{
+				int3 neighborCell = centerCell + int3(dx, dy, dz);
+				uint hash = HashCell(neighborCell);
+				uint count = min(CellCounts[hash], (uint)MAX_PARTICLES_PER_CELL);
+				uint startIdx = hash * MAX_PARTICLES_PER_CELL;
+
+				for (uint i = 0; i < count; ++i)
+				{
+					uint neighborIdx = ParticleIndices[startIdx + i];
+
+					// Skip self and invalid indices
+					if (neighborIdx == idx || neighborIdx >= (uint)ParticleCount)
+					{
+						continue;
+					}
+
+					// Only create spring if idx < neighborIdx to avoid duplicates
+					// Each pair will only create one spring (stored in lower-indexed particle)
+					if (idx > neighborIdx)
+					{
+						continue;
+					}
+
+					FGPUFluidParticle neighbor = Particles[neighborIdx];
+
+					// Skip attached neighbors
+					if (HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+					{
+						continue;
+					}
+
+					float3 neighborPos = neighbor.PredictedPosition;
+					float dist = length(pos - neighborPos);
+
+					// Check if within spring creation distance
+					if (dist > SpringCreateDistance || dist < SMALL_NUMBER)
+					{
+						continue;
+					}
+
+					// Check if spring already exists
+					int existingSlot = FindSpringSlot(springs, (int)neighborIdx);
+					if (existingSlot >= 0)
+					{
+						continue; // Spring already exists
+					}
+
+					// Find empty slot
+					int emptySlot = FindEmptySlot(springs);
+					if (emptySlot < 0)
+					{
+						continue; // No empty slots
+					}
+
+					// Create new spring with current distance as rest length
+					SetSpringNeighbor(springs, emptySlot, (int)neighborIdx);
+					SetSpringRestLength(springs, emptySlot, dist);
+				}
+			}
+		}
+	}
+
+	// Write back updated spring data
+	ViscoelasticBuffer[idx] = springs;
+}
+
+//=============================================================================
+// Pass 2: Apply Spring Displacements (Position-Based)
+// Applies position corrections based on spring stretch
+// Based on Clavet et al. 2005 position-based approach for stability
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void ApplySpringForcesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	FGPUFluidParticle particle = Particles[idx];
+
+	// Skip attached particles
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+	{
+		return;
+	}
+
+	FViscoelasticData springs = ViscoelasticBuffer[idx];
+
+	// Use PredictedPosition for current frame's position
+	float3 pos = particle.PredictedPosition;
+	float3 totalDisplacement = float3(0.0f, 0.0f, 0.0f);
+	int springCount = 0;
+
+	// Apply displacements from springs owned by this particle
+	[unroll]
+	for (int slot = 0; slot < MAX_SPRINGS_PER_PARTICLE; ++slot)
+	{
+		int neighborIdx = GetSpringNeighbor(springs, slot);
+		if (neighborIdx < 0 || neighborIdx >= ParticleCount)
+		{
+			continue;
+		}
+
+		FGPUFluidParticle neighbor = Particles[neighborIdx];
+
+		// Skip attached neighbors
+		if (HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+		{
+			continue;
+		}
+
+		float3 neighborPos = neighbor.PredictedPosition;
+		float3 delta = neighborPos - pos;
+		float dist = length(delta);
+
+		if (dist < SMALL_NUMBER)
+		{
+			continue;
+		}
+
+		float restLength = GetSpringRestLength(springs, slot);
+
+		// Position-based spring displacement (Clavet 2005)
+		// displacement = stiffness * (1 - L/r) * (p_j - p_i) / 2
+		// The /2 accounts for both particles being corrected
+		float ratio = restLength / dist;
+		float3 displacement = SpringStiffness * (1.0f - ratio) * delta * 0.5f;
+
+		totalDisplacement += displacement;
+		springCount++;
+	}
+
+	// DEBUG: Temporarily disable reaction forces to isolate bug
+	// If springs work correctly without this loop, the bug is in the reaction calculation
+	#if 0
+	// Also apply displacements from springs owned by neighbors (reaction)
+	// Use Position for cell lookup to match spatial hash built from Position
+	int3 centerCell = WorldToCell(pos, CellSize);
+	int cellRadius = 1;
+
+	for (int dz = -cellRadius; dz <= cellRadius; ++dz)
+	{
+		for (int dy = -cellRadius; dy <= cellRadius; ++dy)
+		{
+			for (int dx = -cellRadius; dx <= cellRadius; ++dx)
+			{
+				int3 neighborCell = centerCell + int3(dx, dy, dz);
+				uint hash = HashCell(neighborCell);
+				uint count = min(CellCounts[hash], (uint)MAX_PARTICLES_PER_CELL);
+				uint startIdx = hash * MAX_PARTICLES_PER_CELL;
+
+				for (uint i = 0; i < count; ++i)
+				{
+					uint neighborIdx = ParticleIndices[startIdx + i];
+
+					// Skip self and invalid
+					if (neighborIdx == idx || neighborIdx >= (uint)ParticleCount)
+					{
+						continue;
+					}
+
+					// Only check neighbors with lower index (they own springs to us)
+					if (neighborIdx > idx)
+					{
+						continue;
+					}
+
+					FGPUFluidParticle neighbor = Particles[neighborIdx];
+
+					// Skip attached
+					if (HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+					{
+						continue;
+					}
+
+					// Check if neighbor has spring to us
+					FViscoelasticData neighborSprings = ViscoelasticBuffer[neighborIdx];
+					int slot = FindSpringSlot(neighborSprings, (int)idx);
+
+					if (slot < 0)
+					{
+						continue;
+					}
+
+					// Use Position for consistent reading
+					float3 neighborPos = neighbor.Position;
+					float3 delta = neighborPos - pos;  // Vector toward spring owner (for reaction force)
+					float dist = length(delta);
+
+					if (dist < SMALL_NUMBER)
+					{
+						continue;
+					}
+
+					float restLength = GetSpringRestLength(neighborSprings, slot);
+
+					// Reaction displacement: particle B moves toward/away from A (spring owner)
+					// If dist > restLength: move toward A (delta points to A, positive displacement)
+					// If dist < restLength: move away from A (delta points to A, negative displacement)
+					float ratio = restLength / dist;
+					float3 displacement = SpringStiffness * (1.0f - ratio) * delta * 0.5f;
+
+					totalDisplacement += displacement;
+					springCount++;
+				}
+			}
+		}
+	}
+	#endif  // DEBUG: End of disabled reaction forces block
+
+	// Apply displacement with damping for stability
+	if (springCount > 0)
+	{
+		// Clamp maximum displacement per frame for stability
+		float maxDisplacement = SmoothingRadius * 0.05f;  // Max 5% of smoothing radius per substep
+		float dispMag = length(totalDisplacement);
+		if (dispMag > maxDisplacement)
+		{
+			totalDisplacement = totalDisplacement * (maxDisplacement / dispMag);
+		}
+
+		// Apply to predicted position (will be finalized in FinalizePositions pass)
+		particle.PredictedPosition += totalDisplacement;
+
+		// DO NOT update velocity here - it will be recalculated in FinalizePositions
+		// based on (PredictedPosition - Position) / dt
+	}
+
+	Particles[idx] = particle;
+}

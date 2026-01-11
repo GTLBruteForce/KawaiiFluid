@@ -256,6 +256,76 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
 	FOnFluidForceUpdate OnFluidForceUpdate;
 
+	//========================================
+	// Per-Bone Force Feedback (for Additive Animation / Spring)
+	//========================================
+
+	/**
+	 * 본별 힘 계산 활성화
+	 * 활성화 시 본별로 개별 항력을 계산하여 Additive Animation/Spring에 사용 가능
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Bone Force",
+	          meta = (EditCondition = "bEnableForceFeedback",
+	                  ToolTip = "본별 힘 계산 활성화.\n활성화 시 본별로 개별 항력을 계산합니다.\nAdditive Animation 또는 AnimDynamics Spring에 사용할 수 있습니다."))
+	bool bEnablePerBoneForce = false;
+
+	/**
+	 * 본별 힘 스무딩 속도 (1/s)
+	 * 높을수록 힘 변화가 빠르고, 낮을수록 부드럽게 변화
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Bone Force",
+	          meta = (EditCondition = "bEnablePerBoneForce", ClampMin = "0.1", ClampMax = "50.0",
+	                  ToolTip = "본별 힘 스무딩 속도 (1/s).\n높을수록 힘 변화가 빠르고, 낮을수록 부드럽게 변화합니다."))
+	float PerBoneForceSmoothingSpeed = 10.0f;
+
+	/**
+	 * 본별 힘 배율
+	 * 계산된 본별 힘에 적용되는 스케일
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Bone Force",
+	          meta = (EditCondition = "bEnablePerBoneForce", ClampMin = "0.0001", ClampMax = "100.0",
+	                  ToolTip = "본별 힘 배율.\nAdditive Animation이나 Spring에 적용할 힘의 강도를 조절합니다."))
+	float PerBoneForceMultiplier = 1.0f;
+
+	/**
+	 * 특정 본의 현재 유체 힘 반환 (BoneIndex)
+	 * @param BoneIndex 조회할 본 인덱스
+	 * @return 해당 본에 적용되는 유체 힘 벡터. 본이 없으면 ZeroVector
+	 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Per-Bone Force")
+	FVector GetFluidForceForBone(int32 BoneIndex) const;
+
+	/**
+	 * 특정 본의 현재 유체 힘 반환 (BoneName)
+	 * @param BoneName 조회할 본 이름
+	 * @return 해당 본에 적용되는 유체 힘 벡터. 본이 없으면 ZeroVector
+	 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Per-Bone Force")
+	FVector GetFluidForceForBoneByName(FName BoneName) const;
+
+	/**
+	 * 모든 본의 유체 힘 맵 반환 (BoneIndex → Force)
+	 * @return 본 인덱스 → 힘 벡터 맵
+	 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Per-Bone Force")
+	TMap<int32, FVector> GetAllBoneForces() const { return CurrentPerBoneForces; }
+
+	/**
+	 * 유체 힘이 적용된 본 인덱스 배열 반환
+	 * @param OutBoneIndices 힘이 적용된 본 인덱스 배열
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Per-Bone Force")
+	void GetActiveBoneIndices(TArray<int32>& OutBoneIndices) const;
+
+	/**
+	 * 가장 강한 힘을 받는 본 인덱스와 힘 반환
+	 * @param OutBoneIndex 가장 강한 힘을 받는 본 인덱스 (-1 if none)
+	 * @param OutForce 해당 본의 힘 벡터
+	 * @return 힘을 받는 본이 있으면 true
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Per-Bone Force")
+	bool GetStrongestBoneForce(int32& OutBoneIndex, FVector& OutForce) const;
+
 	/** 현재 유체 힘 반환 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
 	FVector GetCurrentFluidForce() const { return CurrentFluidForce; }
@@ -337,6 +407,31 @@ private:
 
 	/** GPU 피드백이 이미 활성화되었는지 여부 */
 	bool bGPUFeedbackEnabled = false;
+
+	//========================================
+	// Per-Bone Force Internal State
+	//========================================
+
+	/** 본 인덱스별 현재 유체 힘 (스무딩 적용됨) */
+	TMap<int32, FVector> CurrentPerBoneForces;
+
+	/** 본 인덱스별 스무딩 전 힘 (스무딩 계산에 사용) */
+	TMap<int32, FVector> SmoothedPerBoneForces;
+
+	/** 본 인덱스 → 본 이름 캐시 (SkeletalMesh에서 가져옴) */
+	TMap<int32, FName> BoneIndexToNameCache;
+
+	/** 본 이름 캐시가 초기화되었는지 여부 */
+	bool bBoneNameCacheInitialized = false;
+
+	/** 디버그 로그 타이머 (3초마다 출력) */
+	float PerBoneForceDebugTimer = 0.0f;
+
+	/** 본 이름 캐시 초기화 */
+	void InitializeBoneNameCache();
+
+	/** 본별 힘 처리 (ProcessCollisionFeedback 내부에서 호출) */
+	void ProcessPerBoneForces(float DeltaTime, const TArray<struct FGPUCollisionFeedback>& AllFeedback, int32 FeedbackCount);
 
 	/** GPU 피드백 처리 (매 틱 호출) */
 	void ProcessCollisionFeedback(float DeltaTime);

@@ -198,6 +198,7 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			CachedCap.Radius = CapsuleRadius;
 			CachedCap.BoneName = BodySetup->BoneName;
 			CachedCap.BoneTransform = BoneTransform;
+			CachedCap.BoneIndex = BoneIndex;  // 본 인덱스 설정
 			CachedCapsules.Add(CachedCap);
 
 			CachedBounds += CachedCap.Start;
@@ -215,6 +216,7 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			CachedSph.Radius = SphereElem.Radius + CollisionMargin;
 			CachedSph.BoneName = BodySetup->BoneName;
 			CachedSph.BoneTransform = BoneTransform;
+			CachedSph.BoneIndex = BoneIndex;  // 본 인덱스 설정
 			CachedSpheres.Add(CachedSph);
 
 			CachedBounds += CachedSph.Center;
@@ -234,6 +236,7 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			CachedBx.Rotation = BoxWorldTransform.GetRotation();
 			CachedBx.BoneName = BodySetup->BoneName;
 			CachedBx.BoneTransform = BoneTransform;
+			CachedBx.BoneIndex = BoneIndex;  // 본 인덱스 설정
 			CachedBoxes.Add(CachedBx);
 
 			// 박스 8개 코너 추가하여 바운딩 박스 확장
@@ -255,6 +258,7 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			FCachedConvex CachedCvx;
 			CachedCvx.BoneName = BodySetup->BoneName;
 			CachedCvx.BoneTransform = BoneTransform;
+			CachedCvx.BoneIndex = BoneIndex;  // 본 인덱스 설정
 
 			// 버텍스에서 평면 추출 (Convex Hull)
 			const TArray<FVector>& VertexData = ConvexElem.VertexData;
@@ -1247,7 +1251,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUSphere.Radius = Sph.Radius;
 		GPUSphere.Friction = InFriction;
 		GPUSphere.Restitution = InRestitution;
-		GPUSphere.BoneIndex = -1;  // No bone tracking in legacy function
+		GPUSphere.BoneIndex = Sph.BoneIndex;  // 캐시된 본 인덱스 사용
 		GPUSphere.OwnerID = InOwnerID;
 		OutSpheres.Add(GPUSphere);
 	}
@@ -1261,7 +1265,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUCapsule.Radius = Cap.Radius;
 		GPUCapsule.Friction = InFriction;
 		GPUCapsule.Restitution = InRestitution;
-		GPUCapsule.BoneIndex = -1;  // No bone tracking in legacy function
+		GPUCapsule.BoneIndex = Cap.BoneIndex;  // 캐시된 본 인덱스 사용
 		GPUCapsule.OwnerID = InOwnerID;
 		OutCapsules.Add(GPUCapsule);
 	}
@@ -1280,7 +1284,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		);
 		GPUBox.Friction = InFriction;
 		GPUBox.Restitution = InRestitution;
-		GPUBox.BoneIndex = -1;  // No bone tracking in legacy function
+		GPUBox.BoneIndex = Box.BoneIndex;  // 캐시된 본 인덱스 사용
 		GPUBox.OwnerID = InOwnerID;
 		OutBoxes.Add(GPUBox);
 	}
@@ -1295,7 +1299,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUConvex.PlaneCount = Cvx.Planes.Num();
 		GPUConvex.Friction = InFriction;
 		GPUConvex.Restitution = InRestitution;
-		GPUConvex.BoneIndex = -1;  // No bone tracking in legacy function
+		GPUConvex.BoneIndex = Cvx.BoneIndex;  // 캐시된 본 인덱스 사용
 		GPUConvex.OwnerID = InOwnerID;
 		OutConvexes.Add(GPUConvex);
 
