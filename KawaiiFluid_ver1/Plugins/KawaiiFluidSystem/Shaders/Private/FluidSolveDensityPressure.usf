@@ -18,8 +18,15 @@
 //=============================================================================
 
 RWStructuredBuffer<FGPUFluidParticle> Particles;
+
+// Hash table mode (legacy)
 StructuredBuffer<uint> CellCounts;
 StructuredBuffer<uint> ParticleIndices;
+
+// Z-Order sorted mode (new)
+StructuredBuffer<uint> CellStart;   // CellStart[cellID] = first particle index
+StructuredBuffer<uint> CellEnd;     // CellEnd[cellID] = last particle index
+int bUseZOrderSorting;              // 1 = use CellStart/End, 0 = use CellCounts/ParticleIndices
 
 // Neighbor caching buffers
 RWStructuredBuffer<uint> NeighborList;    // [ParticleCount * MAX_NEIGHBORS_PER_PARTICLE]
@@ -43,8 +50,130 @@ float InvW_DeltaQ;
 // Iteration control
 int IterationIndex;
 
+// Z-Order (Morton Code) bounds for cell ID calculation
+// Must match the bounds used in FluidMortonCode.usf
+float3 MortonBoundsMin;     // Simulation bounds minimum
+float3 MortonBoundsExtent;  // Simulation bounds extent (Max - Min)
+
 //=============================================================================
-// First Iteration: Build Neighbor List + Compute
+// Constants for Z-Order Mode
+//=============================================================================
+#define INVALID_INDEX 0xFFFFFFFF
+#define MAX_CELLS 65536  // 2^16 cells, must match FluidCellStartEnd.usf
+
+//=============================================================================
+// Morton Code Encoding Functions (for Z-Order cell lookup)
+// Must match FluidMortonCode.usf exactly
+//=============================================================================
+
+// Expand 10-bit integer to 30-bit with 2-bit gaps between each bit
+uint MortonExpandBits(uint v)
+{
+	v = (v * 0x00010001u) & 0xFF0000FFu;
+	v = (v * 0x00000101u) & 0x0F00F00Fu;
+	v = (v * 0x00000011u) & 0xC30C30C3u;
+	v = (v * 0x00000005u) & 0x49249249u;
+	return v;
+}
+
+// Compute 30-bit Morton Code for 3D point (each coord 10 bits: 0-1023)
+uint Morton3D(uint x, uint y, uint z)
+{
+	x = min(x, 1023u);
+	y = min(y, 1023u);
+	z = min(z, 1023u);
+	uint xx = MortonExpandBits(x);
+	uint yy = MortonExpandBits(y);
+	uint zz = MortonExpandBits(z);
+	return (zz << 2) | (yy << 1) | xx;
+}
+
+// Compute Morton-based cell ID from cell coordinates (integer)
+// IMPORTANT: This must match FluidMortonCode.usf's ComputeMortonCodesCellBasedCS
+// Both use cell coordinates relative to GridMin, NOT normalized positions!
+uint GetMortonCellIDFromCellCoord(int3 cellCoord)
+{
+	// Compute grid minimum cell (same as in FluidMortonCode.usf)
+	int3 gridMin = int3(floor(MortonBoundsMin / CellSize));
+
+	// Offset cell coordinates to make them positive (relative to grid min)
+	int3 offset = cellCoord - gridMin;
+
+	// Clamp to valid range (0-1023 for 10-bit Morton encoding)
+	uint3 uoffset = uint3(max(offset, int3(0, 0, 0)));
+	uoffset = min(uoffset, uint3(1023, 1023, 1023));
+
+	// Compute Morton code and mask to cell ID
+	uint mortonCode = Morton3D(uoffset.x, uoffset.y, uoffset.z);
+	return mortonCode & (MAX_CELLS - 1);
+}
+
+//=============================================================================
+// Z-Order Mode: Build Neighbor List using CellStart/End (Sequential Access)
+// Particles are sorted by Morton code, so sequential access = cache coherent
+// IMPORTANT: Cell ID must use Morton code (same as FluidCellStartEnd.usf)
+//=============================================================================
+#define BUILD_AND_PROCESS_CELL_ZORDER(DX, DY, DZ) \
+{ \
+	int3 neighborCell = centerCell + int3(DX, DY, DZ); \
+	uint cellID = GetMortonCellIDFromCellCoord(neighborCell); \
+	uint cellStart = CellStart[cellID]; \
+	uint cellEnd = CellEnd[cellID]; \
+	if (cellStart != INVALID_INDEX && cellEnd != INVALID_INDEX) \
+	{ \
+		uint maxNeighborIdx = min(cellEnd, (uint)(ParticleCount - 1)); \
+		for (uint neighborIdx = cellStart; neighborIdx <= maxNeighborIdx; ++neighborIdx) \
+		{ \
+			FGPUFluidParticle neighbor = Particles[neighborIdx]; \
+			float3 neighborPos = neighbor.PredictedPosition; \
+			float3 r_cm = pos - neighborPos; \
+			float r2_cm = dot(r_cm, r_cm); \
+			float r2 = r2_cm * CM_TO_M_SQ; \
+			if (r2 < h2) \
+			{ \
+				if (cachedCount < MAX_NEIGHBORS_PER_PARTICLE) \
+				{ \
+					uint cacheIdx = idx * MAX_NEIGHBORS_PER_PARTICLE + cachedCount; \
+					NeighborList[cacheIdx] = neighborIdx; \
+					cachedCount++; \
+				} \
+				float mass = neighbor.Mass; \
+				float w = Poly6Kernel(r2, h2); \
+				density += mass * Poly6Coeff * w; \
+				if (neighborIdx != idx) neighborCount++; \
+				float3 r = r_cm * CM_TO_M; \
+				float3 gradW = SpikyGradientFast(r, r2, h, h2); \
+				gradW *= SpikyCoeff * CM_TO_M; \
+				float3 gradC_j = -gradW / RestDensity; \
+				sumGradC2 += dot(gradC_j, gradC_j); \
+				gradC_i += gradW / RestDensity; \
+				if (neighborIdx != idx && r2 >= SMALL_NUMBER) \
+				{ \
+					float lambda_j_prev = neighbor.Lambda; \
+					float scorr = 0.0f; \
+					if (bEnableTensileInstability) \
+					{ \
+						float diff = h2 - r2; \
+						float W_r = diff * diff * diff; \
+						float deltaQ2 = 0.04f * h2; \
+						float diffQ = h2 - deltaQ2; \
+						float W_deltaQ = diffQ * diffQ * diffQ; \
+						float ratio = (W_deltaQ > 0.0f) ? saturate(W_r / W_deltaQ) : 0.0f; \
+						float ratio2 = ratio * ratio; \
+						float ratioN = ratio2 * ratio2; \
+						if (TensileN == 2) ratioN = ratio2; \
+						else if (TensileN == 6) ratioN = ratio2 * ratio2 * ratio2; \
+						scorr = -TensileK * ratioN; \
+					} \
+					deltaP += (lambda_i_prev + lambda_j_prev + scorr) * gradW; \
+				} \
+			} \
+		} \
+	} \
+}
+
+//=============================================================================
+// First Iteration: Build Neighbor List + Compute (Legacy Hash Table Mode)
 // Searches 27 cells, caches valid neighbors, and performs calculation
 //=============================================================================
 #define BUILD_AND_PROCESS_CELL(DX, DY, DZ) \
@@ -158,120 +287,242 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		int3 centerCell = WorldToCell(pos, CellSize);
 		int cellRadius = (int)ceil(SmoothingRadius / CellSize);
 
-		if (cellRadius == 1)
+		if (bUseZOrderSorting)
 		{
-			// Unrolled 27-cell neighbor search with caching
-			// Layer z = -1
-			BUILD_AND_PROCESS_CELL(-1, -1, -1)
-			BUILD_AND_PROCESS_CELL( 0, -1, -1)
-			BUILD_AND_PROCESS_CELL( 1, -1, -1)
-			BUILD_AND_PROCESS_CELL(-1,  0, -1)
-			BUILD_AND_PROCESS_CELL( 0,  0, -1)
-			BUILD_AND_PROCESS_CELL( 1,  0, -1)
-			BUILD_AND_PROCESS_CELL(-1,  1, -1)
-			BUILD_AND_PROCESS_CELL( 0,  1, -1)
-			BUILD_AND_PROCESS_CELL( 1,  1, -1)
-			// Layer z = 0
-			BUILD_AND_PROCESS_CELL(-1, -1,  0)
-			BUILD_AND_PROCESS_CELL( 0, -1,  0)
-			BUILD_AND_PROCESS_CELL( 1, -1,  0)
-			BUILD_AND_PROCESS_CELL(-1,  0,  0)
-			BUILD_AND_PROCESS_CELL( 0,  0,  0)  // Self cell
-			BUILD_AND_PROCESS_CELL( 1,  0,  0)
-			BUILD_AND_PROCESS_CELL(-1,  1,  0)
-			BUILD_AND_PROCESS_CELL( 0,  1,  0)
-			BUILD_AND_PROCESS_CELL( 1,  1,  0)
-			// Layer z = 1
-			BUILD_AND_PROCESS_CELL(-1, -1,  1)
-			BUILD_AND_PROCESS_CELL( 0, -1,  1)
-			BUILD_AND_PROCESS_CELL( 1, -1,  1)
-			BUILD_AND_PROCESS_CELL(-1,  0,  1)
-			BUILD_AND_PROCESS_CELL( 0,  0,  1)
-			BUILD_AND_PROCESS_CELL( 1,  0,  1)
-			BUILD_AND_PROCESS_CELL(-1,  1,  1)
-			BUILD_AND_PROCESS_CELL( 0,  1,  1)
-			BUILD_AND_PROCESS_CELL( 1,  1,  1)
+			//=================================================================
+			// Z-Order Mode: Sequential memory access via CellStart/End
+			//=================================================================
+			if (cellRadius == 1)
+			{
+				// Unrolled 27-cell neighbor search (Z-Order)
+				// Layer z = -1
+				BUILD_AND_PROCESS_CELL_ZORDER(-1, -1, -1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 0, -1, -1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 1, -1, -1)
+				BUILD_AND_PROCESS_CELL_ZORDER(-1,  0, -1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 0,  0, -1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 1,  0, -1)
+				BUILD_AND_PROCESS_CELL_ZORDER(-1,  1, -1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 0,  1, -1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 1,  1, -1)
+				// Layer z = 0
+				BUILD_AND_PROCESS_CELL_ZORDER(-1, -1,  0)
+				BUILD_AND_PROCESS_CELL_ZORDER( 0, -1,  0)
+				BUILD_AND_PROCESS_CELL_ZORDER( 1, -1,  0)
+				BUILD_AND_PROCESS_CELL_ZORDER(-1,  0,  0)
+				BUILD_AND_PROCESS_CELL_ZORDER( 0,  0,  0)  // Self cell
+				BUILD_AND_PROCESS_CELL_ZORDER( 1,  0,  0)
+				BUILD_AND_PROCESS_CELL_ZORDER(-1,  1,  0)
+				BUILD_AND_PROCESS_CELL_ZORDER( 0,  1,  0)
+				BUILD_AND_PROCESS_CELL_ZORDER( 1,  1,  0)
+				// Layer z = 1
+				BUILD_AND_PROCESS_CELL_ZORDER(-1, -1,  1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 0, -1,  1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 1, -1,  1)
+				BUILD_AND_PROCESS_CELL_ZORDER(-1,  0,  1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 0,  0,  1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 1,  0,  1)
+				BUILD_AND_PROCESS_CELL_ZORDER(-1,  1,  1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 0,  1,  1)
+				BUILD_AND_PROCESS_CELL_ZORDER( 1,  1,  1)
+			}
+			else
+			{
+				// Fallback for cellRadius > 1 (Z-Order mode)
+				// Uses Morton-based cell ID (same as macro above)
+				for (int dz = -cellRadius; dz <= cellRadius; ++dz)
+				{
+					for (int dy = -cellRadius; dy <= cellRadius; ++dy)
+					{
+						for (int dx = -cellRadius; dx <= cellRadius; ++dx)
+						{
+							int3 neighborCell = centerCell + int3(dx, dy, dz);
+							uint cellID = GetMortonCellIDFromCellCoord(neighborCell);
+							uint cellStart = CellStart[cellID];
+							uint cellEnd = CellEnd[cellID];
+
+							// CRITICAL: Check BOTH cellStart AND cellEnd to prevent infinite loop
+							if (cellStart == INVALID_INDEX || cellEnd == INVALID_INDEX) continue;
+
+							uint maxNeighborIdx = min(cellEnd, (uint)(ParticleCount - 1));
+							for (uint neighborIdx = cellStart; neighborIdx <= maxNeighborIdx; ++neighborIdx)
+							{
+
+								FGPUFluidParticle neighbor = Particles[neighborIdx];
+								float3 neighborPos = neighbor.PredictedPosition;
+								float3 r_cm = pos - neighborPos;
+								float r2_cm = dot(r_cm, r_cm);
+								float r2 = r2_cm * CM_TO_M_SQ;
+
+								if (r2 < h2)
+								{
+									if (cachedCount < MAX_NEIGHBORS_PER_PARTICLE)
+									{
+										uint cacheIdx = idx * MAX_NEIGHBORS_PER_PARTICLE + cachedCount;
+										NeighborList[cacheIdx] = neighborIdx;
+										cachedCount++;
+									}
+
+									float mass = neighbor.Mass;
+									float w = Poly6Kernel(r2, h2);
+									density += mass * Poly6Coeff * w;
+									if (neighborIdx != idx) neighborCount++;
+
+									float3 r = r_cm * CM_TO_M;
+									float3 gradW = SpikyGradientFast(r, r2, h, h2);
+									gradW *= SpikyCoeff * CM_TO_M;
+
+									float3 gradC_j = -gradW / RestDensity;
+									sumGradC2 += dot(gradC_j, gradC_j);
+									gradC_i += gradW / RestDensity;
+
+									if (neighborIdx != idx && r2 >= SMALL_NUMBER)
+									{
+										float lambda_j_prev = neighbor.Lambda;
+										float scorr = 0.0f;
+										if (bEnableTensileInstability)
+										{
+											float diff = h2 - r2;
+											float W_r = diff * diff * diff;
+											float deltaQ2 = 0.04f * h2;
+											float diffQ = h2 - deltaQ2;
+											float W_deltaQ = diffQ * diffQ * diffQ;
+											float ratio = (W_deltaQ > 0.0f) ? saturate(W_r / W_deltaQ) : 0.0f;
+											float ratio2 = ratio * ratio;
+											float ratioN = ratio2 * ratio2;
+											if (TensileN == 2) ratioN = ratio2;
+											else if (TensileN == 6) ratioN = ratio2 * ratio2 * ratio2;
+											scorr = -TensileK * ratioN;
+										}
+										deltaP += (lambda_i_prev + lambda_j_prev + scorr) * gradW;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 		else
 		{
-			// Fallback for cellRadius > 1
-			for (int dz = -cellRadius; dz <= cellRadius; ++dz)
+			//=================================================================
+			// Legacy Hash Table Mode
+			//=================================================================
+			if (cellRadius == 1)
 			{
-				for (int dy = -cellRadius; dy <= cellRadius; ++dy)
+				// Unrolled 27-cell neighbor search with caching
+				// Layer z = -1
+				BUILD_AND_PROCESS_CELL(-1, -1, -1)
+				BUILD_AND_PROCESS_CELL( 0, -1, -1)
+				BUILD_AND_PROCESS_CELL( 1, -1, -1)
+				BUILD_AND_PROCESS_CELL(-1,  0, -1)
+				BUILD_AND_PROCESS_CELL( 0,  0, -1)
+				BUILD_AND_PROCESS_CELL( 1,  0, -1)
+				BUILD_AND_PROCESS_CELL(-1,  1, -1)
+				BUILD_AND_PROCESS_CELL( 0,  1, -1)
+				BUILD_AND_PROCESS_CELL( 1,  1, -1)
+				// Layer z = 0
+				BUILD_AND_PROCESS_CELL(-1, -1,  0)
+				BUILD_AND_PROCESS_CELL( 0, -1,  0)
+				BUILD_AND_PROCESS_CELL( 1, -1,  0)
+				BUILD_AND_PROCESS_CELL(-1,  0,  0)
+				BUILD_AND_PROCESS_CELL( 0,  0,  0)  // Self cell
+				BUILD_AND_PROCESS_CELL( 1,  0,  0)
+				BUILD_AND_PROCESS_CELL(-1,  1,  0)
+				BUILD_AND_PROCESS_CELL( 0,  1,  0)
+				BUILD_AND_PROCESS_CELL( 1,  1,  0)
+				// Layer z = 1
+				BUILD_AND_PROCESS_CELL(-1, -1,  1)
+				BUILD_AND_PROCESS_CELL( 0, -1,  1)
+				BUILD_AND_PROCESS_CELL( 1, -1,  1)
+				BUILD_AND_PROCESS_CELL(-1,  0,  1)
+				BUILD_AND_PROCESS_CELL( 0,  0,  1)
+				BUILD_AND_PROCESS_CELL( 1,  0,  1)
+				BUILD_AND_PROCESS_CELL(-1,  1,  1)
+				BUILD_AND_PROCESS_CELL( 0,  1,  1)
+				BUILD_AND_PROCESS_CELL( 1,  1,  1)
+			}
+			else
+			{
+				// Fallback for cellRadius > 1
+				for (int dz = -cellRadius; dz <= cellRadius; ++dz)
 				{
-					for (int dx = -cellRadius; dx <= cellRadius; ++dx)
+					for (int dy = -cellRadius; dy <= cellRadius; ++dy)
 					{
-						int3 neighborCell = centerCell + int3(dx, dy, dz);
-						uint hash = HashCell(neighborCell);
-						uint count = min(CellCounts[hash], (uint)MAX_PARTICLES_PER_CELL);
-						uint startIdx = hash * MAX_PARTICLES_PER_CELL;
-
-						for (uint i = 0; i < count; ++i)
+						for (int dx = -cellRadius; dx <= cellRadius; ++dx)
 						{
-							uint neighborIdx = ParticleIndices[startIdx + i];
-							if (neighborIdx >= (uint)ParticleCount)
-							{
-								continue;
-							}
+							int3 neighborCell = centerCell + int3(dx, dy, dz);
+							uint hash = HashCell(neighborCell);
+							uint count = min(CellCounts[hash], (uint)MAX_PARTICLES_PER_CELL);
+							uint startIdx = hash * MAX_PARTICLES_PER_CELL;
 
-							FGPUFluidParticle neighbor = Particles[neighborIdx];
-							float3 neighborPos = neighbor.PredictedPosition;
-							float3 r_cm = pos - neighborPos;
-							float r2_cm = dot(r_cm, r_cm);
-							float r2 = r2_cm * CM_TO_M_SQ;
-
-							if (r2 < h2)
+							for (uint i = 0; i < count; ++i)
 							{
-								// Cache this neighbor
-								if (cachedCount < MAX_NEIGHBORS_PER_PARTICLE)
+								uint neighborIdx = ParticleIndices[startIdx + i];
+								if (neighborIdx >= (uint)ParticleCount)
 								{
-									uint cacheIdx = idx * MAX_NEIGHBORS_PER_PARTICLE + cachedCount;
-									NeighborList[cacheIdx] = neighborIdx;
-									cachedCount++;
+									continue;
 								}
 
-								float mass = neighbor.Mass;
-								float w = Poly6Kernel(r2, h2);
-								density += mass * Poly6Coeff * w;
+								FGPUFluidParticle neighbor = Particles[neighborIdx];
+								float3 neighborPos = neighbor.PredictedPosition;
+								float3 r_cm = pos - neighborPos;
+								float r2_cm = dot(r_cm, r_cm);
+								float r2 = r2_cm * CM_TO_M_SQ;
 
-								if (neighborIdx != idx)
+								if (r2 < h2)
 								{
-									neighborCount++;
-								}
-
-								float3 r = r_cm * CM_TO_M;
-								float3 gradW = SpikyGradientFast(r, r2, h, h2);
-								gradW *= SpikyCoeff * CM_TO_M;
-
-								float3 gradC_j = -gradW / RestDensity;
-								sumGradC2 += dot(gradC_j, gradC_j);
-								gradC_i += gradW / RestDensity;
-
-								if (neighborIdx != idx && r2 >= SMALL_NUMBER)
-								{
-									float lambda_j_prev = neighbor.Lambda;
-									float scorr = 0.0f;
-									if (bEnableTensileInstability)
+									// Cache this neighbor
+									if (cachedCount < MAX_NEIGHBORS_PER_PARTICLE)
 									{
-										float diff = h2 - r2;
-										float W_r = diff * diff * diff;
-										float deltaQ2 = 0.04f * h2;
-										float diffQ = h2 - deltaQ2;
-										float W_deltaQ = diffQ * diffQ * diffQ;
-										float ratio = (W_deltaQ > 0.0f) ? saturate(W_r / W_deltaQ) : 0.0f;
-										float ratio2 = ratio * ratio;
-										float ratioN = ratio2 * ratio2;
-										if (TensileN == 2)
-										{
-											ratioN = ratio2;
-										}
-										else if (TensileN == 6)
-										{
-											ratioN = ratio2 * ratio2 * ratio2;
-										}
-										scorr = -TensileK * ratioN;
+										uint cacheIdx = idx * MAX_NEIGHBORS_PER_PARTICLE + cachedCount;
+										NeighborList[cacheIdx] = neighborIdx;
+										cachedCount++;
 									}
-									deltaP += (lambda_i_prev + lambda_j_prev + scorr) * gradW;
+
+									float mass = neighbor.Mass;
+									float w = Poly6Kernel(r2, h2);
+									density += mass * Poly6Coeff * w;
+
+									if (neighborIdx != idx)
+									{
+										neighborCount++;
+									}
+
+									float3 r = r_cm * CM_TO_M;
+									float3 gradW = SpikyGradientFast(r, r2, h, h2);
+									gradW *= SpikyCoeff * CM_TO_M;
+
+									float3 gradC_j = -gradW / RestDensity;
+									sumGradC2 += dot(gradC_j, gradC_j);
+									gradC_i += gradW / RestDensity;
+
+									if (neighborIdx != idx && r2 >= SMALL_NUMBER)
+									{
+										float lambda_j_prev = neighbor.Lambda;
+										float scorr = 0.0f;
+										if (bEnableTensileInstability)
+										{
+											float diff = h2 - r2;
+											float W_r = diff * diff * diff;
+											float deltaQ2 = 0.04f * h2;
+											float diffQ = h2 - deltaQ2;
+											float W_deltaQ = diffQ * diffQ * diffQ;
+											float ratio = (W_deltaQ > 0.0f) ? saturate(W_r / W_deltaQ) : 0.0f;
+											float ratio2 = ratio * ratio;
+											float ratioN = ratio2 * ratio2;
+											if (TensileN == 2)
+											{
+												ratioN = ratio2;
+											}
+											else if (TensileN == 6)
+											{
+												ratioN = ratio2 * ratio2 * ratio2;
+											}
+											scorr = -TensileK * ratioN;
+										}
+										deltaP += (lambda_i_prev + lambda_j_prev + scorr) * gradW;
+									}
 								}
 							}
 						}

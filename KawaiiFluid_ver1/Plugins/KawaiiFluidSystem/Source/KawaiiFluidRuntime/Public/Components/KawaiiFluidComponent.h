@@ -406,6 +406,51 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Brush")
 	void ClearAllParticles();
 
+	//========================================
+	// Debug Visualization (Z-Order Sorting)
+	//========================================
+
+	/**
+	 * Set debug visualization mode for verifying Z-Order sorting
+	 *
+	 * Use ArrayIndex mode to check if particles are spatially sorted:
+	 * - If Z-Order sorted correctly: particles close in space will have similar colors
+	 * - If NOT sorted: colors will be random/scattered regardless of position
+	 *
+	 * @param Mode Debug visualization mode (None to disable)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid|Debug")
+	void SetDebugVisualization(EFluidDebugVisualization Mode);
+
+	/** Get current debug visualization mode */
+	UFUNCTION(BlueprintPure, Category = "Fluid|Debug")
+	EFluidDebugVisualization GetDebugVisualization() const;
+
+	//========================================
+	// DrawDebugPoint Visualization
+	// (Works with GPU simulation, no material needed)
+	//========================================
+
+	/** Enable debug drawing using DrawDebugPoint (works with GPU simulation) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug")
+	bool bEnableDebugDraw = false;
+
+	/** Debug draw visualization mode */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (EditCondition = "bEnableDebugDraw"))
+	EFluidDebugVisualization DebugDrawMode = EFluidDebugVisualization::ZOrderArrayIndex;
+
+	/** Debug point size */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (EditCondition = "bEnableDebugDraw", ClampMin = "1.0", ClampMax = "50.0"))
+	float DebugPointSize = 8.0f;
+
+	/** Enable debug drawing with specified mode */
+	UFUNCTION(BlueprintCallable, Category = "Fluid|Debug")
+	void EnableDebugDraw(EFluidDebugVisualization Mode, float PointSize = 8.0f);
+
+	/** Disable debug drawing */
+	UFUNCTION(BlueprintCallable, Category = "Fluid|Debug")
+	void DisableDebugDraw();
+
 protected:
 	//========================================
 	// Modules
@@ -459,4 +504,18 @@ private:
 
 	void RegisterToSubsystem();
 	void UnregisterFromSubsystem();
+
+	//========================================
+	// Debug Draw Helpers
+	//========================================
+
+	/** Draw debug particles using DrawDebugPoint */
+	void DrawDebugParticles();
+
+	/** Compute debug color for a particle */
+	FColor ComputeDebugDrawColor(int32 ParticleIndex, int32 TotalCount, const FVector& Position, float Density) const;
+
+	/** Cached bounds for debug visualization (auto-computed) */
+	FVector DebugDrawBoundsMin = FVector::ZeroVector;
+	FVector DebugDrawBoundsMax = FVector::ZeroVector;
 };

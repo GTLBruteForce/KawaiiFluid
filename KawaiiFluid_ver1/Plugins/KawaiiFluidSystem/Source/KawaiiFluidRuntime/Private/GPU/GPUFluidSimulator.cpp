@@ -15,9 +15,38 @@
 #include "GlobalShader.h"
 #include "ShaderParameterStruct.h"
 #include "PipelineStateCache.h"
+#include "HAL/IConsoleManager.h"  // For console command execution
+#include "Async/Async.h"  // For AsyncTask
 
 DECLARE_LOG_CATEGORY_EXTERN(LogGPUFluidSimulator, Log, All);
 DEFINE_LOG_CATEGORY(LogGPUFluidSimulator);
+
+// =====================================================
+// Debug CVars for RenderDoc Capture
+// =====================================================
+static int32 GFluidCaptureFirstFrame = 0;  // 0 = disabled by default
+static FAutoConsoleVariableRef CVarFluidCaptureFirstFrame(
+	TEXT("r.Fluid.CaptureFirstFrame"),
+	GFluidCaptureFirstFrame,
+	TEXT("Capture first GPU fluid simulation frame in RenderDoc.\n")
+	TEXT("  0 = Disabled (default)\n")
+	TEXT("  1 = Capture first frame\n")
+	TEXT("Set to 1 and restart PIE to capture first frame."),
+	ECVF_Default
+);
+
+static int32 GFluidCaptureFrameNumber = 0;  // 0 = use CaptureFirstFrame, >0 = capture specific frame
+static FAutoConsoleVariableRef CVarFluidCaptureFrameNumber(
+	TEXT("r.Fluid.CaptureFrameNumber"),
+	GFluidCaptureFrameNumber,
+	TEXT("Capture specific GPU fluid simulation frame number in RenderDoc.\n")
+	TEXT("  0 = Use CaptureFirstFrame setting\n")
+	TEXT("  N = Capture frame N (1-indexed)"),
+	ECVF_Default
+);
+
+// Internal flag - reset when CVar is changed back to 1
+static int32 GFluidCapturedFrame = 0;  // Tracks which frame was captured (0 = none)
 
 //=============================================================================
 // Constructor / Destructor
@@ -367,10 +396,55 @@ void FGPUFluidSimulator::UploadParticles(const TArray<FFluidParticle>& CPUPartic
 		// Full upload needed: first frame, buffer invalid, or particles reduced
 		CachedGPUParticles.SetNumUninitialized(NewCount);
 
+		// Compute bounds from particle positions for Morton code
+		FVector3f BoundsMin(FLT_MAX, FLT_MAX, FLT_MAX);
+		FVector3f BoundsMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+
 		for (int32 i = 0; i < NewCount; ++i)
 		{
 			CachedGPUParticles[i] = ConvertToGPU(CPUParticles[i]);
+
+			// Track bounds from PredictedPosition (which is initialized to Position)
+			const FVector3f& Pos = CachedGPUParticles[i].PredictedPosition;
+			BoundsMin.X = FMath::Min(BoundsMin.X, Pos.X);
+			BoundsMin.Y = FMath::Min(BoundsMin.Y, Pos.Y);
+			BoundsMin.Z = FMath::Min(BoundsMin.Z, Pos.Z);
+			BoundsMax.X = FMath::Max(BoundsMax.X, Pos.X);
+			BoundsMax.Y = FMath::Max(BoundsMax.Y, Pos.Y);
+			BoundsMax.Z = FMath::Max(BoundsMax.Z, Pos.Z);
 		}
+
+		// Add LARGE padding to bounds to prevent Black Hole Cell problem
+		// When particles move outside bounds, their cell coords become negative → clamped to 0
+		// This causes ALL out-of-bounds particles to cluster in Cell 0 → O(N²) neighbor search
+		//
+		// Padding strategy:
+		// 1. Use at least 2000 units padding (4x the previous 500 units)
+		// 2. Also ensure bounds cover at least 50% of Morton code capacity
+		//    (Morton code = 1024 cells per axis, so max extent = 1024 * CellSize)
+		//
+		// With typical CellSize=2.0, Morton capacity = 2048 units per axis
+		// We use 1000 units padding = covers ±1000 units of particle drift
+		const float BoundsPadding = 2000.0f;
+		BoundsMin -= FVector3f(BoundsPadding, BoundsPadding, BoundsPadding);
+		BoundsMax += FVector3f(BoundsPadding, BoundsPadding, BoundsPadding);
+
+		// Additionally, center the bounds and ensure minimum extent
+		// This prevents issues when particles are spawned in a small area
+		FVector3f Center = (BoundsMin + BoundsMax) * 0.5f;
+		FVector3f HalfExtent = (BoundsMax - BoundsMin) * 0.5f;
+		const float MinHalfExtent = 500.0f;  // At least 1000 units total per axis
+		HalfExtent.X = FMath::Max(HalfExtent.X, MinHalfExtent);
+		HalfExtent.Y = FMath::Max(HalfExtent.Y, MinHalfExtent);
+		HalfExtent.Z = FMath::Max(HalfExtent.Z, MinHalfExtent);
+		BoundsMin = Center - HalfExtent;
+		BoundsMax = Center + HalfExtent;
+
+		// Update simulation bounds for Morton code computation
+		SetSimulationBounds(BoundsMin, BoundsMax);
+
+		UE_LOG(LogGPUFluidSimulator, Log, TEXT("UploadParticles: Auto-computed bounds: Min(%.1f, %.1f, %.1f) Max(%.1f, %.1f, %.1f)"),
+			BoundsMin.X, BoundsMin.Y, BoundsMin.Z, BoundsMax.X, BoundsMax.Y, BoundsMax.Z);
 
 		NewParticleCount = 0;
 		NewParticlesToAppend.Empty();
@@ -425,7 +499,11 @@ void FGPUFluidSimulator::DownloadParticles(TArray<FFluidParticle>& OutCPUParticl
 	}
 
 	// Update existing particles by matching ParticleID (don't overwrite newly spawned ones)
+	// Also track bounds to detect Black Hole Cell potential
 	int32 UpdatedCount = 0;
+	int32 OutOfBoundsCount = 0;
+	const float BoundsMargin = 100.0f;  // Warn if particles within 100 units of bounds edge
+
 	for (int32 i = 0; i < Count; ++i)
 	{
 		const FGPUFluidParticle& GPUParticle = ReadbackGPUParticles[i];
@@ -433,7 +511,33 @@ void FGPUFluidSimulator::DownloadParticles(TArray<FFluidParticle>& OutCPUParticl
 		{
 			ConvertFromGPU(OutCPUParticles[*CPUIndex], GPUParticle);
 			++UpdatedCount;
+
+			// Check if particle is near or outside bounds
+			const FVector3f& Pos = GPUParticle.PredictedPosition;
+			if (Pos.X < SimulationBoundsMin.X + BoundsMargin ||
+				Pos.Y < SimulationBoundsMin.Y + BoundsMargin ||
+				Pos.Z < SimulationBoundsMin.Z + BoundsMargin ||
+				Pos.X > SimulationBoundsMax.X - BoundsMargin ||
+				Pos.Y > SimulationBoundsMax.Y - BoundsMargin ||
+				Pos.Z > SimulationBoundsMax.Z - BoundsMargin)
+			{
+				OutOfBoundsCount++;
+			}
 		}
+	}
+
+	// Warn if many particles are near bounds edge (potential Black Hole Cell issue)
+	static int32 LastBoundsWarningFrame = -1000;
+	if (OutOfBoundsCount > Count / 10 && (GFrameCounter - LastBoundsWarningFrame) > 300)  // >10% near edge, warn every 5 sec
+	{
+		LastBoundsWarningFrame = GFrameCounter;
+		UE_LOG(LogGPUFluidSimulator, Warning,
+			TEXT("Z-Order WARNING: %d/%d particles (%.1f%%) are near simulation bounds edge! "
+			     "This may cause Black Hole Cell problem with Z-Order sorting. "
+			     "Bounds: Min(%.1f, %.1f, %.1f) Max(%.1f, %.1f, %.1f)"),
+			OutOfBoundsCount, Count, 100.0f * OutOfBoundsCount / Count,
+			SimulationBoundsMin.X, SimulationBoundsMin.Y, SimulationBoundsMin.Z,
+			SimulationBoundsMax.X, SimulationBoundsMax.Y, SimulationBoundsMax.Z);
 	}
 
 	UE_LOG(LogGPUFluidSimulator, Verbose, TEXT("DownloadParticles: Updated %d/%d particles"), UpdatedCount, Count);
@@ -660,8 +764,8 @@ void FGPUFluidSimulator::SimulateSubstep(const FGPUFluidSimulationParams& Params
 			// Detailed stats mode: Perform readback for velocity/density analysis
 			// =====================================================
 
-			// Check if detailed GPU stats are enabled (game thread flag)
-			const bool bNeedReadback = GetFluidStatsCollector().IsDetailedGPUEnabled();
+			// Check if any readback is needed (detailed stats OR debug visualization)
+			const bool bNeedReadback = GetFluidStatsCollector().IsAnyReadbackNeeded();
 
 			if (bNeedReadback && Self->StagingBufferRHI.IsValid() && Self->PersistentParticleBuffer.IsValid())
 			{
@@ -890,6 +994,60 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	// DEBUG: Log which path is being taken (only first 10 frames to avoid spam)
 	static int32 DebugFrameCounter = 0;
 	const bool bShouldLog = (DebugFrameCounter++ < 10);
+
+	// =====================================================
+	// DEBUG: Trigger RenderDoc capture on configurable GPU simulation frame
+	// This helps diagnose Z-Order sorting issues by capturing the first frame
+	// where RadixSort runs on fresh data (not corrupted by previous frames)
+	//
+	// CVars:
+	//   r.Fluid.CaptureFirstFrame 1  - Capture first simulation frame (default)
+	//   r.Fluid.CaptureFrameNumber N - Capture specific frame N
+	// =====================================================
+	{
+		bool bShouldCapture = false;
+		int32 TargetFrame = 0;
+
+		if (GFluidCaptureFrameNumber > 0)
+		{
+			// Capture specific frame number
+			TargetFrame = GFluidCaptureFrameNumber;
+			bShouldCapture = (DebugFrameCounter == TargetFrame && GFluidCapturedFrame != TargetFrame);
+		}
+		else if (GFluidCaptureFirstFrame != 0)
+		{
+			// Capture first frame
+			TargetFrame = 1;
+			bShouldCapture = (DebugFrameCounter == 1 && GFluidCapturedFrame == 0);
+		}
+
+		if (bShouldCapture)
+		{
+			GFluidCapturedFrame = TargetFrame;
+			UE_LOG(LogGPUFluidSimulator, Warning, TEXT(">>> TRIGGERING RENDERDOC CAPTURE ON GPU SIMULATION FRAME %d <<<"), DebugFrameCounter);
+
+			// Trigger RenderDoc capture using console command
+			// Execute on game thread since we're in render thread context
+			// This works when editor is launched with -RenderDoc flag
+			AsyncTask(ENamedThreads::GameThread, []()
+			{
+				IConsoleObject* CaptureCmd = IConsoleManager::Get().FindConsoleObject(TEXT("renderdoc.CaptureFrame"));
+				if (CaptureCmd)
+				{
+					IConsoleCommand* Cmd = CaptureCmd->AsCommand();
+					if (Cmd)
+					{
+						Cmd->Execute(TArray<FString>(), nullptr, *GLog);
+						UE_LOG(LogGPUFluidSimulator, Warning, TEXT(">>> RenderDoc capture command executed successfully"));
+					}
+				}
+				else
+				{
+					UE_LOG(LogGPUFluidSimulator, Warning, TEXT(">>> RenderDoc not available. Launch editor with -RenderDoc flag."));
+				}
+			});
+		}
+	}
 
 	if (bShouldLog)
 	{
@@ -1183,83 +1341,208 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	// Pass 2: Extract positions for spatial hash (use predicted positions)
 	AddExtractPositionsPass(GraphBuilder, ParticlesSRVLocal, PositionsUAVLocal, CurrentParticleCount, true);
 
-	// Pass 3: Build Spatial Hash using Persistent Buffers (GPU clear + build, no CPU upload)
-	if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Building with ParticleCount=%d, Radius=%.2f, CellSize=%.2f"),
-		CurrentParticleCount, Params.ParticleRadius, Params.CellSize);
+	//=========================================================================
+	// Pass 3: Spatial Data Structure
+	// Option A: Z-Order Sorting (cache-coherent memory access)
+	// Option B: Hash Table (linked-list based)
+	//=========================================================================
 
-	FRDGBufferRef CellCountsBuffer;
-	FRDGBufferRef ParticleIndicesBuffer;
+	// CellStart/End for Z-Order sorting (used when bUseZOrderSorting is true)
+	FRDGBufferUAVRef CellStartUAVLocal = nullptr;
+	FRDGBufferSRVRef CellStartSRVLocal = nullptr;
+	FRDGBufferUAVRef CellEndUAVLocal = nullptr;
+	FRDGBufferSRVRef CellEndSRVLocal = nullptr;
 
-	if (!PersistentCellCountsBuffer.IsValid())
+	// CellCounts/ParticleIndices for hash table (used by physics shaders)
+	FRDGBufferRef CellCountsBuffer = nullptr;
+	FRDGBufferRef ParticleIndicesBuffer = nullptr;
+	FRDGBufferSRVRef CellCountsSRVLocal = nullptr;
+	FRDGBufferSRVRef ParticleIndicesSRVLocal = nullptr;
+
+	if (bUseZOrderSorting)
 	{
-		// First frame: create buffers
-		FRDGBufferDesc CellCountsDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_SPATIAL_HASH_SIZE);
-		CellCountsBuffer = GraphBuilder.CreateBuffer(CellCountsDesc, TEXT("SpatialHash.CellCounts"));
+		//=====================================================================
+		// Z-Order Sorting Pipeline
+		// Morton Code → Radix Sort → Reorder → CellStart/End
+		//=====================================================================
+		if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> Z-ORDER SORTING: Building with ParticleCount=%d"), CurrentParticleCount);
 
-		const uint32 TotalSlots = GPU_SPATIAL_HASH_SIZE * GPU_MAX_PARTICLES_PER_CELL;
-		FRDGBufferDesc ParticleIndicesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), TotalSlots);
-		ParticleIndicesBuffer = GraphBuilder.CreateBuffer(ParticleIndicesDesc, TEXT("SpatialHash.ParticleIndices"));
+		// Execute Z-Order sorting and get sorted particle buffer
+		FRDGBufferRef SortedParticleBuffer = ExecuteZOrderSortingPipeline(
+			GraphBuilder,
+			ParticleBuffer,
+			CellStartUAVLocal,
+			CellStartSRVLocal,
+			CellEndUAVLocal,
+			CellEndSRVLocal,
+			Params);
 
-		if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Created new persistent buffers"));
+		// Replace particle buffer with sorted version for subsequent passes
+		ParticleBuffer = SortedParticleBuffer;
+		ParticlesUAVLocal = GraphBuilder.CreateUAV(ParticleBuffer);
+		ParticlesSRVLocal = GraphBuilder.CreateSRV(ParticleBuffer);
+
+		// Extract positions from sorted particles for hash table build
+		AddExtractPositionsPass(GraphBuilder, ParticlesSRVLocal, PositionsUAVLocal, CurrentParticleCount, true);
+
+		if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> Z-ORDER SORTING: Completed, particles reordered"));
+
+		//=====================================================================
+		// Also build hash table for compatibility with existing shaders
+		// Sorted particles → better cache locality during neighbor iteration
+		//=====================================================================
+		if (!PersistentCellCountsBuffer.IsValid())
+		{
+			FRDGBufferDesc CellCountsDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_SPATIAL_HASH_SIZE);
+			CellCountsBuffer = GraphBuilder.CreateBuffer(CellCountsDesc, TEXT("SpatialHash.CellCounts"));
+
+			const uint32 TotalSlots = GPU_SPATIAL_HASH_SIZE * GPU_MAX_PARTICLES_PER_CELL;
+			FRDGBufferDesc ParticleIndicesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), TotalSlots);
+			ParticleIndicesBuffer = GraphBuilder.CreateBuffer(ParticleIndicesDesc, TEXT("SpatialHash.ParticleIndices"));
+		}
+		else
+		{
+			CellCountsBuffer = GraphBuilder.RegisterExternalBuffer(PersistentCellCountsBuffer, TEXT("SpatialHash.CellCounts"));
+			ParticleIndicesBuffer = GraphBuilder.RegisterExternalBuffer(PersistentParticleIndicesBuffer, TEXT("SpatialHash.ParticleIndices"));
+		}
+
+		CellCountsSRVLocal = GraphBuilder.CreateSRV(CellCountsBuffer);
+		FRDGBufferUAVRef CellCountsUAVLocal = GraphBuilder.CreateUAV(CellCountsBuffer);
+		ParticleIndicesSRVLocal = GraphBuilder.CreateSRV(ParticleIndicesBuffer);
+		FRDGBufferUAVRef ParticleIndicesUAVLocal = GraphBuilder.CreateUAV(ParticleIndicesBuffer);
+
+		// GPU Clear pass
+		{
+			FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+			TShaderMapRef<FClearCellDataCS> ClearShader(ShaderMap);
+
+			FClearCellDataCS::FParameters* ClearParams = GraphBuilder.AllocParameters<FClearCellDataCS::FParameters>();
+			ClearParams->CellCounts = CellCountsUAVLocal;
+
+			const uint32 NumGroups = FMath::DivideAndRoundUp<uint32>(GPU_SPATIAL_HASH_SIZE, SPATIAL_HASH_THREAD_GROUP_SIZE);
+
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("SpatialHash::GPUClear(ZOrder)"),
+				ClearShader,
+				ClearParams,
+				FIntVector(NumGroups, 1, 1)
+			);
+		}
+
+		// GPU Build pass with sorted positions
+		{
+			FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+			TShaderMapRef<FBuildSpatialHashSimpleCS> BuildShader(ShaderMap);
+
+			FBuildSpatialHashSimpleCS::FParameters* BuildParams = GraphBuilder.AllocParameters<FBuildSpatialHashSimpleCS::FParameters>();
+			BuildParams->ParticlePositions = PositionsSRVLocal;
+			BuildParams->ParticleCount = CurrentParticleCount;
+			BuildParams->ParticleRadius = Params.ParticleRadius;
+			BuildParams->CellSize = Params.CellSize;
+			BuildParams->CellCounts = CellCountsUAVLocal;
+			BuildParams->ParticleIndices = ParticleIndicesUAVLocal;
+
+			const uint32 NumGroups = FMath::DivideAndRoundUp<uint32>(CurrentParticleCount, SPATIAL_HASH_THREAD_GROUP_SIZE);
+
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("SpatialHash::GPUBuild(ZOrder)"),
+				BuildShader,
+				BuildParams,
+				FIntVector(NumGroups, 1, 1)
+			);
+		}
 	}
 	else
 	{
-		// Subsequent frames: reuse persistent buffers
-		CellCountsBuffer = GraphBuilder.RegisterExternalBuffer(PersistentCellCountsBuffer, TEXT("SpatialHash.CellCounts"));
-		ParticleIndicesBuffer = GraphBuilder.RegisterExternalBuffer(PersistentParticleIndicesBuffer, TEXT("SpatialHash.ParticleIndices"));
+		//=====================================================================
+		// Traditional Hash Table (fallback)
+		//=====================================================================
+		if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Building with ParticleCount=%d, Radius=%.2f, CellSize=%.2f"),
+			CurrentParticleCount, Params.ParticleRadius, Params.CellSize);
 
-		if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Reusing persistent buffers"));
+		if (!PersistentCellCountsBuffer.IsValid())
+		{
+			// First frame: create buffers
+			FRDGBufferDesc CellCountsDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_SPATIAL_HASH_SIZE);
+			CellCountsBuffer = GraphBuilder.CreateBuffer(CellCountsDesc, TEXT("SpatialHash.CellCounts"));
+
+			const uint32 TotalSlots = GPU_SPATIAL_HASH_SIZE * GPU_MAX_PARTICLES_PER_CELL;
+			FRDGBufferDesc ParticleIndicesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), TotalSlots);
+			ParticleIndicesBuffer = GraphBuilder.CreateBuffer(ParticleIndicesDesc, TEXT("SpatialHash.ParticleIndices"));
+
+			if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Created new persistent buffers"));
+		}
+		else
+		{
+			// Subsequent frames: reuse persistent buffers
+			CellCountsBuffer = GraphBuilder.RegisterExternalBuffer(PersistentCellCountsBuffer, TEXT("SpatialHash.CellCounts"));
+			ParticleIndicesBuffer = GraphBuilder.RegisterExternalBuffer(PersistentParticleIndicesBuffer, TEXT("SpatialHash.ParticleIndices"));
+
+			if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: Reusing persistent buffers"));
+		}
+
+		CellCountsSRVLocal = GraphBuilder.CreateSRV(CellCountsBuffer);
+		FRDGBufferUAVRef CellCountsUAVLocal = GraphBuilder.CreateUAV(CellCountsBuffer);
+		ParticleIndicesSRVLocal = GraphBuilder.CreateSRV(ParticleIndicesBuffer);
+		FRDGBufferUAVRef ParticleIndicesUAVLocal = GraphBuilder.CreateUAV(ParticleIndicesBuffer);
+
+		// GPU Clear pass - clears CellCounts to 0 entirely on GPU
+		{
+			FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+			TShaderMapRef<FClearCellDataCS> ClearShader(ShaderMap);
+
+			FClearCellDataCS::FParameters* ClearParams = GraphBuilder.AllocParameters<FClearCellDataCS::FParameters>();
+			ClearParams->CellCounts = CellCountsUAVLocal;
+
+			const uint32 NumGroups = FMath::DivideAndRoundUp<uint32>(GPU_SPATIAL_HASH_SIZE, SPATIAL_HASH_THREAD_GROUP_SIZE);
+
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("SpatialHash::GPUClear"),
+				ClearShader,
+				ClearParams,
+				FIntVector(NumGroups, 1, 1)
+			);
+		}
+
+		// GPU Build pass - writes particle indices into hash grid
+		{
+			FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+			TShaderMapRef<FBuildSpatialHashSimpleCS> BuildShader(ShaderMap);
+
+			FBuildSpatialHashSimpleCS::FParameters* BuildParams = GraphBuilder.AllocParameters<FBuildSpatialHashSimpleCS::FParameters>();
+			BuildParams->ParticlePositions = PositionsSRVLocal;
+			BuildParams->ParticleCount = CurrentParticleCount;
+			BuildParams->ParticleRadius = Params.ParticleRadius;
+			BuildParams->CellSize = Params.CellSize;
+			BuildParams->CellCounts = CellCountsUAVLocal;
+			BuildParams->ParticleIndices = ParticleIndicesUAVLocal;
+
+			const uint32 NumGroups = FMath::DivideAndRoundUp<uint32>(CurrentParticleCount, SPATIAL_HASH_THREAD_GROUP_SIZE);
+
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("SpatialHash::GPUBuild"),
+				BuildShader,
+				BuildParams,
+				FIntVector(NumGroups, 1, 1)
+			);
+		}
+
+		if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: GPU clear+build completed"));
+
+		// Create dummy CellStart/CellEnd buffers for shader parameter validation
+		// These are not used when bUseZOrderSorting = 0, but RDG requires valid SRVs
+		{
+			FRDGBufferDesc DummyCellDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1);
+			FRDGBufferRef DummyCellStartBuffer = GraphBuilder.CreateBuffer(DummyCellDesc, TEXT("DummyCellStart"));
+			FRDGBufferRef DummyCellEndBuffer = GraphBuilder.CreateBuffer(DummyCellDesc, TEXT("DummyCellEnd"));
+			CellStartSRVLocal = GraphBuilder.CreateSRV(DummyCellStartBuffer);
+			CellEndSRVLocal = GraphBuilder.CreateSRV(DummyCellEndBuffer);
+		}
 	}
-
-	FRDGBufferSRVRef CellCountsSRVLocal = GraphBuilder.CreateSRV(CellCountsBuffer);
-	FRDGBufferUAVRef CellCountsUAVLocal = GraphBuilder.CreateUAV(CellCountsBuffer);
-	FRDGBufferSRVRef ParticleIndicesSRVLocal = GraphBuilder.CreateSRV(ParticleIndicesBuffer);
-	FRDGBufferUAVRef ParticleIndicesUAVLocal = GraphBuilder.CreateUAV(ParticleIndicesBuffer);
-
-	// GPU Clear pass - clears CellCounts to 0 entirely on GPU
-	{
-		FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-		TShaderMapRef<FClearCellDataCS> ClearShader(ShaderMap);
-
-		FClearCellDataCS::FParameters* ClearParams = GraphBuilder.AllocParameters<FClearCellDataCS::FParameters>();
-		ClearParams->CellCounts = CellCountsUAVLocal;
-
-		const uint32 NumGroups = FMath::DivideAndRoundUp<uint32>(GPU_SPATIAL_HASH_SIZE, SPATIAL_HASH_THREAD_GROUP_SIZE);
-
-		FComputeShaderUtils::AddPass(
-			GraphBuilder,
-			RDG_EVENT_NAME("SpatialHash::GPUClear"),
-			ClearShader,
-			ClearParams,
-			FIntVector(NumGroups, 1, 1)
-		);
-	}
-
-	// GPU Build pass - writes particle indices into hash grid
-	{
-		FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-		TShaderMapRef<FBuildSpatialHashSimpleCS> BuildShader(ShaderMap);
-
-		FBuildSpatialHashSimpleCS::FParameters* BuildParams = GraphBuilder.AllocParameters<FBuildSpatialHashSimpleCS::FParameters>();
-		BuildParams->ParticlePositions = PositionsSRVLocal;
-		BuildParams->ParticleCount = CurrentParticleCount;
-		BuildParams->ParticleRadius = Params.ParticleRadius;
-		BuildParams->CellSize = Params.CellSize;
-		BuildParams->CellCounts = CellCountsUAVLocal;
-		BuildParams->ParticleIndices = ParticleIndicesUAVLocal;
-
-		const uint32 NumGroups = FMath::DivideAndRoundUp<uint32>(CurrentParticleCount, SPATIAL_HASH_THREAD_GROUP_SIZE);
-
-		FComputeShaderUtils::AddPass(
-			GraphBuilder,
-			RDG_EVENT_NAME("SpatialHash::GPUBuild"),
-			BuildShader,
-			BuildParams,
-			FIntVector(NumGroups, 1, 1)
-		);
-	}
-
-	if (bShouldLog) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> SPATIAL HASH: GPU clear+build completed"));
 
 	// Pass 4-5: XPBD Density Constraint Solver (OPTIMIZED: Combined Density + Pressure + Neighbor Caching)
 	// Neighbor Caching: First iteration builds neighbor list, subsequent iterations reuse
@@ -1304,8 +1587,9 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	{
 		// Combined pass: Compute Density + Lambda + Apply Position Corrections
 		// First iteration (i=0) builds neighbor cache, subsequent iterations reuse it
+		// When bUseZOrderSorting is true, CellStartSRVLocal/CellEndSRVLocal are valid and shader uses sequential access
 		AddSolveDensityPressurePass(GraphBuilder, ParticlesUAVLocal, CellCountsSRVLocal, ParticleIndicesSRVLocal,
-			NeighborListUAVLocal, NeighborCountsUAVLocal, i, Params);
+			CellStartSRVLocal, CellEndSRVLocal, NeighborListUAVLocal, NeighborCountsUAVLocal, i, Params);
 	}
 
 	// Create SRVs from neighbor cache buffers for use in Viscosity and Cohesion passes
@@ -1713,6 +1997,8 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 	FRDGBufferUAVRef InParticlesUAV,
 	FRDGBufferSRVRef InCellCountsSRV,
 	FRDGBufferSRVRef InParticleIndicesSRV,
+	FRDGBufferSRVRef InCellStartSRV,
+	FRDGBufferSRVRef InCellEndSRV,
 	FRDGBufferUAVRef InNeighborListUAV,
 	FRDGBufferUAVRef InNeighborCountsUAV,
 	int32 IterationIndex,
@@ -1723,8 +2009,17 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 
 	FSolveDensityPressureCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FSolveDensityPressureCS::FParameters>();
 	PassParameters->Particles = InParticlesUAV;
+	// Hash table mode (legacy)
 	PassParameters->CellCounts = InCellCountsSRV;
 	PassParameters->ParticleIndices = InParticleIndicesSRV;
+	// Z-Order sorted mode (new)
+	PassParameters->CellStart = InCellStartSRV;
+	PassParameters->CellEnd = InCellEndSRV;
+	// Use member variable directly - don't check nullptr because dummy buffers are created for RDG validation
+	PassParameters->bUseZOrderSorting = bUseZOrderSorting ? 1 : 0;
+	// Morton bounds for Z-Order cell ID calculation (must match FluidMortonCode.usf)
+	PassParameters->MortonBoundsMin = SimulationBoundsMin;
+	PassParameters->MortonBoundsExtent = SimulationBoundsMax - SimulationBoundsMin;
 	// Neighbor caching buffers
 	PassParameters->NeighborList = InNeighborListUAV;
 	PassParameters->NeighborCounts = InNeighborCountsUAV;
@@ -3678,4 +3973,394 @@ int32 FGPUFluidSimulator::GetContactCountForOwner(int32 OwnerID) const
 	}
 
 	return TotalCount;
+}
+
+//=============================================================================
+// Z-Order (Morton Code) Sorting Pipeline Implementation
+// Provides cache-coherent particle access for neighbor search
+//=============================================================================
+
+FRDGBufferRef FGPUFluidSimulator::ExecuteZOrderSortingPipeline(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferRef InParticleBuffer,
+	FRDGBufferUAVRef& OutCellStartUAV,
+	FRDGBufferSRVRef& OutCellStartSRV,
+	FRDGBufferUAVRef& OutCellEndUAV,
+	FRDGBufferSRVRef& OutCellEndSRV,
+	const FGPUFluidSimulationParams& Params)
+{
+	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid::ZOrderSorting");
+
+	if (CurrentParticleCount <= 0)
+	{
+		return InParticleBuffer;
+	}
+
+	// Check if we need to allocate/resize buffers
+	const bool bNeedResize = ZOrderBufferParticleCapacity < CurrentParticleCount;
+	const int32 NumBlocks = FMath::DivideAndRoundUp(CurrentParticleCount, 256);
+	const int32 CellCount = GPU_SPATIAL_HASH_SIZE;  // Use same size as hash table for consistency
+
+	//=========================================================================
+	// Step 1: Create/reuse Morton code and index buffers
+	//=========================================================================
+	FRDGBufferRef MortonCodesRDG;
+	FRDGBufferRef MortonCodesTempRDG;
+	FRDGBufferRef SortIndicesRDG;
+	FRDGBufferRef SortIndicesTempRDG;
+	FRDGBufferRef HistogramRDG;
+	FRDGBufferRef BucketOffsetsRDG;
+	FRDGBufferRef CellStartRDG;
+	FRDGBufferRef CellEndRDG;
+
+	// Morton codes and indices
+	{
+		FRDGBufferDesc MortonDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), CurrentParticleCount);
+		MortonCodesRDG = GraphBuilder.CreateBuffer(MortonDesc, TEXT("GPUFluid.MortonCodes"));
+		MortonCodesTempRDG = GraphBuilder.CreateBuffer(MortonDesc, TEXT("GPUFluid.MortonCodesTemp"));
+		SortIndicesRDG = GraphBuilder.CreateBuffer(MortonDesc, TEXT("GPUFluid.SortIndices"));
+		SortIndicesTempRDG = GraphBuilder.CreateBuffer(MortonDesc, TEXT("GPUFluid.SortIndicesTemp"));
+	}
+
+	// Radix sort histogram: 16 buckets * NumBlocks
+	{
+		FRDGBufferDesc HistogramDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_RADIX_SIZE * NumBlocks);
+		HistogramRDG = GraphBuilder.CreateBuffer(HistogramDesc, TEXT("GPUFluid.RadixHistogram"));
+
+		FRDGBufferDesc BucketDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_RADIX_SIZE);
+		BucketOffsetsRDG = GraphBuilder.CreateBuffer(BucketDesc, TEXT("GPUFluid.RadixBucketOffsets"));
+	}
+
+	// Cell Start/End (use hash size for compatibility with existing neighbor search)
+	{
+		FRDGBufferDesc CellDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), CellCount);
+		CellStartRDG = GraphBuilder.CreateBuffer(CellDesc, TEXT("GPUFluid.CellStart"));
+		CellEndRDG = GraphBuilder.CreateBuffer(CellDesc, TEXT("GPUFluid.CellEnd"));
+	}
+
+	//=========================================================================
+	// Step 2: Compute Morton codes
+	//=========================================================================
+	{
+		FRDGBufferSRVRef ParticlesSRV = GraphBuilder.CreateSRV(InParticleBuffer);
+		FRDGBufferUAVRef MortonCodesUAV = GraphBuilder.CreateUAV(MortonCodesRDG);
+		FRDGBufferUAVRef IndicesUAV = GraphBuilder.CreateUAV(SortIndicesRDG);
+
+		AddComputeMortonCodesPass(GraphBuilder, ParticlesSRV, MortonCodesUAV, IndicesUAV, Params);
+	}
+
+	//=========================================================================
+	// Step 3: Radix Sort (8 passes for 32-bit keys)
+	//=========================================================================
+	AddRadixSortPasses(GraphBuilder, MortonCodesRDG, SortIndicesRDG, CurrentParticleCount);
+
+	//=========================================================================
+	// Step 4: Reorder particle data based on sorted indices
+	//=========================================================================
+	FRDGBufferRef SortedParticleBuffer;
+	{
+		FRDGBufferDesc SortedDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), CurrentParticleCount);
+		SortedParticleBuffer = GraphBuilder.CreateBuffer(SortedDesc, TEXT("GPUFluid.SortedParticles"));
+
+		FRDGBufferSRVRef OldParticlesSRV = GraphBuilder.CreateSRV(InParticleBuffer);
+		FRDGBufferSRVRef SortedIndicesSRV = GraphBuilder.CreateSRV(SortIndicesRDG);
+		FRDGBufferUAVRef SortedParticlesUAV = GraphBuilder.CreateUAV(SortedParticleBuffer);
+
+		AddReorderParticlesPass(GraphBuilder, OldParticlesSRV, SortedIndicesSRV, SortedParticlesUAV);
+	}
+
+	//=========================================================================
+	// Step 5: Compute Cell Start/End indices
+	//=========================================================================
+	{
+		FRDGBufferSRVRef SortedMortonSRV = GraphBuilder.CreateSRV(MortonCodesRDG);
+		OutCellStartUAV = GraphBuilder.CreateUAV(CellStartRDG);
+		OutCellEndUAV = GraphBuilder.CreateUAV(CellEndRDG);
+
+		AddComputeCellStartEndPass(GraphBuilder, SortedMortonSRV, OutCellStartUAV, OutCellEndUAV);
+
+		OutCellStartSRV = GraphBuilder.CreateSRV(CellStartRDG);
+		OutCellEndSRV = GraphBuilder.CreateSRV(CellEndRDG);
+	}
+
+	// Update capacity tracking
+	ZOrderBufferParticleCapacity = CurrentParticleCount;
+
+	return SortedParticleBuffer;
+}
+
+void FGPUFluidSimulator::AddComputeMortonCodesPass(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferSRVRef ParticlesSRV,
+	FRDGBufferUAVRef MortonCodesUAV,
+	FRDGBufferUAVRef InParticleIndicesUAV,
+	const FGPUFluidSimulationParams& Params)
+{
+	// Validate CellSize is valid (prevent division by zero in shader)
+	if (Params.CellSize <= 0.0f)
+	{
+		UE_LOG(LogGPUFluidSimulator, Error,
+			TEXT("Morton code ERROR: Invalid CellSize (%.4f)! Must be > 0. Using default 2.0."),
+			Params.CellSize);
+		// We'll use the value anyway since we can't modify Params, but the shader will handle it
+	}
+
+	// Validate bounds fit within Morton code capacity (10 bits per axis)
+	const float CellSizeToUse = FMath::Max(Params.CellSize, 0.001f);
+	const float MaxExtent = GPU_MORTON_GRID_SIZE * CellSizeToUse;
+	const FVector3f BoundsExtent = SimulationBoundsMax - SimulationBoundsMin;
+
+	// Warn if bounds exceed Morton code capacity
+	if (BoundsExtent.X > MaxExtent || BoundsExtent.Y > MaxExtent || BoundsExtent.Z > MaxExtent)
+	{
+		UE_LOG(LogGPUFluidSimulator, Warning,
+			TEXT("Morton code bounds overflow! BoundsExtent(%.1f, %.1f, %.1f) exceeds MaxExtent(%.1f). "
+			     "Reduce simulation bounds or increase CellSize."),
+			BoundsExtent.X, BoundsExtent.Y, BoundsExtent.Z, MaxExtent);
+	}
+
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	TShaderMapRef<FComputeMortonCodesCS> ComputeShader(ShaderMap);
+
+	FComputeMortonCodesCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FComputeMortonCodesCS::FParameters>();
+	PassParameters->Particles = ParticlesSRV;
+	PassParameters->MortonCodes = MortonCodesUAV;
+	PassParameters->ParticleIndices = InParticleIndicesUAV;
+	PassParameters->ParticleCount = CurrentParticleCount;
+	PassParameters->BoundsMin = SimulationBoundsMin;
+	PassParameters->BoundsExtent = SimulationBoundsMax - SimulationBoundsMin;
+	PassParameters->CellSize = Params.CellSize;
+
+	const int32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FComputeMortonCodesCS::ThreadGroupSize);
+
+	FComputeShaderUtils::AddPass(
+		GraphBuilder,
+		RDG_EVENT_NAME("GPUFluid::ComputeMortonCodes(%d)", CurrentParticleCount),
+		ComputeShader,
+		PassParameters,
+		FIntVector(NumGroups, 1, 1)
+	);
+}
+
+void FGPUFluidSimulator::AddRadixSortPasses(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferRef& InOutMortonCodes,
+	FRDGBufferRef& InOutParticleIndices,
+	int32 ParticleCount)
+{
+	if (ParticleCount <= 0)
+	{
+		return;
+	}
+
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	const int32 NumBlocks = FMath::DivideAndRoundUp(ParticleCount, GPU_RADIX_ELEMENTS_PER_GROUP);
+
+	//=========================================================================
+	// Create TRANSIENT RDG BUFFERS for RadixSort internal state
+	// These buffers only live within this frame's RDG execution.
+	// RDG correctly tracks dependencies between passes, preventing aliasing
+	// issues that occur with incorrectly managed external buffers.
+	//
+	// Unlike UE's GPUSort which uses direct RHI (no RDG), we use RDG transient
+	// buffers because our simulation pipeline is already RDG-based.
+	//=========================================================================
+
+	const int32 RequiredHistogramSize = GPU_RADIX_SIZE * NumBlocks;
+
+	// Create transient ping-pong buffers for RadixSort
+	FRDGBufferDesc KeysTempDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ParticleCount);
+	FRDGBufferRef KeysTemp = GraphBuilder.CreateBuffer(KeysTempDesc, TEXT("RadixSort.KeysTemp"));
+
+	FRDGBufferDesc ValuesTempDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ParticleCount);
+	FRDGBufferRef ValuesTemp = GraphBuilder.CreateBuffer(ValuesTempDesc, TEXT("RadixSort.ValuesTemp"));
+
+	// Create transient Histogram buffer [NumBlocks * RADIX_SIZE]
+	FRDGBufferDesc HistogramDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), RequiredHistogramSize);
+	FRDGBufferRef Histogram = GraphBuilder.CreateBuffer(HistogramDesc, TEXT("RadixSort.Histogram"));
+
+	// Create transient BucketOffsets buffer [RADIX_SIZE]
+	FRDGBufferDesc BucketOffsetsDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_RADIX_SIZE);
+	FRDGBufferRef BucketOffsets = GraphBuilder.CreateBuffer(BucketOffsetsDesc, TEXT("RadixSort.BucketOffsets"));
+
+	// Ping-pong buffers using array + index pattern
+	// Pass 0: Read Keys[0]=InOutMortonCodes, Write Keys[1]=KeysTemp
+	// Pass 1: Read Keys[1]=KeysTemp, Write Keys[0]=InOutMortonCodes
+	// Pass 2: Read Keys[0]=InOutMortonCodes, Write Keys[1]=KeysTemp
+	// Pass 3: Read Keys[1]=KeysTemp, Write Keys[0]=InOutMortonCodes
+	// After 4 passes, BufferIndex=0, so final result is in Keys[0]=InOutMortonCodes
+	FRDGBufferRef Keys[2] = { InOutMortonCodes, KeysTemp };
+	FRDGBufferRef Values[2] = { InOutParticleIndices, ValuesTemp };
+	int32 BufferIndex = 0;
+
+	// 4 passes for 16-bit keys (4 bits per pass)
+	// MortonCodes are truncated to 16-bit (cellID = mortonCode & 0xFFFF)
+	// Using 8 passes with 16-bit keys causes instability because upper bits are all 0,
+	// and InterlockedAdd in Scatter is non-deterministic for same-bucket elements
+	for (int32 Pass = 0; Pass < 4; ++Pass)
+	{
+		const int32 BitOffset = Pass * GPU_RADIX_BITS;
+		const int32 SrcIndex = BufferIndex;
+		const int32 DstIndex = BufferIndex ^ 1;
+
+		RDG_EVENT_SCOPE(GraphBuilder, "RadixSort Pass %d (bits %d-%d)", Pass, BitOffset, BitOffset + 3);
+
+		// Pass 1: Histogram
+		{
+			TShaderMapRef<FRadixSortHistogramCS> HistogramShader(ShaderMap);
+			FRadixSortHistogramCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortHistogramCS::FParameters>();
+			Params->KeysIn = GraphBuilder.CreateSRV(Keys[SrcIndex]);
+			Params->ValuesIn = GraphBuilder.CreateSRV(Values[SrcIndex]);
+			Params->Histogram = GraphBuilder.CreateUAV(Histogram);
+			Params->ElementCount = ParticleCount;
+			Params->BitOffset = BitOffset;
+			Params->NumGroups = NumBlocks;
+
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("Histogram"),
+				HistogramShader,
+				Params,
+				FIntVector(NumBlocks, 1, 1)
+			);
+		}
+
+		// Pass 2a: Global Prefix Sum (within each bucket)
+		{
+			TShaderMapRef<FRadixSortGlobalPrefixSumCS> PrefixSumShader(ShaderMap);
+			FRadixSortGlobalPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortGlobalPrefixSumCS::FParameters>();
+			Params->Histogram = GraphBuilder.CreateUAV(Histogram);
+			Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
+			Params->NumGroups = NumBlocks;
+
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("GlobalPrefixSum"),
+				PrefixSumShader,
+				Params,
+				FIntVector(1, 1, 1)  // Single group, 16 threads
+			);
+		}
+
+		// Pass 2b: Bucket Prefix Sum (across buckets)
+		{
+			TShaderMapRef<FRadixSortBucketPrefixSumCS> BucketSumShader(ShaderMap);
+			FRadixSortBucketPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortBucketPrefixSumCS::FParameters>();
+			Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
+
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("BucketPrefixSum"),
+				BucketSumShader,
+				Params,
+				FIntVector(1, 1, 1)
+			);
+		}
+
+		// Pass 3: Scatter
+		{
+			TShaderMapRef<FRadixSortScatterCS> ScatterShader(ShaderMap);
+			FRadixSortScatterCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortScatterCS::FParameters>();
+			Params->KeysIn = GraphBuilder.CreateSRV(Keys[SrcIndex]);
+			Params->ValuesIn = GraphBuilder.CreateSRV(Values[SrcIndex]);
+			Params->KeysOut = GraphBuilder.CreateUAV(Keys[DstIndex]);
+			Params->ValuesOut = GraphBuilder.CreateUAV(Values[DstIndex]);
+			Params->HistogramSRV = GraphBuilder.CreateSRV(Histogram);
+			Params->GlobalOffsetsSRV = GraphBuilder.CreateSRV(BucketOffsets);
+			Params->ElementCount = ParticleCount;
+			Params->BitOffset = BitOffset;
+
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("Scatter"),
+				ScatterShader,
+				Params,
+				FIntVector(NumBlocks, 1, 1)
+			);
+		}
+
+		// Ping-pong: toggle buffer index for next pass
+		BufferIndex ^= 1;
+	}
+
+	// After 4 passes, the final sorted data is in Keys[BufferIndex]/Values[BufferIndex]
+	// BufferIndex alternates: 0->1->0->1 after 4 passes, ends at 0
+	// So final data is in Keys[0] = InOutMortonCodes, Values[0] = InOutParticleIndices
+	InOutMortonCodes = Keys[BufferIndex];
+	InOutParticleIndices = Values[BufferIndex];
+}
+
+void FGPUFluidSimulator::AddReorderParticlesPass(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferSRVRef OldParticlesSRV,
+	FRDGBufferSRVRef SortedIndicesSRV,
+	FRDGBufferUAVRef SortedParticlesUAV)
+{
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	TShaderMapRef<FReorderParticlesCS> ComputeShader(ShaderMap);
+
+	FReorderParticlesCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FReorderParticlesCS::FParameters>();
+	PassParameters->OldParticles = OldParticlesSRV;
+	PassParameters->SortedIndices = SortedIndicesSRV;
+	PassParameters->SortedParticles = SortedParticlesUAV;
+	PassParameters->ParticleCount = CurrentParticleCount;
+
+	const int32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FReorderParticlesCS::ThreadGroupSize);
+
+	FComputeShaderUtils::AddPass(
+		GraphBuilder,
+		RDG_EVENT_NAME("GPUFluid::ReorderParticles(%d)", CurrentParticleCount),
+		ComputeShader,
+		PassParameters,
+		FIntVector(NumGroups, 1, 1)
+	);
+}
+
+void FGPUFluidSimulator::AddComputeCellStartEndPass(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferSRVRef SortedMortonCodesSRV,
+	FRDGBufferUAVRef CellStartUAV,
+	FRDGBufferUAVRef CellEndUAV)
+{
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	const int32 CellCount = GPU_MAX_CELLS;
+
+	// Step 1: Clear cell indices to invalid (0xFFFFFFFF)
+	{
+		TShaderMapRef<FClearCellIndicesCS> ClearShader(ShaderMap);
+		FClearCellIndicesCS::FParameters* ClearParams = GraphBuilder.AllocParameters<FClearCellIndicesCS::FParameters>();
+		ClearParams->CellStart = CellStartUAV;
+		ClearParams->CellEnd = CellEndUAV;
+
+		const int32 NumGroups = FMath::DivideAndRoundUp(CellCount, FClearCellIndicesCS::ThreadGroupSize);
+
+		FComputeShaderUtils::AddPass(
+			GraphBuilder,
+			RDG_EVENT_NAME("GPUFluid::ClearCellIndices(%d)", CellCount),
+			ClearShader,
+			ClearParams,
+			FIntVector(NumGroups, 1, 1)
+		);
+	}
+
+	// Step 2: Compute cell start/end from sorted Morton codes
+	{
+		TShaderMapRef<FComputeCellStartEndCS> ComputeShader(ShaderMap);
+		FComputeCellStartEndCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FComputeCellStartEndCS::FParameters>();
+		PassParameters->SortedMortonCodes = SortedMortonCodesSRV;
+		PassParameters->CellStart = CellStartUAV;
+		PassParameters->CellEnd = CellEndUAV;
+		PassParameters->ParticleCount = CurrentParticleCount;
+
+		const int32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FComputeCellStartEndCS::ThreadGroupSize);
+
+		FComputeShaderUtils::AddPass(
+			GraphBuilder,
+			RDG_EVENT_NAME("GPUFluid::ComputeCellStartEnd(%d)", CurrentParticleCount),
+			ComputeShader,
+			PassParameters,
+			FIntVector(NumGroups, 1, 1)
+		);
+	}
+
 }

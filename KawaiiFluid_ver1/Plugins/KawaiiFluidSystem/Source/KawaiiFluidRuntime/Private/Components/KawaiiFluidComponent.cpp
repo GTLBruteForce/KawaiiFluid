@@ -5,12 +5,14 @@
 #include "Core/KawaiiFluidSimulatorSubsystem.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
 #include "Core/KawaiiFluidSimulationContext.h"
+#include "Core/KawaiiFluidSimulationStats.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Rendering/FluidRendererSubsystem.h"
 #include "Rendering/KawaiiFluidISMRenderer.h"
 #include "Rendering/KawaiiFluidMetaballRenderer.h"
+#include "GPU/GPUFluidSimulator.h"
 #include "DrawDebugHelpers.h"
 
 UKawaiiFluidComponent::UKawaiiFluidComponent()
@@ -236,9 +238,23 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 	}
 
 	// 렌더링 업데이트 (에디터 + 게임 모두)
+	// Debug Draw 활성화 시 Metaball 비활성화 (디버그 포인트가 보이도록)
 	if (RenderingModule)
 	{
+		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
+		{
+			// Debug Draw 상태에 따라 Metaball 활성화/비활성화
+			MetaballRenderer->SetEnabled(!bEnableDebugDraw);
+		}
 		RenderingModule->UpdateRenderers();
+	}
+
+	// Debug Draw: DrawDebugPoint 기반 Z-Order 시각화
+	// GPU 모드에서 readback 필요 - Stats Collector에 요청
+	GetFluidStatsCollector().SetDebugReadbackRequested(bEnableDebugDraw);
+	if (bEnableDebugDraw)
+	{
+		DrawDebugParticles();
 	}
 
 	// VSM Integration: Update shadow proxy with particle data
@@ -872,6 +888,284 @@ void UKawaiiFluidComponent::ClearAllParticles()
 		{
 			RendererSubsystem->UpdateShadowInstances(nullptr, 0);
 		}
+	}
+}
+
+//========================================
+// Debug Visualization (Z-Order Sorting)
+//========================================
+
+void UKawaiiFluidComponent::SetDebugVisualization(EFluidDebugVisualization Mode)
+{
+	// Debug visualization now uses DrawDebugPoint system
+	if (Mode != EFluidDebugVisualization::None)
+	{
+		EnableDebugDraw(Mode, DebugPointSize);
+	}
+	else
+	{
+		DisableDebugDraw();
+	}
+}
+
+EFluidDebugVisualization UKawaiiFluidComponent::GetDebugVisualization() const
+{
+	// Debug visualization now uses DrawDebugPoint system
+	return bEnableDebugDraw ? DebugDrawMode : EFluidDebugVisualization::None;
+}
+
+//========================================
+// DrawDebugPoint Visualization
+//========================================
+
+void UKawaiiFluidComponent::EnableDebugDraw(EFluidDebugVisualization Mode, float PointSize)
+{
+	bEnableDebugDraw = true;
+	DebugDrawMode = Mode;
+	DebugPointSize = PointSize;
+
+	// Reset bounds for recomputation
+	DebugDrawBoundsMin = FVector::ZeroVector;
+	DebugDrawBoundsMax = FVector::ZeroVector;
+
+	UE_LOG(LogTemp, Log, TEXT("Debug Draw enabled: Mode=%d, PointSize=%.1f"), (int32)Mode, PointSize);
+}
+
+void UKawaiiFluidComponent::DisableDebugDraw()
+{
+	bEnableDebugDraw = false;
+	UE_LOG(LogTemp, Log, TEXT("Debug Draw disabled"));
+}
+
+void UKawaiiFluidComponent::DrawDebugParticles()
+{
+	if (!bEnableDebugDraw || !SimulationModule)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// Get particle data (GPU or CPU)
+	const TArray<FFluidParticle>* ParticlesPtr = nullptr;
+	TArray<FFluidParticle> GPUParticlesCache;
+
+	if (SimulationModule->IsGPUSimulationActive())
+	{
+		// GPU mode: Use readback data
+		FGPUFluidSimulator* Simulator = SimulationModule->GetGPUSimulator();
+		if (Simulator && Simulator->GetAllGPUParticles(GPUParticlesCache))
+		{
+			ParticlesPtr = &GPUParticlesCache;
+		}
+		else
+		{
+			// No readback data available
+			return;
+		}
+	}
+	else
+	{
+		// CPU mode: Direct particle array
+		ParticlesPtr = &SimulationModule->GetParticles();
+	}
+
+	if (!ParticlesPtr || ParticlesPtr->Num() == 0)
+	{
+		return;
+	}
+
+	const TArray<FFluidParticle>& Particles = *ParticlesPtr;
+	const int32 NumParticles = Particles.Num();
+
+	// Auto-compute bounds if not set
+	if (DebugDrawBoundsMin.IsNearlyZero() && DebugDrawBoundsMax.IsNearlyZero())
+	{
+		FVector MinBounds(FLT_MAX);
+		FVector MaxBounds(-FLT_MAX);
+		for (const FFluidParticle& P : Particles)
+		{
+			MinBounds = MinBounds.ComponentMin(P.Position);
+			MaxBounds = MaxBounds.ComponentMax(P.Position);
+		}
+		DebugDrawBoundsMin = MinBounds;
+		DebugDrawBoundsMax = MaxBounds;
+	}
+
+	// Verify Z-Order sorting by computing cell-based Morton codes (matching GPU shader)
+	static int32 SortVerifyCounter = 0;
+	if (++SortVerifyCounter % 120 == 1)  // Log every 2 seconds at 60fps
+	{
+		// Get CellSize from simulation module
+		// CellSize = SmoothingRadius typically, and SmoothingRadius ≈ 4 * ParticleRadius
+		float CellSize = 100.0f;  // Default fallback
+		if (SimulationModule)
+		{
+			// CellSize is typically smoothing radius (≈ 4 * particle radius for SPH)
+			CellSize = SimulationModule->GetParticleRadius() * 4.0f;
+		}
+
+		// Compute CELL-BASED Morton code (MUST match GPU FluidMortonCode.usf)
+		auto ComputeCellBasedMortonCode = [CellSize](const FVector& Pos, const FVector& BoundsMin) -> uint32
+		{
+			// GPU: cellCoord = floor(pos / CellSize)
+			FIntVector CellCoord(
+				FMath::FloorToInt(Pos.X / CellSize),
+				FMath::FloorToInt(Pos.Y / CellSize),
+				FMath::FloorToInt(Pos.Z / CellSize)
+			);
+
+			// GPU: gridMin = floor(BoundsMin / CellSize)
+			FIntVector GridMin(
+				FMath::FloorToInt(BoundsMin.X / CellSize),
+				FMath::FloorToInt(BoundsMin.Y / CellSize),
+				FMath::FloorToInt(BoundsMin.Z / CellSize)
+			);
+
+			// GPU: offset = cellCoord - gridMin, clamped to [0, 1023]
+			FIntVector Offset = CellCoord - GridMin;
+			uint32 ux = FMath::Clamp(Offset.X, 0, 1023);
+			uint32 uy = FMath::Clamp(Offset.Y, 0, 1023);
+			uint32 uz = FMath::Clamp(Offset.Z, 0, 1023);
+
+			// Morton3D expansion
+			auto ExpandBits = [](uint32 v) -> uint32 {
+				v = (v * 0x00010001u) & 0xFF0000FFu;
+				v = (v * 0x00000101u) & 0x0F00F00Fu;
+				v = (v * 0x00000011u) & 0xC30C30C3u;
+				v = (v * 0x00000005u) & 0x49249249u;
+				return v;
+			};
+			uint32 MortonCode = (ExpandBits(uz) << 2) | (ExpandBits(uy) << 1) | ExpandBits(ux);
+
+			// GPU: cellID = mortonCode & (MAX_CELLS - 1)  // MAX_CELLS = 65536
+			return MortonCode & 0xFFFF;
+		};
+
+		// Count unique CellIDs and find the largest cell
+		TMap<uint32, int32> CellIDCounts;
+		for (int32 i = 0; i < NumParticles; ++i)
+		{
+			uint32 CellID = ComputeCellBasedMortonCode(Particles[i].Position, DebugDrawBoundsMin);
+			CellIDCounts.FindOrAdd(CellID, 0)++;
+		}
+
+		// Find the cell with most particles
+		uint32 MaxCellID = 0;
+		int32 MaxCount = 0;
+		for (const auto& Pair : CellIDCounts)
+		{
+			if (Pair.Value > MaxCount)
+			{
+				MaxCount = Pair.Value;
+				MaxCellID = Pair.Key;
+			}
+		}
+
+		// Check Cell 0 specifically
+		int32 Cell0Count = CellIDCounts.FindRef(0);
+
+		// Log diagnostic info
+		UE_LOG(LogTemp, Warning, TEXT("Z-Order CellID Analysis: TotalParticles=%d, UniqueCells=%d, LargestCell=%u has %d particles (%.1f%%), Cell0 has %d particles"),
+			NumParticles, CellIDCounts.Num(), MaxCellID, MaxCount,
+			(NumParticles > 0) ? (100.0f * MaxCount / NumParticles) : 0.0f,
+			Cell0Count);
+
+		// Warn if too many particles in one cell (Black Hole Cell issue!)
+		if (MaxCount > NumParticles / 4)  // More than 25% in one cell
+		{
+			UE_LOG(LogTemp, Error, TEXT("Z-Order BLACK HOLE DETECTED! CellID %u has %d/%d particles (%.1f%%). This will cause severe performance issues!"),
+				MaxCellID, MaxCount, NumParticles, 100.0f * MaxCount / NumParticles);
+		}
+	}
+
+	// Draw each particle
+	for (int32 i = 0; i < NumParticles; ++i)
+	{
+		const FFluidParticle& Particle = Particles[i];
+		FColor Color = ComputeDebugDrawColor(i, NumParticles, Particle.Position, Particle.Density);
+
+		DrawDebugPoint(World, Particle.Position, DebugPointSize, Color, false, -1.0f, 0);
+	}
+}
+
+FColor UKawaiiFluidComponent::ComputeDebugDrawColor(int32 ParticleIndex, int32 TotalCount, const FVector& Position, float Density) const
+{
+	switch (DebugDrawMode)
+	{
+	case EFluidDebugVisualization::ZOrderArrayIndex:
+	case EFluidDebugVisualization::ArrayIndex:  // Legacy
+	{
+		// Rainbow gradient based on array index
+		// If Z-Order sorted correctly, spatially close particles should have similar colors
+		float T = (float)ParticleIndex / FMath::Max(TotalCount - 1, 1);
+		return FLinearColor::MakeFromHSV8((uint8)(T * 255.0f), 255, 255).ToFColor(true);
+	}
+
+	case EFluidDebugVisualization::ZOrderMortonCode:
+	case EFluidDebugVisualization::MortonCode:  // Legacy
+	{
+		// Compute Morton code from position
+		FVector Range = DebugDrawBoundsMax - DebugDrawBoundsMin;
+		float MaxRange = FMath::Max3(Range.X, Range.Y, Range.Z);
+		if (MaxRange < KINDA_SMALL_NUMBER) MaxRange = 1.0f;
+
+		FVector NormPos = (Position - DebugDrawBoundsMin) / MaxRange;
+		NormPos.X = FMath::Clamp(NormPos.X, 0.0, 1.0);
+		NormPos.Y = FMath::Clamp(NormPos.Y, 0.0, 1.0);
+		NormPos.Z = FMath::Clamp(NormPos.Z, 0.0, 1.0);
+
+		// Simple Morton-like hue (not full Morton code, but visually similar)
+		float Hue = (NormPos.X * 0.33f + NormPos.Y * 0.33f + NormPos.Z * 0.33f);
+		return FLinearColor::MakeFromHSV8((uint8)(Hue * 255.0f), 255, 255).ToFColor(true);
+	}
+
+	case EFluidDebugVisualization::PositionX:
+	{
+		float Range = DebugDrawBoundsMax.X - DebugDrawBoundsMin.X;
+		if (Range < KINDA_SMALL_NUMBER) Range = 1.0f;
+		float T = FMath::Clamp((Position.X - DebugDrawBoundsMin.X) / Range, 0.0f, 1.0f);
+		return FColor((uint8)(T * 255), 50, 50, 255);
+	}
+
+	case EFluidDebugVisualization::PositionY:
+	{
+		float Range = DebugDrawBoundsMax.Y - DebugDrawBoundsMin.Y;
+		if (Range < KINDA_SMALL_NUMBER) Range = 1.0f;
+		float T = FMath::Clamp((Position.Y - DebugDrawBoundsMin.Y) / Range, 0.0f, 1.0f);
+		return FColor(50, (uint8)(T * 255), 50, 255);
+	}
+
+	case EFluidDebugVisualization::PositionZ:
+	{
+		float Range = DebugDrawBoundsMax.Z - DebugDrawBoundsMin.Z;
+		if (Range < KINDA_SMALL_NUMBER) Range = 1.0f;
+		float T = FMath::Clamp((Position.Z - DebugDrawBoundsMin.Z) / Range, 0.0f, 1.0f);
+		return FColor(50, 50, (uint8)(T * 255), 255);
+	}
+
+	case EFluidDebugVisualization::Density:
+	{
+		// Blue (low) -> Green (normal) -> Red (high)
+		float NormDensity = FMath::Clamp(Density / 2000.0f, 0.0f, 1.0f);
+		if (NormDensity < 0.5f)
+		{
+			float T = NormDensity * 2.0f;
+			return FColor(0, (uint8)(T * 255), (uint8)((1.0f - T) * 255), 255);
+		}
+		else
+		{
+			float T = (NormDensity - 0.5f) * 2.0f;
+			return FColor((uint8)(T * 255), (uint8)((1.0f - T) * 255), 0, 255);
+		}
+	}
+
+	default:
+		return FColor::White;
 	}
 }
 

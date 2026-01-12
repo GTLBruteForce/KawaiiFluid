@@ -157,6 +157,63 @@ IMPLEMENT_GLOBAL_SHADER(FBoundaryAdhesionCS,
 	"BoundaryAdhesionCS", SF_Compute);
 
 //=============================================================================
+// Z-Order (Morton Code) Sorting Shaders
+// GPU-based spatial sorting for cache-coherent neighbor access
+//=============================================================================
+
+IMPLEMENT_GLOBAL_SHADER(FComputeMortonCodesCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidMortonCode.usf",
+	"ComputeMortonCodesCellBasedCS", SF_Compute);  // Use cell-based Morton code for consistent CellStart/End lookup
+
+//=============================================================================
+// GPU Radix Sort Shaders
+//=============================================================================
+
+IMPLEMENT_GLOBAL_SHADER(FRadixSortHistogramCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
+	"RadixSortHistogramCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FRadixSortGlobalPrefixSumCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
+	"RadixSortGlobalPrefixSumCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FRadixSortBucketPrefixSumCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
+	"RadixSortBucketPrefixSumCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FRadixSortScatterCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
+	"RadixSortScatterCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FRadixSortSmallCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
+	"RadixSortSmallCS", SF_Compute);
+
+//=============================================================================
+// Particle Reordering Shaders
+//=============================================================================
+
+IMPLEMENT_GLOBAL_SHADER(FReorderParticlesCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidReorderParticles.usf",
+	"ReorderParticlesCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FBuildReverseMappingCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidReorderParticles.usf",
+	"BuildReverseMappingCS", SF_Compute);
+
+//=============================================================================
+// Cell Start/End Index Shaders
+//=============================================================================
+
+IMPLEMENT_GLOBAL_SHADER(FClearCellIndicesCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidCellStartEnd.usf",
+	"ClearCellIndicesCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FComputeCellStartEndCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidCellStartEnd.usf",
+	"ComputeCellStartEndCS", SF_Compute);
+
+//=============================================================================
 // Pass Builder Implementation
 //=============================================================================
 

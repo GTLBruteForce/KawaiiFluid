@@ -69,6 +69,9 @@ public:
 	/** 현재 파티클 수 */
 	int32 GetParticleCount() const { return ParticleCount; }
 
+	/** 버퍼 최대 용량 반환 */
+	int32 GetBufferCapacity() const { return BufferCapacity; }
+
 	/** 버퍼가 유효한지 확인 */
 	bool IsValid() const { return ParticleBuffer.IsValid() && ParticleSRV.IsValid(); }
 

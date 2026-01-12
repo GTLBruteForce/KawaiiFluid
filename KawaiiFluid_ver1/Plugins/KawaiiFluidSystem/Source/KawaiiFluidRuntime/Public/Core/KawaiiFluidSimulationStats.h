@@ -187,6 +187,15 @@ public:
 	/** Enable/disable detailed GPU stats (causes GPU readback - expensive!) */
 	void SetDetailedGPUEnabled(bool bInDetailedGPU) { bDetailedGPU = bInDetailedGPU; }
 
+	/** Check if debug readback is requested (for debug visualization) */
+	bool IsDebugReadbackRequested() const { return bDebugReadbackRequested; }
+
+	/** Request debug readback (for debug draw/visualization) */
+	void SetDebugReadbackRequested(bool bInRequested) { bDebugReadbackRequested = bInRequested; }
+
+	/** Check if any readback is needed (detailed stats OR debug visualization) */
+	bool IsAnyReadbackNeeded() const { return bDetailedGPU || bDebugReadbackRequested; }
+
 	//========================================
 	// Particle Data Collection
 	//========================================
@@ -302,6 +311,7 @@ private:
 
 	bool bEnabled = false;
 	bool bDetailedGPU = false;  // Enable detailed GPU stats (requires readback)
+	bool bDebugReadbackRequested = false;  // Debug draw/visualization requests readback
 	bool bFrameActive = false;
 };
 

@@ -178,6 +178,27 @@ public:
 	/** Set anisotropy parameters for ellipsoid rendering */
 	void SetAnisotropyParams(const FFluidAnisotropyParams& InParams) { CachedAnisotropyParams = InParams; }
 
+	/**
+	 * Set simulation bounds for Morton code computation
+	 * IMPORTANT: Bounds must fit within Morton code capacity!
+	 * Max extent per axis = 1024 * CellSize (typically ~2048 units)
+	 * Bounds should be centered around particle spawn location
+	 * @param BoundsMin - Minimum corner of simulation bounds
+	 * @param BoundsMax - Maximum corner of simulation bounds
+	 */
+	void SetSimulationBounds(const FVector3f& BoundsMin, const FVector3f& BoundsMax)
+	{
+		SimulationBoundsMin = BoundsMin;
+		SimulationBoundsMax = BoundsMax;
+	}
+
+	/** Get current simulation bounds */
+	void GetSimulationBounds(FVector3f& OutMin, FVector3f& OutMax) const
+	{
+		OutMin = SimulationBoundsMin;
+		OutMax = SimulationBoundsMax;
+	}
+
 	/** Get anisotropy parameters */
 	const FFluidAnisotropyParams& GetAnisotropyParams() const { return CachedAnisotropyParams; }
 
@@ -505,7 +526,7 @@ private:
 		FRDGBuilder& GraphBuilder,
 		FRDGBufferSRVRef PositionsSRV,
 		FRDGBufferUAVRef CellCountsUAV,
-		FRDGBufferUAVRef ParticleIndicesUAV,
+		FRDGBufferUAVRef InParticleIndicesUAV,
 		const FGPUFluidSimulationParams& Params);
 
 	/** [DEPRECATED] Add compute density pass - Use AddSolveDensityPressurePass instead */
@@ -530,6 +551,8 @@ private:
 		FRDGBufferUAVRef ParticlesUAV,
 		FRDGBufferSRVRef CellCountsSRV,
 		FRDGBufferSRVRef ParticleIndicesSRV,
+		FRDGBufferSRVRef CellStartSRV,
+		FRDGBufferSRVRef CellEndSRV,
 		FRDGBufferUAVRef NeighborListUAV,
 		FRDGBufferUAVRef NeighborCountsUAV,
 		int32 IterationIndex,
@@ -636,6 +659,54 @@ private:
 		FRDGBufferUAVRef ParticlesUAV,
 		const FGPUFluidSimulationParams& Params);
 
+	//=============================================================================
+	// Z-Order (Morton Code) Sorting Pipeline
+	// Replaces hash table with cache-coherent sorted particle access
+	//=============================================================================
+
+	/**
+	 * Execute full Z-Order sorting pipeline
+	 * Steps: Morton Code → Radix Sort → Data Reorder → CellStart/End
+	 * @return SortedParticleBuffer - new buffer with spatially sorted particles
+	 */
+	FRDGBufferRef ExecuteZOrderSortingPipeline(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferRef InParticleBuffer,
+		FRDGBufferUAVRef& OutCellStartUAV,
+		FRDGBufferSRVRef& OutCellStartSRV,
+		FRDGBufferUAVRef& OutCellEndUAV,
+		FRDGBufferSRVRef& OutCellEndSRV,
+		const FGPUFluidSimulationParams& Params);
+
+	/** Step 1: Compute Morton codes from particle positions */
+	void AddComputeMortonCodesPass(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferSRVRef ParticlesSRV,
+		FRDGBufferUAVRef MortonCodesUAV,
+		FRDGBufferUAVRef InParticleIndicesUAV,
+		const FGPUFluidSimulationParams& Params);
+
+	/** Step 2: GPU Radix Sort (sorts Morton codes + particle indices) */
+	void AddRadixSortPasses(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferRef& InOutMortonCodes,
+		FRDGBufferRef& InOutParticleIndices,
+		int32 ParticleCount);
+
+	/** Step 3: Reorder particle data based on sorted indices */
+	void AddReorderParticlesPass(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferSRVRef OldParticlesSRV,
+		FRDGBufferSRVRef SortedIndicesSRV,
+		FRDGBufferUAVRef SortedParticlesUAV);
+
+	/** Step 4: Compute Cell Start/End indices from sorted Morton codes */
+	void AddComputeCellStartEndPass(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferSRVRef SortedMortonCodesSRV,
+		FRDGBufferUAVRef CellStartUAV,
+		FRDGBufferUAVRef CellEndUAV);
+
 private:
 	//=============================================================================
 	// GPU Buffers
@@ -698,6 +769,29 @@ private:
 	TRefCountPtr<FRDGPooledBuffer> NeighborListBuffer;
 	TRefCountPtr<FRDGPooledBuffer> NeighborCountsBuffer;
 	int32 NeighborBufferParticleCapacity = 0;  // Track capacity for resize detection
+
+	//=============================================================================
+	// Z-Order (Morton Code) Sorting Buffers
+	// Used for cache-coherent neighbor access via spatial sorting
+	// Temp buffers (KeysTemp, ValuesTemp, Histogram, BucketOffsets) are created
+	// as transient RDG buffers in AddRadixSortPasses for proper dependency tracking
+	//=============================================================================
+
+	TRefCountPtr<FRDGPooledBuffer> MortonCodesBuffer;      // 16-bit Morton code per particle
+	TRefCountPtr<FRDGPooledBuffer> SortIndicesBuffer;      // Particle index for sorting
+	TRefCountPtr<FRDGPooledBuffer> CellStartBuffer;        // First particle index per cell
+	TRefCountPtr<FRDGPooledBuffer> CellEndBuffer;          // Last particle index per cell
+
+	// Capacity tracking for Z-Order buffers
+	int32 ZOrderBufferParticleCapacity = 0;
+
+	// Use Z-Order sorting for cache-coherent neighbor access (recommended for performance)
+	bool bUseZOrderSorting = true;
+
+	// Simulation bounds for Morton code computation
+	// Max extent per axis = GPU_MORTON_GRID_SIZE * CellSize (e.g., 1024 * 2.0 = 2048 units)
+	FVector3f SimulationBoundsMin = FVector3f(-1000.0f, -1000.0f, -1000.0f);
+	FVector3f SimulationBoundsMax = FVector3f(1000.0f, 1000.0f, 1000.0f);
 
 	// Flag: need to upload all particles from CPU (initial or after resize)
 	bool bNeedsFullUpload = true;

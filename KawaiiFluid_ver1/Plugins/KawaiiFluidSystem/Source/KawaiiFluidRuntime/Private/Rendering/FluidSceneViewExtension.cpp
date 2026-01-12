@@ -499,12 +499,17 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 			TRefCountPtr<FRDGPooledBuffer> RenderParticlePooled = RenderResource->GetPooledRenderParticleBuffer();
 			TRefCountPtr<FRDGPooledBuffer> BoundsPooled = RenderResource->GetPooledBoundsBuffer();
 
+			// 버퍼 용량 확인 - 용량 부족 시 기존 버퍼 사용하지 않음
+			const int32 BufferCapacity = RenderResource->GetBufferCapacity();
+			const bool bHasSufficientCapacity = (BufferCapacity >= ParticleCount);
+
 			//========================================
 			// Position 버퍼: 기존 사용 또는 새로 생성
 			//========================================
 			{
 				FRDGBufferRef PositionBuffer;
-				if (PositionPooledBuffer.IsValid())
+				bool bNeedExtraction = false;
+				if (PositionPooledBuffer.IsValid() && bHasSufficientCapacity)
 				{
 					PositionBuffer = GraphBuilder.RegisterExternalBuffer(
 						PositionPooledBuffer, TEXT("RenderPositions_Upload"));
@@ -514,9 +519,14 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 					FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), ParticleCount);
 					Desc.Usage |= EBufferUsageFlags::UnorderedAccess;
 					PositionBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("RenderPositions_New"));
+					bNeedExtraction = true;
+				}
+				// Upload first (produces the buffer), then extract
+				GraphBuilder.QueueBufferUpload(PositionBuffer, Positions.GetData(), ParticleCount * sizeof(FVector3f));
+				if (bNeedExtraction)
+				{
 					GraphBuilder.QueueBufferExtraction(PositionBuffer, RenderResource->GetPooledPositionBufferPtr());
 				}
-				GraphBuilder.QueueBufferUpload(PositionBuffer, Positions.GetData(), ParticleCount * sizeof(FVector3f));
 			}
 
 			//========================================
@@ -524,7 +534,8 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 			//========================================
 			{
 				FRDGBufferRef VelocityBuffer;
-				if (VelocityPooledBuffer.IsValid())
+				bool bNeedExtraction = false;
+				if (VelocityPooledBuffer.IsValid() && bHasSufficientCapacity)
 				{
 					VelocityBuffer = GraphBuilder.RegisterExternalBuffer(
 						VelocityPooledBuffer, TEXT("RenderVelocities_Upload"));
@@ -534,9 +545,14 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 					FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), ParticleCount);
 					Desc.Usage |= EBufferUsageFlags::UnorderedAccess;
 					VelocityBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("RenderVelocities_New"));
+					bNeedExtraction = true;
+				}
+				// Upload first (produces the buffer), then extract
+				GraphBuilder.QueueBufferUpload(VelocityBuffer, Velocities.GetData(), ParticleCount * sizeof(FVector3f));
+				if (bNeedExtraction)
+				{
 					GraphBuilder.QueueBufferExtraction(VelocityBuffer, RenderResource->GetPooledVelocityBufferPtr());
 				}
-				GraphBuilder.QueueBufferUpload(VelocityBuffer, Velocities.GetData(), ParticleCount * sizeof(FVector3f));
 			}
 
 			//========================================
@@ -544,7 +560,8 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 			//========================================
 			{
 				FRDGBufferRef RenderParticleBuffer;
-				if (RenderParticlePooled.IsValid())
+				bool bNeedExtraction = false;
+				if (RenderParticlePooled.IsValid() && bHasSufficientCapacity)
 				{
 					RenderParticleBuffer = GraphBuilder.RegisterExternalBuffer(
 						RenderParticlePooled, TEXT("RenderParticles_Upload"));
@@ -554,9 +571,14 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 					FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FKawaiiRenderParticle), ParticleCount);
 					Desc.Usage |= EBufferUsageFlags::UnorderedAccess;
 					RenderParticleBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("RenderParticles_New"));
+					bNeedExtraction = true;
+				}
+				// Upload first (produces the buffer), then extract
+				GraphBuilder.QueueBufferUpload(RenderParticleBuffer, CachedParticles.GetData(), ParticleCount * sizeof(FKawaiiRenderParticle));
+				if (bNeedExtraction)
+				{
 					GraphBuilder.QueueBufferExtraction(RenderParticleBuffer, RenderResource->GetPooledRenderParticleBufferPtr());
 				}
-				GraphBuilder.QueueBufferUpload(RenderParticleBuffer, CachedParticles.GetData(), ParticleCount * sizeof(FKawaiiRenderParticle));
 			}
 
 			//========================================
@@ -564,6 +586,7 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 			//========================================
 			{
 				FRDGBufferRef BoundsBuffer;
+				bool bNeedExtraction = false;
 				if (BoundsPooled.IsValid())
 				{
 					BoundsBuffer = GraphBuilder.RegisterExternalBuffer(
@@ -574,9 +597,14 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 					FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), 2);
 					Desc.Usage |= EBufferUsageFlags::UnorderedAccess;
 					BoundsBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("ParticleBounds_New"));
+					bNeedExtraction = true;
+				}
+				// Upload first (produces the buffer), then extract
+				GraphBuilder.QueueBufferUpload(BoundsBuffer, BoundsData, sizeof(BoundsData));
+				if (bNeedExtraction)
+				{
 					GraphBuilder.QueueBufferExtraction(BoundsBuffer, RenderResource->GetPooledBoundsBufferPtr());
 				}
-				GraphBuilder.QueueBufferUpload(BoundsBuffer, BoundsData, sizeof(BoundsData));
 			}
 
 			// 버퍼 준비 완료

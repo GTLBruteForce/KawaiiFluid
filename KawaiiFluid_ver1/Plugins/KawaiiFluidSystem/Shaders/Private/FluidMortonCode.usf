@@ -1,0 +1,167 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// GPU Fluid Physics - Morton Code (Z-Order Curve) Computation
+//
+// Morton Code encodes 3D spatial coordinates into a 1D integer that preserves spatial locality.
+// Particles sorted by Morton Code will have spatially close particles also close in memory.
+//
+// 32-bit Morton Code: 10 bits per axis (30 bits total, 1024^3 grid resolution)
+// This provides sufficient resolution for SPH fluid simulation.
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+// IMPORTANT: Use full particle structure to access PredictedPosition
+// This must match the Solver which uses PredictedPosition for neighbor search
+StructuredBuffer<FGPUFluidParticle> Particles;
+RWStructuredBuffer<uint> MortonCodes;    // Output: Morton codes for sorting
+RWStructuredBuffer<uint> ParticleIndices; // Output: Particle indices (0, 1, 2, ... N-1)
+
+int ParticleCount;
+float3 BoundsMin;      // Simulation bounds minimum
+float3 BoundsExtent;   // Simulation bounds extent (Max - Min)
+float CellSize;        // Grid cell size
+
+//=============================================================================
+// Cell ID Configuration
+// CRITICAL: Must match FluidCellStartEnd.usf and FluidSolveDensityPressure.usf
+// Sorting by truncated cellID ensures contiguous ranges for CellStart/End
+//=============================================================================
+#ifndef MAX_CELLS
+#define MAX_CELLS 65536  // 2^16 cells - sort key is truncated to this range
+#endif
+
+//=============================================================================
+// Morton Code Encoding Functions
+// Interleaves bits: x0y0z0 x1y1z1 x2y2z2 ...
+//=============================================================================
+
+// Expand 10-bit integer to 30-bit with 2-bit gaps between each bit
+// Input:  0000 0000 0000 0000 0000 00xx xxxx xxxx (10 bits)
+// Output: 00x0 0x00 x00x 00x0 0x00 x00x 00x0 0x00 (30 bits, spread out)
+uint ExpandBits(uint v)
+{
+    v = (v * 0x00010001u) & 0xFF0000FFu;
+    v = (v * 0x00000101u) & 0x0F00F00Fu;
+    v = (v * 0x00000011u) & 0xC30C30C3u;
+    v = (v * 0x00000005u) & 0x49249249u;
+    return v;
+}
+
+// Compute 30-bit Morton Code for 3D point
+// Each coordinate is quantized to 10 bits (0-1023)
+uint Morton3D(uint x, uint y, uint z)
+{
+    // Clamp to 10 bits (0-1023)
+    x = min(x, 1023u);
+    y = min(y, 1023u);
+    z = min(z, 1023u);
+
+    // Interleave bits: z takes highest bits, then y, then x
+    // Result: z9y9x9 z8y8x8 z7y7x7 ... z0y0x0
+    uint xx = ExpandBits(x);
+    uint yy = ExpandBits(y);
+    uint zz = ExpandBits(z);
+
+    return (zz << 2) | (yy << 1) | xx;
+}
+
+//=============================================================================
+// Alternative: Cell-based Morton Code
+// Uses cell coordinates instead of normalized positions
+// Better for spatial hash grid alignment
+//=============================================================================
+
+int3 WorldToCell(float3 WorldPos, float CellSz)
+{
+    return int3(floor(WorldPos / CellSz));
+}
+
+uint Morton3DFromCell(int3 CellCoord, int3 GridMin)
+{
+    // Offset to make all coordinates positive (relative to grid min)
+    int3 offset = CellCoord - GridMin;
+
+    // Clamp negative values to 0 (particles outside bounds)
+    // This must match FluidSolveDensityPressure.usf's GetMortonCellIDFromCellCoord
+    uint3 uoffset = uint3(max(offset, int3(0, 0, 0)));
+    uoffset = min(uoffset, uint3(1023, 1023, 1023));
+
+    return Morton3D(uoffset.x, uoffset.y, uoffset.z);
+}
+
+//=============================================================================
+// Main Compute Shader: Compute Morton Codes
+//=============================================================================
+
+#define THREAD_GROUP_SIZE 256
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void ComputeMortonCodesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint idx = DispatchThreadId.x;
+    if (idx >= (uint)ParticleCount)
+    {
+        return;
+    }
+
+    // Read particle position
+    float3 pos = Particles[idx].xyz;
+
+    // Normalize position to [0, 1] range within simulation bounds
+    float3 normalizedPos = saturate((pos - BoundsMin) / BoundsExtent);
+
+    // Quantize to 10-bit integer (0-1023)
+    uint3 quantized = uint3(normalizedPos * 1023.0f);
+
+    // Compute Morton code
+    uint mortonCode = Morton3D(quantized.x, quantized.y, quantized.z);
+
+    // Output Morton code and initial particle index
+    MortonCodes[idx] = mortonCode;
+    ParticleIndices[idx] = idx;
+}
+
+//=============================================================================
+// Alternative: Cell-based Morton Code Computation
+// Uses cell coordinates for better grid alignment
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void ComputeMortonCodesCellBasedCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint idx = DispatchThreadId.x;
+    if (idx >= (uint)ParticleCount)
+    {
+        return;
+    }
+
+    // IMPORTANT: Use PredictedPosition for Morton code calculation!
+    // This MUST match the Solver which uses PredictedPosition for centerCell lookup.
+    // Using Position here would cause mismatch: Morton codes based on old position,
+    // but Solver searches neighbors based on predicted (new) position.
+    float3 pos = Particles[idx].PredictedPosition;
+
+    // Convert to cell coordinate
+    int3 cellCoord = WorldToCell(pos, CellSize);
+
+    // Compute grid minimum cell (based on bounds)
+    int3 gridMin = int3(floor(BoundsMin / CellSize));
+
+    // Compute Morton code from cell coordinate
+    uint mortonCode = Morton3DFromCell(cellCoord, gridMin);
+
+    // CRITICAL: Truncate to cellID (16 bits) BEFORE sorting!
+    // This ensures particles with the same cellID are contiguous after sorting.
+    // If we sort by full 30-bit Morton code, particles with same cellID but
+    // different upper bits would be scattered, breaking CellStart/End ranges.
+    uint cellID = mortonCode & (MAX_CELLS - 1);
+
+    // Output truncated cellID as sort key and initial particle index
+    MortonCodes[idx] = cellID;
+    ParticleIndices[idx] = idx;
+}

@@ -173,8 +173,16 @@ public:
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
+		// Hash table mode (legacy)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellCounts)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleIndices)
+		// Z-Order sorted mode (new)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellStart)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellEnd)
+		SHADER_PARAMETER(int32, bUseZOrderSorting)
+		// Morton bounds for Z-Order cell ID calculation
+		SHADER_PARAMETER(FVector3f, MortonBoundsMin)
+		SHADER_PARAMETER(FVector3f, MortonBoundsExtent)
 		// Neighbor caching buffers
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, NeighborList)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, NeighborCounts)
@@ -1444,5 +1452,382 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
 		OutEnvironment.SetDefine(TEXT("SPATIAL_HASH_SIZE"), GPU_SPATIAL_HASH_SIZE);
 		OutEnvironment.SetDefine(TEXT("MAX_PARTICLES_PER_CELL"), GPU_MAX_PARTICLES_PER_CELL);
+	}
+};
+
+//=============================================================================
+// Z-Order (Morton Code) Sorting Shaders
+// GPU-based spatial sorting for cache-coherent neighbor access
+// Pipeline: Morton Code → Radix Sort → Reorder → CellStart/End
+//=============================================================================
+
+// Morton grid constants (must match FluidMortonCode.usf)
+#define GPU_MORTON_GRID_SIZE 1024  // 10 bits per axis for 30-bit Morton code
+
+/**
+ * Compute Morton Codes Compute Shader
+ * Converts 3D particle positions to 1D Morton codes for spatial sorting
+ * IMPORTANT: Uses PredictedPosition to match Solver's neighbor search
+ */
+class FComputeMortonCodesCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FComputeMortonCodesCS);
+	SHADER_USE_PARAMETER_STRUCT(FComputeMortonCodesCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		// Full particle structure to access PredictedPosition (must match Solver)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, MortonCodes)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ParticleIndices)
+		SHADER_PARAMETER(int32, ParticleCount)
+		SHADER_PARAMETER(FVector3f, BoundsMin)
+		SHADER_PARAMETER(FVector3f, BoundsExtent)
+		SHADER_PARAMETER(float, CellSize)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("MORTON_GRID_SIZE"), GPU_MORTON_GRID_SIZE);
+	}
+};
+
+//=============================================================================
+// GPU Radix Sort Shaders
+// 4-bit radix (16 buckets), 8 passes for 32-bit keys
+// Algorithm: Histogram → Global Prefix Sum → Scatter
+//=============================================================================
+
+#define GPU_RADIX_BITS 4
+#define GPU_RADIX_SIZE 16  // 2^4 = 16 buckets
+#define GPU_RADIX_THREAD_GROUP_SIZE 256
+#define GPU_RADIX_ELEMENTS_PER_THREAD 4
+#define GPU_RADIX_ELEMENTS_PER_GROUP (GPU_RADIX_THREAD_GROUP_SIZE * GPU_RADIX_ELEMENTS_PER_THREAD)  // 1024
+
+/**
+ * Radix Sort Histogram Compute Shader
+ * Pass 1: Count occurrences of each digit value per block
+ */
+class FRadixSortHistogramCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FRadixSortHistogramCS);
+	SHADER_USE_PARAMETER_STRUCT(FRadixSortHistogramCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, KeysIn)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ValuesIn)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, Histogram)
+		SHADER_PARAMETER(int32, ElementCount)
+		SHADER_PARAMETER(int32, BitOffset)
+		SHADER_PARAMETER(int32, NumGroups)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("RADIX_BITS"), GPU_RADIX_BITS);
+		OutEnvironment.SetDefine(TEXT("RADIX_SIZE"), GPU_RADIX_SIZE);
+	}
+};
+
+/**
+ * Radix Sort Global Prefix Sum Compute Shader
+ * Pass 2a: Compute prefix sums across all blocks for each bucket
+ */
+class FRadixSortGlobalPrefixSumCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FRadixSortGlobalPrefixSumCS);
+	SHADER_USE_PARAMETER_STRUCT(FRadixSortGlobalPrefixSumCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, Histogram)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, GlobalOffsets)
+		SHADER_PARAMETER(int32, NumGroups)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 16;  // One thread per bucket
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("RADIX_BITS"), GPU_RADIX_BITS);
+		OutEnvironment.SetDefine(TEXT("RADIX_SIZE"), GPU_RADIX_SIZE);
+	}
+};
+
+/**
+ * Radix Sort Bucket Prefix Sum Compute Shader
+ * Pass 2b: Compute prefix sum across buckets (for global offsets)
+ */
+class FRadixSortBucketPrefixSumCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FRadixSortBucketPrefixSumCS);
+	SHADER_USE_PARAMETER_STRUCT(FRadixSortBucketPrefixSumCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, GlobalOffsets)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("RADIX_BITS"), GPU_RADIX_BITS);
+		OutEnvironment.SetDefine(TEXT("RADIX_SIZE"), GPU_RADIX_SIZE);
+	}
+};
+
+/**
+ * Radix Sort Scatter Compute Shader
+ * Pass 3: Scatter elements to their sorted positions
+ */
+class FRadixSortScatterCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FRadixSortScatterCS);
+	SHADER_USE_PARAMETER_STRUCT(FRadixSortScatterCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, KeysIn)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ValuesIn)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, KeysOut)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ValuesOut)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, HistogramSRV)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, GlobalOffsetsSRV)
+		SHADER_PARAMETER(int32, ElementCount)
+		SHADER_PARAMETER(int32, BitOffset)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("RADIX_BITS"), GPU_RADIX_BITS);
+		OutEnvironment.SetDefine(TEXT("RADIX_SIZE"), GPU_RADIX_SIZE);
+	}
+};
+
+/**
+ * Radix Sort Small Array Compute Shader
+ * Optimized single-pass sort for small arrays (<1024 elements)
+ */
+class FRadixSortSmallCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FRadixSortSmallCS);
+	SHADER_USE_PARAMETER_STRUCT(FRadixSortSmallCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, KeysIn)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, KeysOut)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ValuesIn)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ValuesOut)
+		SHADER_PARAMETER(int32, ElementCount)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};
+
+//=============================================================================
+// Particle Reordering Shaders
+// Physically reorder particle data based on sorted indices
+//=============================================================================
+
+/**
+ * Reorder Particles Compute Shader
+ * Physically reorders particle data for cache-coherent access
+ */
+class FReorderParticlesCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FReorderParticlesCS);
+	SHADER_USE_PARAMETER_STRUCT(FReorderParticlesCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, OldParticles)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, SortedIndices)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, SortedParticles)
+		SHADER_PARAMETER(int32, ParticleCount)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};
+
+/**
+ * Build Reverse Mapping Compute Shader
+ * Builds mapping from old indices to new sorted positions
+ */
+class FBuildReverseMappingCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FBuildReverseMappingCS);
+	SHADER_USE_PARAMETER_STRUCT(FBuildReverseMappingCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, SortedIndices)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, OldToNewMapping)
+		SHADER_PARAMETER(int32, ParticleCount)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};
+
+//=============================================================================
+// Cell Start/End Index Shaders
+// Build grid lookup structure from sorted Morton codes
+//=============================================================================
+
+// MAX_CELLS must match FluidCellStartEnd.usf
+#define GPU_MAX_CELLS 65536
+
+/**
+ * Clear Cell Indices Compute Shader
+ * Initializes CellStart/End arrays to invalid values
+ */
+class FClearCellIndicesCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FClearCellIndicesCS);
+	SHADER_USE_PARAMETER_STRUCT(FClearCellIndicesCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CellStart)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CellEnd)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("MAX_CELLS"), GPU_MAX_CELLS);
+	}
+};
+
+/**
+ * Compute Cell Start/End Compute Shader
+ * Finds where each cell's particles begin and end in sorted array
+ */
+class FComputeCellStartEndCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FComputeCellStartEndCS);
+	SHADER_USE_PARAMETER_STRUCT(FComputeCellStartEndCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, SortedMortonCodes)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CellStart)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CellEnd)
+		SHADER_PARAMETER(int32, ParticleCount)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("MAX_CELLS"), GPU_MAX_CELLS);
 	}
 };

@@ -26,6 +26,40 @@ enum class EWorldCollisionMethod : uint8
 };
 
 /**
+ * Debug visualization modes for fluid particles
+ */
+UENUM(BlueprintType)
+enum class EFluidDebugVisualization : uint8
+{
+	/** Normal rendering (no debug) */
+	None			UMETA(DisplayName = "None"),
+
+	//--- Z-Order Sorting Verification ---
+	// Use these modes to verify Z-Order (Morton code) sorting is working correctly.
+	// If sorting works, spatially close particles will have similar array indices.
+
+	/** [Z-Order] Color by array index - spatially close particles should have similar colors if sorted */
+	ZOrderArrayIndex	UMETA(DisplayName = "Z-Order: Array Index"),
+	/** [Z-Order] Color by Morton code computed from position */
+	ZOrderMortonCode	UMETA(DisplayName = "Z-Order: Morton Code"),
+
+	//--- General Debug Visualization ---
+
+	/** Color by X position (Red gradient) */
+	PositionX		UMETA(DisplayName = "Position X"),
+	/** Color by Y position (Green gradient) */
+	PositionY		UMETA(DisplayName = "Position Y"),
+	/** Color by Z position (Blue gradient) */
+	PositionZ		UMETA(DisplayName = "Position Z"),
+	/** Color by density value */
+	Density			UMETA(DisplayName = "Density"),
+
+	//--- Legacy (deprecated, use ZOrderArrayIndex/ZOrderMortonCode instead) ---
+	ArrayIndex		UMETA(DisplayName = "Array Index (Legacy)", Hidden),
+	MortonCode		UMETA(DisplayName = "Morton Code (Legacy)", Hidden),
+};
+
+/**
  * Collision event data
  */
 USTRUCT(BlueprintType)
