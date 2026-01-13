@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
+#include "Components/FluidInteractionComponent.h"
 #include "KawaiiFluidSimulatorSubsystem.generated.h"
 
 class UKawaiiFluidComponent;
@@ -14,6 +15,7 @@ class UKawaiiFluidPresetDataAsset;
 class UKawaiiFluidSimulationVolumeComponent;
 class UFluidCollider;
 class UFluidInteractionComponent;
+enum class EFluidType : uint8;
 class FSpatialHash;
 struct FFluidParticle;
 
@@ -172,6 +174,21 @@ public:
 	/** Get component count */
 	UFUNCTION(BlueprintCallable, Category = "KawaiiFluid|Query")
 	int32 GetComponentCount() const { return AllFluidComponents.Num(); }
+
+	/**
+	 * Get Preset by SourceID (for collision event filtering)
+	 * @param SourceID Particle source ID (from FGPUCollisionFeedback::ParticleSourceID)
+	 * @return Preset of the module that owns this source, or nullptr if not found
+	 */
+	UFUNCTION(BlueprintPure, Category = "KawaiiFluid|Query")
+	UKawaiiFluidPresetDataAsset* GetPresetBySourceID(int32 SourceID) const;
+
+	/**
+	 * Get Module by SourceID
+	 * @param SourceID Particle source ID
+	 * @return Module that owns this source, or nullptr if not found
+	 */
+	UKawaiiFluidSimulationModule* GetModuleBySourceID(int32 SourceID) const;
 
 	//========================================
 	// Context Management

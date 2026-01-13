@@ -1,7 +1,9 @@
 ﻿// Copyright KawaiiFluid Team. All Rights Reserved.
 
 #include "Components/FluidInteractionComponent.h"
+#include "Components/KawaiiFluidComponent.h"
 #include "Core/KawaiiFluidSimulatorSubsystem.h"
+#include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Core/SpatialHash.h"
 #include "Collision/MeshFluidCollider.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
@@ -1069,10 +1071,11 @@ void UFluidInteractionComponent::ProcessBoneCollisionEvents(float DeltaTime, con
 		BoneEventCooldownTimers.Remove(BoneIdx);
 	}
 
-	// 본별 접촉 카운트 및 속도 집계
+	// 본별 접촉 카운트, 속도, FluidTag 집계
 	TMap<int32, int32> NewBoneContactCounts;
 	TMap<int32, FVector> BoneVelocitySums;
 	TMap<int32, int32> BoneVelocityCounts;
+	TMap<int32, TMap<int32, int32>> BoneSourceCounts;  // BoneIndex → (SourceID → Count)
 
 	for (int32 i = 0; i < FeedbackCount; ++i)
 	{
@@ -1101,6 +1104,11 @@ void UFluidInteractionComponent::ProcessBoneCollisionEvents(float DeltaTime, con
 
 		int32& VelCount = BoneVelocityCounts.FindOrAdd(Feedback.BoneIndex, 0);
 		VelCount++;
+
+		// SourceID별 카운트 (FluidTag 결정용)
+		TMap<int32, int32>& SourceCounts = BoneSourceCounts.FindOrAdd(Feedback.BoneIndex);
+		int32& SourceCount = SourceCounts.FindOrAdd(Feedback.ParticleSourceID, 0);
+		SourceCount++;
 	}
 
 	// 평균 속도 계산
@@ -1148,8 +1156,36 @@ void UFluidInteractionComponent::ProcessBoneCollisionEvents(float DeltaTime, con
 			// 본 이름 가져오기
 			FName BoneName = GetBoneNameFromIndex(BoneIdx);
 
-			// 이벤트 브로드캐스트
-			OnBoneParticleCollision.Broadcast(BoneIdx, BoneName, ContactCount, AverageVelocity);
+			// FluidName 결정: 가장 많이 충돌한 SourceID의 Preset에서 FluidName 가져오기
+			FName FluidName = NAME_None;
+			if (TargetSubsystem)
+			{
+				const TMap<int32, int32>* SourceCounts = BoneSourceCounts.Find(BoneIdx);
+				if (SourceCounts)
+				{
+					int32 MaxSourceID = -1;
+					int32 MaxCount = 0;
+					for (const auto& SourcePair : *SourceCounts)
+					{
+						if (SourcePair.Value > MaxCount)
+						{
+							MaxCount = SourcePair.Value;
+							MaxSourceID = SourcePair.Key;
+						}
+					}
+					if (MaxSourceID >= 0)
+					{
+						UKawaiiFluidPresetDataAsset* Preset = TargetSubsystem->GetPresetBySourceID(MaxSourceID);
+						if (Preset)
+						{
+							FluidName = Preset->GetFluidName();
+						}
+					}
+				}
+			}
+
+			// 이벤트 브로드캐스트 (FluidName 포함)
+			OnBoneParticleCollision.Broadcast(BoneIdx, BoneName, ContactCount, AverageVelocity, FluidName);
 
 			// 쿨다운 설정
 			BoneEventCooldownTimers.Add(BoneIdx, BoneEventCooldown);

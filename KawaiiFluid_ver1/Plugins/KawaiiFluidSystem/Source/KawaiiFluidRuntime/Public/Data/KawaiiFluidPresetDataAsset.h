@@ -23,6 +23,22 @@ public:
 	UKawaiiFluidPresetDataAsset();
 
 	//========================================
+	// Fluid Identification
+	//========================================
+
+	/**
+	 * 유체 식별 이름 (BP에서 Switch on Name으로 분기용)
+	 * 예: "Lava", "Water", "Slime"
+	 * Switch on Name 노드에서 이 이름으로 케이스를 만드세요
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Identification")
+	FName FluidName = NAME_None;
+
+	/** 유체 식별 이름 반환 */
+	UFUNCTION(BlueprintPure, Category = "Fluid|Identification")
+	FName GetFluidName() const { return FluidName; }
+
+	//========================================
 	// Context Class (Extensibility)
 	//========================================
 

@@ -311,6 +311,44 @@ int32 UKawaiiFluidSimulatorSubsystem::GetTotalParticleCount() const
 	return Total;
 }
 
+UKawaiiFluidPresetDataAsset* UKawaiiFluidSimulatorSubsystem::GetPresetBySourceID(int32 SourceID) const
+{
+	UKawaiiFluidSimulationModule* Module = GetModuleBySourceID(SourceID);
+	return Module ? Module->GetPreset() : nullptr;
+}
+
+UKawaiiFluidSimulationModule* UKawaiiFluidSimulatorSubsystem::GetModuleBySourceID(int32 SourceID) const
+{
+	if (SourceID < 0)
+	{
+		return nullptr;
+	}
+
+	// 방법 1: AllFluidComponents에서 찾기
+	for (UKawaiiFluidComponent* Component : AllFluidComponents)
+	{
+		if (Component && Component->GetUniqueID() == SourceID)
+		{
+			return Component->GetSimulationModule();
+		}
+	}
+
+	// 방법 2: AllModules의 Outer(Component)에서 찾기
+	for (UKawaiiFluidSimulationModule* Module : AllModules)
+	{
+		if (Module)
+		{
+			UObject* Outer = Module->GetOuter();
+			if (Outer && Outer->GetUniqueID() == SourceID)
+			{
+				return Module;
+			}
+		}
+	}
+
+	return nullptr;
+}
+
 //========================================
 // Context Management
 //========================================

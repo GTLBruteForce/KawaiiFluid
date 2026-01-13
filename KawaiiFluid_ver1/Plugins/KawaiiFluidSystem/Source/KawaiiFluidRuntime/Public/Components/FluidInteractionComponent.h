@@ -9,6 +9,27 @@
 class UKawaiiFluidSimulatorSubsystem;
 class UFluidCollider;
 class UMeshFluidCollider;
+class UKawaiiFluidPresetDataAsset;
+
+/**
+ * 유체 타입 Enum (BP에서 드롭다운 선택용)
+ * 충돌 이벤트에서 어떤 유체와 충돌했는지 구분
+ */
+UENUM(BlueprintType)
+enum class EFluidType : uint8
+{
+	None		UMETA(DisplayName = "None"),
+	Water		UMETA(DisplayName = "Water"),
+	Lava		UMETA(DisplayName = "Lava"),
+	Slime		UMETA(DisplayName = "Slime"),
+	Oil			UMETA(DisplayName = "Oil"),
+	Acid		UMETA(DisplayName = "Acid"),
+	Blood		UMETA(DisplayName = "Blood"),
+	Honey		UMETA(DisplayName = "Honey"),
+	Custom1		UMETA(DisplayName = "Custom1"),
+	Custom2		UMETA(DisplayName = "Custom2"),
+	Custom3		UMETA(DisplayName = "Custom3"),
+};
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFluidAttached, int32, ParticleCount);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnFluidDetached);
@@ -56,8 +77,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnFluidForceUpdate, FVector, For
  * @param BoneName 충돌이 발생한 본 이름
  * @param ContactCount 해당 본에 접촉 중인 파티클 수
  * @param AverageVelocity 충돌 파티클들의 평균 속도 (Niagara 방향/강도용)
+ * @param FluidName 충돌한 유체의 이름 (Preset의 FluidName, Switch on Name으로 분기)
  */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FOnBoneParticleCollision, int32, BoneIndex, FName, BoneName, int32, ContactCount, FVector, AverageVelocity);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FOnBoneParticleCollision, int32, BoneIndex, FName, BoneName, int32, ContactCount, FVector, AverageVelocity, FName, FluidName);
 
 /**
  * 유체 상호작용 컴포넌트

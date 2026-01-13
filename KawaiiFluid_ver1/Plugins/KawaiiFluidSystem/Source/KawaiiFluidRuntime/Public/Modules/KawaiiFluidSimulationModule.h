@@ -8,6 +8,7 @@
 #include "Core/KawaiiFluidSimulationTypes.h"
 #include "Interfaces/IKawaiiFluidDataProvider.h"
 #include "GPU/GPUFluidSimulator.h"
+#include "Components/FluidInteractionComponent.h"
 #include "KawaiiFluidSimulationModule.generated.h"
 
 /** Collision event callback type */
@@ -96,6 +97,28 @@ public:
 	/** Override 존재 여부 */
 	UFUNCTION(BlueprintPure, Category = "Fluid|Module")
 	bool HasAnyOverride() const;
+
+	//========================================
+	// Fluid Identification (for collision filtering)
+	//========================================
+
+	/**
+	 * 유체 타입 (Water, Lava, Slime 등)
+	 * 충돌 이벤트에서 어떤 유체인지 식별하는 데 사용
+	 * FluidInteractionComponent의 OnBoneParticleCollision에서 이 타입이 전달됨
+	 * BP에서 Switch on EFluidType으로 분기 가능
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Identification",
+	          meta = (ToolTip = "유체 타입.\n충돌 이벤트에서 어떤 유체와 충돌했는지 구분하는 데 사용됩니다.\nBP에서 Switch on EFluidType으로 분기할 수 있습니다."))
+	EFluidType FluidType = EFluidType::None;
+
+	/** 유체 타입 반환 */
+	UFUNCTION(BlueprintPure, Category = "Fluid|Identification")
+	EFluidType GetFluidType() const { return FluidType; }
+
+	/** 유체 타입 설정 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid|Identification")
+	void SetFluidType(EFluidType InFluidType) { FluidType = InFluidType; }
 
 	//========================================
 	// Simulation Volume (Z-Order Space)
