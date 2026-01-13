@@ -550,6 +550,9 @@ void UFluidInteractionComponent::ProcessCollisionFeedback(float DeltaTime)
 		if (bEnablePerBoneForce)
 		{
 			ProcessPerBoneForces(DeltaTime, AllFeedback, FeedbackCount);
+
+			// 본 충돌 이벤트 처리 (Niagara Spawning용)
+			ProcessBoneCollisionEvents(DeltaTime, AllFeedback, FeedbackCount);
 		}
 
 		if (FeedbackCount > 0)
@@ -1036,6 +1039,198 @@ bool UFluidInteractionComponent::GetStrongestBoneForce(int32& OutBoneIndex, FVec
 			MaxForceSq = ForceSq;
 			OutBoneIndex = Pair.Key;
 			OutForce = Pair.Value;
+		}
+	}
+
+	return OutBoneIndex >= 0;
+}
+
+//=============================================================================
+// Bone Collision Events Implementation (for Niagara Spawning)
+//=============================================================================
+
+void UFluidInteractionComponent::ProcessBoneCollisionEvents(float DeltaTime, const TArray<FGPUCollisionFeedback>& AllFeedback, int32 FeedbackCount)
+{
+	AActor* Owner = GetOwner();
+	const int32 MyOwnerID = Owner ? Owner->GetUniqueID() : 0;
+
+	// 쿨다운 타이머 업데이트 (모든 본)
+	TArray<int32> ExpiredCooldowns;
+	for (auto& Pair : BoneEventCooldownTimers)
+	{
+		Pair.Value -= DeltaTime;
+		if (Pair.Value <= 0.0f)
+		{
+			ExpiredCooldowns.Add(Pair.Key);
+		}
+	}
+	for (int32 BoneIdx : ExpiredCooldowns)
+	{
+		BoneEventCooldownTimers.Remove(BoneIdx);
+	}
+
+	// 본별 접촉 카운트 및 속도 집계
+	TMap<int32, int32> NewBoneContactCounts;
+	TMap<int32, FVector> BoneVelocitySums;
+	TMap<int32, int32> BoneVelocityCounts;
+
+	for (int32 i = 0; i < FeedbackCount; ++i)
+	{
+		const FGPUCollisionFeedback& Feedback = AllFeedback[i];
+
+		// OwnerID 필터링
+		if (Feedback.ColliderOwnerID != 0 && Feedback.ColliderOwnerID != MyOwnerID)
+		{
+			continue;
+		}
+
+		// BoneIndex가 유효한 경우에만 처리
+		if (Feedback.BoneIndex < 0)
+		{
+			continue;
+		}
+
+		// 접촉 카운트 증가
+		int32& ContactCount = NewBoneContactCounts.FindOrAdd(Feedback.BoneIndex, 0);
+		ContactCount++;
+
+		// 속도 합산
+		FVector ParticleVel(Feedback.ParticleVelocity.X, Feedback.ParticleVelocity.Y, Feedback.ParticleVelocity.Z);
+		FVector& VelSum = BoneVelocitySums.FindOrAdd(Feedback.BoneIndex, FVector::ZeroVector);
+		VelSum += ParticleVel;
+
+		int32& VelCount = BoneVelocityCounts.FindOrAdd(Feedback.BoneIndex, 0);
+		VelCount++;
+	}
+
+	// 평균 속도 계산
+	CurrentBoneAverageVelocities.Empty();
+	for (const auto& Pair : BoneVelocitySums)
+	{
+		int32 BoneIdx = Pair.Key;
+		int32* VelCountPtr = BoneVelocityCounts.Find(BoneIdx);
+		int32 VelCount = VelCountPtr ? *VelCountPtr : 1;
+		CurrentBoneAverageVelocities.Add(BoneIdx, Pair.Value / FMath::Max(1, VelCount));
+	}
+
+	// 현재 접촉 카운트 저장
+	CurrentBoneContactCounts = NewBoneContactCounts;
+
+	// 충돌 이벤트 발생 (bEnableBoneCollisionEvents 활성화 시)
+	if (bEnableBoneCollisionEvents && OnBoneParticleCollision.IsBound())
+	{
+		// 현재 충분한 접촉이 있는 본들
+		TSet<int32> CurrentContactBones;
+		for (const auto& Pair : CurrentBoneContactCounts)
+		{
+			if (Pair.Value >= MinParticleCountForBoneEvent)
+			{
+				CurrentContactBones.Add(Pair.Key);
+			}
+		}
+
+		// 새로운 충돌 감지 (이전 프레임에 없었거나 쿨다운이 끝난 본)
+		for (int32 BoneIdx : CurrentContactBones)
+		{
+			// 쿨다운 중이면 스킵
+			if (BoneEventCooldownTimers.Contains(BoneIdx))
+			{
+				continue;
+			}
+
+			// 새 충돌이거나 쿨다운 만료 → 이벤트 발생
+			const int32* ContactCountPtr = CurrentBoneContactCounts.Find(BoneIdx);
+			int32 ContactCount = ContactCountPtr ? *ContactCountPtr : 0;
+
+			const FVector* AvgVelPtr = CurrentBoneAverageVelocities.Find(BoneIdx);
+			FVector AverageVelocity = AvgVelPtr ? *AvgVelPtr : FVector::ZeroVector;
+
+			// 본 이름 가져오기
+			FName BoneName = GetBoneNameFromIndex(BoneIdx);
+
+			// 이벤트 브로드캐스트
+			OnBoneParticleCollision.Broadcast(BoneIdx, BoneName, ContactCount, AverageVelocity);
+
+			// 쿨다운 설정
+			BoneEventCooldownTimers.Add(BoneIdx, BoneEventCooldown);
+		}
+
+		// 이전 프레임 상태 업데이트
+		PreviousContactBones = CurrentContactBones;
+	}
+}
+
+int32 UFluidInteractionComponent::GetBoneContactCount(int32 BoneIndex) const
+{
+	const int32* Count = CurrentBoneContactCounts.Find(BoneIndex);
+	return Count ? *Count : 0;
+}
+
+void UFluidInteractionComponent::GetBonesWithContacts(TArray<int32>& OutBoneIndices) const
+{
+	OutBoneIndices.Empty(CurrentBoneContactCounts.Num());
+	for (const auto& Pair : CurrentBoneContactCounts)
+	{
+		if (Pair.Value > 0)
+		{
+			OutBoneIndices.Add(Pair.Key);
+		}
+	}
+}
+
+FName UFluidInteractionComponent::GetBoneNameFromIndex(int32 BoneIndex) const
+{
+	// 캐시에서 먼저 확인
+	const FName* CachedName = BoneIndexToNameCache.Find(BoneIndex);
+	if (CachedName)
+	{
+		return *CachedName;
+	}
+
+	// 캐시에 없으면 SkeletalMesh에서 직접 조회
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return NAME_None;
+	}
+
+	USkeletalMeshComponent* SkelMesh = Owner->FindComponentByClass<USkeletalMeshComponent>();
+	if (!SkelMesh || !SkelMesh->GetSkeletalMeshAsset())
+	{
+		return NAME_None;
+	}
+
+	const FReferenceSkeleton& RefSkeleton = SkelMesh->GetSkeletalMeshAsset()->GetRefSkeleton();
+	if (BoneIndex >= 0 && BoneIndex < RefSkeleton.GetNum())
+	{
+		return RefSkeleton.GetBoneName(BoneIndex);
+	}
+
+	return NAME_None;
+}
+
+USkeletalMeshComponent* UFluidInteractionComponent::GetOwnerSkeletalMesh() const
+{
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return nullptr;
+	}
+
+	return Owner->FindComponentByClass<USkeletalMeshComponent>();
+}
+
+bool UFluidInteractionComponent::GetMostContactedBone(int32& OutBoneIndex, int32& OutContactCount) const
+{
+	OutBoneIndex = -1;
+	OutContactCount = 0;
+
+	for (const auto& Pair : CurrentBoneContactCounts)
+	{
+		if (Pair.Value > OutContactCount)
+		{
+			OutContactCount = Pair.Value;
+			OutBoneIndex = Pair.Key;
 		}
 	}
 

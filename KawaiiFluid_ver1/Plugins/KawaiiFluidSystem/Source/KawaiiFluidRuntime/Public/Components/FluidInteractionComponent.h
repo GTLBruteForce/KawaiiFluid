@@ -50,6 +50,16 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFluidExit, FName, FluidTag);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnFluidForceUpdate, FVector, Force, float, Pressure, int32, ContactCount);
 
 /**
+ * 특정 본에 파티클 충돌이 발생했을 때 발생
+ * Niagara 이펙트 스폰용으로 사용 (본에 Attach하면 캐릭터를 따라다님)
+ * @param BoneIndex 충돌이 발생한 본 인덱스
+ * @param BoneName 충돌이 발생한 본 이름
+ * @param ContactCount 해당 본에 접촉 중인 파티클 수
+ * @param AverageVelocity 충돌 파티클들의 평균 속도 (Niagara 방향/강도용)
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FOnBoneParticleCollision, int32, BoneIndex, FName, BoneName, int32, ContactCount, FVector, AverageVelocity);
+
+/**
  * 유체 상호작용 컴포넌트
  * 캐릭터/오브젝트에 붙여서 유체와 상호작용
  */
@@ -326,6 +336,91 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Per-Bone Force")
 	bool GetStrongestBoneForce(int32& OutBoneIndex, FVector& OutForce) const;
 
+	//========================================
+	// Bone Collision Events (for Niagara Spawning)
+	//========================================
+
+	/**
+	 * 본별 충돌 이벤트 활성화
+	 * 활성화 시 본에 파티클 충돌이 발생하면 OnBoneParticleCollision 이벤트 발생
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Bone Collision Events",
+	          meta = (EditCondition = "bEnablePerBoneForce",
+	                  ToolTip = "본별 충돌 이벤트 활성화.\n활성화 시 본에 파티클 충돌이 발생하면 OnBoneParticleCollision 이벤트가 발생합니다.\nNiagara 이펙트 스폰에 사용할 수 있습니다."))
+	bool bEnableBoneCollisionEvents = false;
+
+	/**
+	 * 충돌 이벤트를 위한 최소 파티클 수
+	 * 이 수 이상의 파티클이 충돌해야 OnBoneParticleCollision 이벤트 발생
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Bone Collision Events",
+	          meta = (EditCondition = "bEnableBoneCollisionEvents", ClampMin = "1", ClampMax = "50",
+	                  ToolTip = "본별 충돌 이벤트를 위한 최소 파티클 수.\n이 수 이상의 파티클이 본에 충돌해야 이벤트가 발생합니다."))
+	int32 MinParticleCountForBoneEvent = 3;
+
+	/**
+	 * 본 충돌 이벤트 발생 간격 (초)
+	 * 너무 빈번한 이벤트 발생 방지
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Bone Collision Events",
+	          meta = (EditCondition = "bEnableBoneCollisionEvents", ClampMin = "0.0", ClampMax = "2.0",
+	                  ToolTip = "본 충돌 이벤트 발생 간격 (초).\n같은 본에 대해 이 시간 간격 이내에는 이벤트를 다시 발생시키지 않습니다."))
+	float BoneEventCooldown = 0.1f;
+
+	/**
+	 * 본에 파티클 충돌 발생 이벤트
+	 * Niagara 이펙트 스폰에 사용 - SpawnSystemAttached로 본에 Attach하면 캐릭터를 따라다님
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
+	FOnBoneParticleCollision OnBoneParticleCollision;
+
+	/**
+	 * 특정 본의 현재 접촉 파티클 수 반환
+	 * @param BoneIndex 조회할 본 인덱스
+	 * @return 해당 본에 접촉 중인 파티클 수
+	 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Bone Collision Events")
+	int32 GetBoneContactCount(int32 BoneIndex) const;
+
+	/**
+	 * 모든 본의 접촉 파티클 수 맵 반환
+	 * @return 본 인덱스 → 접촉 파티클 수 맵
+	 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Bone Collision Events")
+	TMap<int32, int32> GetAllBoneContactCounts() const { return CurrentBoneContactCounts; }
+
+	/**
+	 * 파티클과 접촉 중인 본 인덱스 배열 반환
+	 * @param OutBoneIndices 접촉 중인 본 인덱스 배열
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Bone Collision Events")
+	void GetBonesWithContacts(TArray<int32>& OutBoneIndices) const;
+
+	/**
+	 * 본 인덱스를 본 이름으로 변환
+	 * @param BoneIndex 본 인덱스
+	 * @return 본 이름 (없으면 NAME_None)
+	 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Bone Collision Events")
+	FName GetBoneNameFromIndex(int32 BoneIndex) const;
+
+	/**
+	 * Owner의 SkeletalMeshComponent 반환
+	 * Niagara SpawnSystemAttached의 AttachToComponent로 사용
+	 * @return SkeletalMeshComponent (없으면 nullptr)
+	 */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Bone Collision Events")
+	class USkeletalMeshComponent* GetOwnerSkeletalMesh() const;
+
+	/**
+	 * 가장 많은 파티클이 충돌 중인 본 반환
+	 * @param OutBoneIndex 가장 많이 충돌 중인 본 인덱스 (-1 if none)
+	 * @param OutContactCount 해당 본의 접촉 파티클 수
+	 * @return 충돌 중인 본이 있으면 true
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Bone Collision Events")
+	bool GetMostContactedBone(int32& OutBoneIndex, int32& OutContactCount) const;
+
 	/** 현재 유체 힘 반환 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
 	FVector GetCurrentFluidForce() const { return CurrentFluidForce; }
@@ -428,6 +523,25 @@ private:
 
 	/** 디버그 로그 타이머 (3초마다 출력) */
 	float PerBoneForceDebugTimer = 0.0f;
+
+	//========================================
+	// Bone Collision Events Internal State
+	//========================================
+
+	/** 본 인덱스별 현재 접촉 파티클 수 */
+	TMap<int32, int32> CurrentBoneContactCounts;
+
+	/** 본 인덱스별 평균 충돌 속도 (Niagara 방향용) */
+	TMap<int32, FVector> CurrentBoneAverageVelocities;
+
+	/** 본별 이벤트 쿨다운 타이머 (본 인덱스 → 남은 쿨다운 시간) */
+	TMap<int32, float> BoneEventCooldownTimers;
+
+	/** 이전 프레임에 충돌이 있던 본 인덱스 (새 충돌 감지용) */
+	TSet<int32> PreviousContactBones;
+
+	/** 본 충돌 이벤트 처리 (ProcessPerBoneForces 내부에서 호출) */
+	void ProcessBoneCollisionEvents(float DeltaTime, const TArray<struct FGPUCollisionFeedback>& AllFeedback, int32 FeedbackCount);
 
 	/** 본 이름 캐시 초기화 */
 	void InitializeBoneNameCache();
