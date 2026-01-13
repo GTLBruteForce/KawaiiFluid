@@ -35,6 +35,35 @@ DECLARE_CYCLE_STAT(TEXT("Context ApplyViscosity"), STAT_ContextApplyViscosity, S
 DECLARE_CYCLE_STAT(TEXT("Context ApplyAdhesion"), STAT_ContextApplyAdhesion, STATGROUP_KawaiiFluidContext);
 DECLARE_CYCLE_STAT(TEXT("Context ApplyCohesion"), STAT_ContextApplyCohesion, STATGROUP_KawaiiFluidContext);
 
+//========================================
+// Auto-Scaling for SmoothingRadius Independence
+// SPH stability depends on h (smoothing radius). When h changes, several parameters
+// need to scale accordingly to maintain consistent behavior.
+//========================================
+namespace SPHScaling
+{
+	// Reference radius where the preset's parameters are tuned (cm)
+	constexpr float ReferenceRadius = 20.0f;
+
+	/**
+	 * Calculate scaled Compliance for a given SmoothingRadius
+	 * Kernel gradients scale as 1/h^5, so sumGradC2 scales as 1/h^10
+	 * @param BaseCompliance - The Compliance value tuned for ReferenceRadius
+	 * @param SmoothingRadius - Current smoothing radius (cm)
+	 * @param Exponent - Scaling exponent (0 = no scaling, 4-6 typical, 10 theoretical)
+	 * @return Scaled Compliance value
+	 */
+	FORCEINLINE float GetScaledCompliance(float BaseCompliance, float SmoothingRadius, float Exponent)
+	{
+		if (Exponent <= 0.0f)
+		{
+			return BaseCompliance;  // No scaling
+		}
+		const float Ratio = ReferenceRadius / FMath::Max(SmoothingRadius, 1.0f);
+		return BaseCompliance * FMath::Pow(Ratio, Exponent);
+	}
+}
+
 UKawaiiFluidSimulationContext::UKawaiiFluidSimulationContext()
 {
 }
@@ -57,7 +86,7 @@ void UKawaiiFluidSimulationContext::InitializeSolvers(const UKawaiiFluidPresetDa
 	DensityConstraint = MakeShared<FDensityConstraint>(
 		Preset->RestDensity,
 		Preset->SmoothingRadius,
-		Preset->Compliance
+		SPHScaling::GetScaledCompliance(Preset->Compliance, Preset->SmoothingRadius, Preset->ComplianceScalingExponent)
 	);
 	ViscositySolver = MakeShared<FViscositySolver>();
 	AdhesionSolver = MakeShared<FAdhesionSolver>();
@@ -162,7 +191,9 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	// Physics parameters from preset
 	GPUParams.RestDensity = Preset->RestDensity;
 	GPUParams.SmoothingRadius = Preset->SmoothingRadius;
-	GPUParams.Compliance = Preset->Compliance;
+	// Scale Compliance for SmoothingRadius-independent stability
+	GPUParams.Compliance = SPHScaling::GetScaledCompliance(
+		Preset->Compliance, Preset->SmoothingRadius, Preset->ComplianceScalingExponent);
 	GPUParams.ParticleRadius = Preset->ParticleRadius;
 	GPUParams.ViscosityCoefficient = Preset->ViscosityCoefficient;
 	GPUParams.CohesionStrength = Preset->CohesionStrength;
@@ -1108,6 +1139,10 @@ void UKawaiiFluidSimulationContext::SolveDensityConstraints(
 	// Tensile Instability 파라미터 설정 (PBF Eq.13-14)
 	const bool bUseTensileCorrection = Preset->bEnableTensileInstabilityCorrection;
 
+	// Scale Compliance based on SmoothingRadius for stability across different particle sizes
+	const float ScaledCompliance = SPHScaling::GetScaledCompliance(
+		Preset->Compliance, Preset->SmoothingRadius, Preset->ComplianceScalingExponent);
+
 	// XPBD 반복 솔버 (점성 유체: 2-3회, 물: 4-6회)
 	const int32 SolverIterations = Preset->SolverIterations;
 	for (int32 Iter = 0; Iter < SolverIterations; ++Iter)
@@ -1125,7 +1160,7 @@ void UKawaiiFluidSimulationContext::SolveDensityConstraints(
 				Particles,
 				Preset->SmoothingRadius,
 				Preset->RestDensity,
-				Preset->Compliance,
+				ScaledCompliance,
 				DeltaTime,
 				TensileParams
 			);
@@ -1137,7 +1172,7 @@ void UKawaiiFluidSimulationContext::SolveDensityConstraints(
 				Particles,
 				Preset->SmoothingRadius,
 				Preset->RestDensity,
-				Preset->Compliance,
+				ScaledCompliance,
 				DeltaTime
 			);
 		}

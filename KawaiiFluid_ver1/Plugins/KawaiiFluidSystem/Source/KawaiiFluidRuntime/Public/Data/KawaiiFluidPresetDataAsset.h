@@ -98,7 +98,18 @@ public:
 
 	/** XPBD Compliance - smaller = more incompressible (Slime: 0.01, Water: 0.0001) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "0.0"))
-	float Compliance = 0.01f;
+	float Compliance = 0.00001f;
+
+	/**
+	 * Compliance scaling exponent for SmoothingRadius independence
+	 * When SmoothingRadius differs from 20cm, Compliance is auto-scaled:
+	 * ScaledCompliance = Compliance * (20/h)^Exponent
+	 * Higher values = stronger scaling for stability at smaller radii
+	 * Recommended: 4-6 (theoretical: 10, practical: 4-6)
+	 * 0 = disable auto-scaling
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "0.0", ClampMax = "10.0"))
+	float ComplianceScalingExponent = 4.0f;
 
 	/** XPBD constraint solver iterations (viscous fluid: 2-3, water: 4-6) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Physics", meta = (ClampMin = "1", ClampMax = "10"))
