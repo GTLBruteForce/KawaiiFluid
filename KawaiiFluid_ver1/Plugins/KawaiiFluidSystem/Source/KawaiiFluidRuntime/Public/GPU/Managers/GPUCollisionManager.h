@@ -167,6 +167,10 @@ public:
 	const TArray<FGPUCollisionBox>& GetCachedBoxes() const { return CachedBoxes; }
 	const TArray<FGPUCollisionConvex>& GetCachedConvexHeaders() const { return CachedConvexHeaders; }
 	const TArray<FGPUConvexPlane>& GetCachedConvexPlanes() const { return CachedConvexPlanes; }
+	const TArray<FGPUBoneTransform>& GetCachedBoneTransforms() const { return CachedBoneTransforms; }
+
+	/** Check if bone transforms are valid */
+	bool AreBoneTransformsValid() const { return bBoneTransformsValid; }
 
 private:
 	//=========================================================================

@@ -12,6 +12,7 @@
 #include "GPU/Managers/GPUCollisionManager.h"
 #include "GPU/Managers/GPUSpatialHashManager.h"
 #include "GPU/Managers/GPUBoundarySkinningManager.h"
+#include "GPU/Managers/GPUAdhesionManager.h"
 #include "Core/FluidAnisotropy.h"
 #include <atomic>
 
@@ -279,22 +280,12 @@ public:
 	 * Set adhesion parameters for GPU-based attachment
 	 * @param Params - Adhesion configuration
 	 */
-	void SetAdhesionParams(const FGPUAdhesionParams& Params) { CachedAdhesionParams = Params; }
-
-	/**
-	 * Get adhesion parameters
-	 */
-	const FGPUAdhesionParams& GetAdhesionParams() const { return CachedAdhesionParams; }
-
-	/**
-	 * Check if adhesion is enabled
-	 */
-	bool IsAdhesionEnabled() const { return CachedAdhesionParams.bEnableAdhesion != 0; }
+	void SetAdhesionParams(const FGPUAdhesionParams& Params) { if (AdhesionManager.IsValid()) AdhesionManager->SetAdhesionParams(Params); }
 
 	/**
 	 * Get bone transform count
 	 */
-	int32 GetBoneTransformCount() const { return CachedBoneTransforms.Num(); }
+	int32 GetBoneTransformCount() const { return CollisionManager.IsValid() ? CollisionManager->GetCachedBoneTransforms().Num() : 0; }
 
 	//=============================================================================
 	// GPU Boundary Particles (Flex-style Adhesion from FluidInteractionComponent)
@@ -567,15 +558,6 @@ private:
 		FRDGBufferSRVRef NeighborCountsSRV,
 		const FGPUFluidSimulationParams& Params);
 
-	/** Add stack pressure pass (weight transfer from stacked attached particles) */
-	void AddStackPressurePass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		FRDGBufferSRVRef AttachmentSRV,
-		FRDGBufferSRVRef CellCountsSRV,
-		FRDGBufferSRVRef ParticleIndicesSRV,
-		const FGPUFluidSimulationParams& Params);
-
 	/** Add bounds collision pass */
 	void AddBoundsCollisionPass(
 		FRDGBuilder& GraphBuilder,
@@ -623,33 +605,6 @@ private:
 		FRDGBufferUAVRef PositionsUAV,
 		int32 ParticleCount,
 		bool bUsePredictedPosition);
-
-	/** Add adhesion pass (bone-based attachment tracking) */
-	void AddAdhesionPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		FRDGBufferUAVRef AttachmentUAV,
-		const FGPUFluidSimulationParams& Params);
-
-	/** Add update attached positions pass (move attached particles with bones) */
-	void AddUpdateAttachedPositionsPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		FRDGBufferSRVRef AttachmentSRV,
-		FRDGBufferSRVRef InBoneTransformsSRV,
-		const FGPUFluidSimulationParams& Params);
-
-	/** Add update attached positions pass - internal version using RW attachment buffer */
-	void AddUpdateAttachedPositionsPassInternal(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
-		FRDGBufferUAVRef AttachmentUAV,
-		const FGPUFluidSimulationParams& Params);
-
-	/** Clear just-detached flag at end of frame */
-	void AddClearDetachedFlagPass(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV);
 
 	/** Add boundary adhesion pass (Flex-style adhesion to surface particles) */
 	void AddBoundaryAdhesionPass(
@@ -775,30 +730,13 @@ private:
 	FCriticalSection BufferLock;
 
 	//=============================================================================
-	// Bone Transform and Adhesion Buffers
+	// Rendering Buffers
 	//=============================================================================
-
-	// Cached bone transforms (CPU side, for RDG buffer creation each frame)
-	TArray<FGPUBoneTransform> CachedBoneTransforms;
-
-	// Cached adhesion parameters
-	FGPUAdhesionParams CachedAdhesionParams;
 
 	// Previous positions buffer for rendering history trails
 	TRefCountPtr<FRDGPooledBuffer> PreviousPositionsBuffer;
 	int32 PreviousPositionsCount = 0;
 	bool bPreviousPositionsValid = false;
-
-	// Attachment data buffer (one per particle)
-	TRefCountPtr<FRDGPooledBuffer> PersistentAttachmentBuffer;
-	int32 AttachmentBufferSize = 0;  // Track buffer size for resize detection
-
-	// Bone transforms buffer
-	FBufferRHIRef BoneTransformsBufferRHI;
-	FShaderResourceViewRHIRef BoneTransformsSRV;
-
-	// Flag: bone transforms valid
-	bool bBoneTransformsValid = false;
 
 	//=============================================================================
 	// GPU Particle Spawn System (Delegated to FGPUSpawnManager)
@@ -840,6 +778,13 @@ private:
 	//=============================================================================
 
 	TUniquePtr<FGPUBoundarySkinningManager> BoundarySkinningManager;
+
+	//=============================================================================
+	// Adhesion System (Delegated to FGPUAdhesionManager)
+	// GPU-based particle adhesion to bone colliders
+	//=============================================================================
+
+	TUniquePtr<FGPUAdhesionManager> AdhesionManager;
 };
 
 /**

@@ -104,6 +104,10 @@ void FGPUFluidSimulator::Initialize(int32 InMaxParticleCount)
 	BoundarySkinningManager = MakeUnique<FGPUBoundarySkinningManager>();
 	BoundarySkinningManager->Initialize();
 
+	// Initialize AdhesionManager
+	AdhesionManager = MakeUnique<FGPUAdhesionManager>();
+	AdhesionManager->Initialize();
+
 	// Initialize render resource on render thread
 	BeginInitResource(this);
 
@@ -156,6 +160,13 @@ void FGPUFluidSimulator::Release()
 	{
 		BoundarySkinningManager->Release();
 		BoundarySkinningManager.Reset();
+	}
+
+	// Release AdhesionManager
+	if (AdhesionManager.IsValid())
+	{
+		AdhesionManager->Release();
+		AdhesionManager.Reset();
 	}
 
 	bIsInitialized = false;
@@ -833,11 +844,16 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	// Pass 0.5: Update attached particles (move with bones) - before physics simulation
 	// Only run if attachment buffer exists AND matches current particle count
 	FRDGBufferRef AttachmentBufferForUpdate = nullptr;
-	if (IsAdhesionEnabled() && bBoneTransformsValid && PersistentAttachmentBuffer.IsValid() && AttachmentBufferSize >= CurrentParticleCount)
+	if (AdhesionManager.IsValid() && AdhesionManager->IsAdhesionEnabled() && CollisionManager.IsValid() && CollisionManager->AreBoneTransformsValid())
 	{
-		AttachmentBufferForUpdate = GraphBuilder.RegisterExternalBuffer(PersistentAttachmentBuffer, TEXT("GPUFluidAttachmentsUpdate"));
-		FRDGBufferUAVRef AttachmentUAVForUpdate = GraphBuilder.CreateUAV(AttachmentBufferForUpdate);
-		AddUpdateAttachedPositionsPassInternal(GraphBuilder, ParticlesUAVLocal, AttachmentUAVForUpdate, Params);
+		TRefCountPtr<FRDGPooledBuffer> PersistentAttachmentBuffer = AdhesionManager->GetPersistentAttachmentBuffer();
+		int32 AttachmentBufferSize = AdhesionManager->GetAttachmentBufferSize();
+		if (PersistentAttachmentBuffer.IsValid() && AttachmentBufferSize >= CurrentParticleCount)
+		{
+			AttachmentBufferForUpdate = GraphBuilder.RegisterExternalBuffer(PersistentAttachmentBuffer, TEXT("GPUFluidAttachmentsUpdate"));
+			FRDGBufferUAVRef AttachmentUAVForUpdate = GraphBuilder.CreateUAV(AttachmentBufferForUpdate);
+			AdhesionManager->AddUpdateAttachedPositionsPass(GraphBuilder, ParticlesUAVLocal, AttachmentUAVForUpdate, CollisionManager.Get(), CurrentParticleCount, Params);
+		}
 	}
 
 	// Pass 1: Predict Positions
@@ -1128,8 +1144,11 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	AddPrimitiveCollisionPass(GraphBuilder, ParticlesUAVLocal, Params);
 
 	// Pass 6.7: Adhesion - Create attachments to bone colliders (GPU-based)
-	if (IsAdhesionEnabled() && bBoneTransformsValid)
+	if (AdhesionManager.IsValid() && AdhesionManager->IsAdhesionEnabled() && CollisionManager.IsValid() && CollisionManager->AreBoneTransformsValid())
 	{
+		TRefCountPtr<FRDGPooledBuffer>& PersistentAttachmentBuffer = AdhesionManager->AccessPersistentAttachmentBuffer();
+		int32 AttachmentBufferSize = AdhesionManager->GetAttachmentBufferSize();
+
 		// Check if we need to create or resize attachment buffer
 		const bool bNeedNewBuffer = !PersistentAttachmentBuffer.IsValid() || AttachmentBufferSize < CurrentParticleCount;
 
@@ -1169,7 +1188,7 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 			}
 
 			// Update tracked size
-			AttachmentBufferSize = CurrentParticleCount;
+			AdhesionManager->SetAttachmentBufferSize(CurrentParticleCount);
 		}
 		else
 		{
@@ -1177,7 +1196,7 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		}
 		FRDGBufferUAVRef AttachmentUAV = GraphBuilder.CreateUAV(AttachmentBuffer);
 
-		AddAdhesionPass(GraphBuilder, ParticlesUAVLocal, AttachmentUAV, Params);
+		AdhesionManager->AddAdhesionPass(GraphBuilder, ParticlesUAVLocal, AttachmentUAV, CollisionManager.Get(), CurrentParticleCount, Params);
 
 		// Extract attachment buffer for next frame
 		GraphBuilder.QueueBufferExtraction(
@@ -1201,15 +1220,22 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		NeighborListSRVLocal, NeighborCountsSRVLocal, Params);
 
 	// Pass 8.6: Apply Stack Pressure (weight transfer from stacked attached particles)
-	if (Params.StackPressureScale > 0.0f && IsAdhesionEnabled() && PersistentAttachmentBuffer.IsValid())
+	if (Params.StackPressureScale > 0.0f && AdhesionManager.IsValid() && AdhesionManager->IsAdhesionEnabled())
 	{
-		FRDGBufferRef AttachmentBufferForStackPressure = GraphBuilder.RegisterExternalBuffer(PersistentAttachmentBuffer, TEXT("GPUFluidAttachmentsStackPressure"));
-		FRDGBufferSRVRef AttachmentSRVForStackPressure = GraphBuilder.CreateSRV(AttachmentBufferForStackPressure);
-		AddStackPressurePass(GraphBuilder, ParticlesUAVLocal, AttachmentSRVForStackPressure, CellCountsSRVLocal, ParticleIndicesSRVLocal, Params);
+		TRefCountPtr<FRDGPooledBuffer> PersistentAttachmentBuffer = AdhesionManager->GetPersistentAttachmentBuffer();
+		if (PersistentAttachmentBuffer.IsValid())
+		{
+			FRDGBufferRef AttachmentBufferForStackPressure = GraphBuilder.RegisterExternalBuffer(PersistentAttachmentBuffer, TEXT("GPUFluidAttachmentsStackPressure"));
+			FRDGBufferSRVRef AttachmentSRVForStackPressure = GraphBuilder.CreateSRV(AttachmentBufferForStackPressure);
+			AdhesionManager->AddStackPressurePass(GraphBuilder, ParticlesUAVLocal, AttachmentSRVForStackPressure, CellCountsSRVLocal, ParticleIndicesSRVLocal, CollisionManager.Get(), CurrentParticleCount, Params);
+		}
 	}
 
 	// Pass 9: Clear just-detached flag at end of frame
-	AddClearDetachedFlagPass(GraphBuilder, ParticlesUAVLocal);
+	if (AdhesionManager.IsValid() && AdhesionManager->IsAdhesionEnabled())
+	{
+		AdhesionManager->AddClearDetachedFlagPass(GraphBuilder, ParticlesUAVLocal, CurrentParticleCount);
+	}
 
 	// Pass 9.5: Boundary Adhesion (Flex-style adhesion from mesh surface particles)
 	if (IsBoundaryAdhesionEnabled())
@@ -1253,10 +1279,11 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 
 			// Pass Attachment buffer for attached particle anisotropy
 			// Always create a valid SRV (dummy if adhesion disabled) to satisfy shader requirements
-			if (IsAdhesionEnabled() && PersistentAttachmentBuffer.IsValid())
+			TRefCountPtr<FRDGPooledBuffer> AttachmentBufferForAniso = AdhesionManager.IsValid() ? AdhesionManager->GetPersistentAttachmentBuffer() : nullptr;
+			if (AdhesionManager.IsValid() && AdhesionManager->IsAdhesionEnabled() && AttachmentBufferForAniso.IsValid())
 			{
 				FRDGBufferRef AttachmentBufferForAnisotropy = GraphBuilder.RegisterExternalBuffer(
-					PersistentAttachmentBuffer, TEXT("GPUFluidAttachmentsAnisotropy"));
+					AttachmentBufferForAniso, TEXT("GPUFluidAttachmentsAnisotropy"));
 				AnisotropyParams.AttachmentsSRV = GraphBuilder.CreateSRV(AttachmentBufferForAnisotropy);
 			}
 			else
