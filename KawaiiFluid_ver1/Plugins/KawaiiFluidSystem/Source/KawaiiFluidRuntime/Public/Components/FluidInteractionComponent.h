@@ -556,4 +556,24 @@ private:
 	/** 삼각형 표면 샘플링 */
 	void SampleTriangleSurface(const FVector& V0, const FVector& V1, const FVector& V2,
 	                           float Spacing, TArray<FVector>& OutPoints);
+
+	//=============================================================================
+	// Physics Asset/Simple Collision 기반 표면 샘플링
+	//=============================================================================
+
+	/** Sphere 콜라이더 표면 샘플링 */
+	void SampleSphereSurface(const struct FKSphereElem& Sphere, int32 BoneIndex, const FTransform& LocalTransform);
+
+	/** Capsule(Sphyl) 콜라이더 표면 샘플링 */
+	void SampleCapsuleSurface(const struct FKSphylElem& Capsule, int32 BoneIndex);
+
+	/** Box 콜라이더 표면 샘플링 */
+	void SampleBoxSurface(const struct FKBoxElem& Box, int32 BoneIndex);
+
+	/** 반구 표면 샘플링 (캡슐 상/하단용) */
+	void SampleHemisphere(const FTransform& Transform, float Radius, float ZOffset,
+	                      int32 ZDirection, int32 BoneIndex, int32 NumSamples);
+
+	/** AggGeom에서 모든 프리미티브 샘플링 */
+	void SampleAggGeomSurfaces(const struct FKAggregateGeom& AggGeom, int32 BoneIndex);
 };
