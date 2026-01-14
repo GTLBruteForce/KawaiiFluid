@@ -141,7 +141,7 @@ public:
 	 * When enabled, creates sphere instances at particle positions for shadow casting.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Shadow|HISM")
-	bool bEnableVSMIntegration = true;
+	bool bEnableVSMIntegration = false;
 
 	/**
 	 * @brief Radius of each shadow sphere instance (in world units).

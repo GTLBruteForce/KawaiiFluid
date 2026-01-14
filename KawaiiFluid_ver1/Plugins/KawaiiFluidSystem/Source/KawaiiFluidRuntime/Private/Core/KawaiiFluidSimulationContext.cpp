@@ -577,7 +577,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 			if (bUseGPUAdhesion && CollisionPrimitives.BoneTransforms.Num() > 0)
 			{
 				FGPUAdhesionParams AdhesionParams;
-				AdhesionParams.bEnableAdhesion = 1;
+				AdhesionParams.bEnableAdhesion = 0;
 				AdhesionParams.AdhesionStrength = Preset->AdhesionStrength;
 				AdhesionParams.AdhesionRadius = Preset->AdhesionRadius;
 				AdhesionParams.ColliderContactOffset = Preset->AdhesionContactOffset;
