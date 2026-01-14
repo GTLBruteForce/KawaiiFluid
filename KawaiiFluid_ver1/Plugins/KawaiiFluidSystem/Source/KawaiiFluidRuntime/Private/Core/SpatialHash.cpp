@@ -1,4 +1,6 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
+// CPU-side Spatial Hash Implementation
+// See SpatialHash.h for documentation.
 
 #include "Core/SpatialHash.h"
 

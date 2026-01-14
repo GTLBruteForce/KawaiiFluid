@@ -4,7 +4,7 @@
 #include "GPU/GPUFluidSimulator.h"
 #include "GPU/GPUFluidSimulatorShaders.h"
 #include "GPU/Managers/GPUBoundarySkinningManager.h"
-#include "GPU/Managers/GPUSpatialHashManager.h"
+#include "GPU/Managers/GPUZOrderSortManager.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 
@@ -96,9 +96,9 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 
 	// Get GridResolutionPreset for shader permutation (Z-Order neighbor search)
 	EGridResolutionPreset GridPreset = EGridResolutionPreset::Medium;
-	if (SpatialHashManager.IsValid())
+	if (ZOrderSortManager.IsValid())
 	{
-		GridPreset = SpatialHashManager->GetGridResolutionPreset();
+		GridPreset = ZOrderSortManager->GetGridResolutionPreset();
 	}
 
 	// Create permutation vector and get shader
@@ -114,8 +114,8 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 	// Z-Order sorted mode (new)
 	PassParameters->CellStart = InCellStartSRV;
 	PassParameters->CellEnd = InCellEndSRV;
-	// Z-Order sorting is always enabled when SpatialHashManager is valid
-	PassParameters->bUseZOrderSorting = SpatialHashManager.IsValid() ? 1 : 0;
+	// Z-Order sorting is always enabled when ZOrderSortManager is valid
+	PassParameters->bUseZOrderSorting = ZOrderSortManager.IsValid() ? 1 : 0;
 	// Morton bounds for Z-Order cell ID calculation (must match FluidMortonCode.usf)
 	PassParameters->MortonBoundsMin = SimulationBoundsMin;
 	PassParameters->MortonBoundsExtent = SimulationBoundsMax - SimulationBoundsMin;

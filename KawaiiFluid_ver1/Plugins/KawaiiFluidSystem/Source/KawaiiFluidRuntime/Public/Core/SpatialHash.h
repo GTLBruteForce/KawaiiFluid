@@ -1,12 +1,23 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
+//
+// CPU-side Spatial Hash Implementation
+// =====================================
+// This is a genuine spatial hash implementation using TMap for CPU-side neighbor lookup.
+// Unlike the GPU implementation (which uses Z-Order Morton code sorting via FGPUZOrderSortManager),
+// this CPU version uses a traditional hash-table approach.
+//
+// For GPU-based neighbor search, see:
+// - GPU/Managers/GPUZOrderSortManager.h (Z-Order Morton code sorting)
+// - Shaders/Private/FluidMortonUtils.ush (Morton code functions)
 
 #pragma once
 
 #include "CoreMinimal.h"
 
 /**
- * 공간 해싱 클래스
+ * CPU 공간 해싱 클래스
  * 이웃 입자 탐색을 O(n²) -> O(n)으로 최적화
+ * GPU 시뮬레이션에서는 Z-Order Morton code sorting을 사용합니다.
  */
 class KAWAIIFLUIDRUNTIME_API FSpatialHash
 {

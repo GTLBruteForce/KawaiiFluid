@@ -1,4 +1,18 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
+//
+// LEGACY: Traditional Spatial Hash Shaders
+// =========================================
+// These shaders implement traditional hash-table based spatial partitioning.
+// They are kept for backward compatibility (bUseZOrderSorting=false path).
+//
+// The RECOMMENDED approach is Z-Order (Morton Code) sorting via FGPUZOrderSortManager,
+// which provides cache-coherent memory access and no hash collisions.
+//
+// This file is used when:
+// - FGPUZOrderSortManager is not available
+// - Legacy fallback mode is explicitly enabled
+//
+// For new features, prefer using Z-Order sorting defined in GPUZOrderSortManager.h
 
 #pragma once
 
@@ -8,7 +22,7 @@
 #include "RenderGraphDefinitions.h"
 
 //=============================================================================
-// Spatial Hash Constants (must match shader defines)
+// LEGACY: Spatial Hash Constants (must match shader defines)
 //=============================================================================
 
 static constexpr uint32 SPATIAL_HASH_SIZE = 65536;          // 2^16 cells

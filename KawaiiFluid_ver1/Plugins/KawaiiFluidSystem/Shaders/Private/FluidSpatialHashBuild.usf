@@ -1,5 +1,15 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
-// Compute Shader for building GPU Spatial Hash Grid
+//
+// LEGACY: Traditional Spatial Hash Build Compute Shaders
+// ======================================================
+// These shaders build traditional hash-table based spatial partitioning.
+// Kept for backward compatibility (bUseZOrderSorting=false path).
+//
+// The RECOMMENDED approach is Z-Order (Morton Code) sorting via:
+// - FluidMortonCode.usf (Morton code computation)
+// - GPUZOrderSortManager (C++ orchestration)
+//
+// See FluidSpatialHash.ush for more details.
 
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"

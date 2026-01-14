@@ -1,10 +1,23 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
-// GPU Spatial Hash for physics simulation (density, pressure, viscosity)
+//
+// LEGACY: Traditional Spatial Hash Functions
+// ==========================================
+// This file implements traditional hash-table based spatial partitioning.
+// It is kept for backward compatibility (bUseZOrderSorting=false path).
+//
+// The RECOMMENDED approach is Z-Order (Morton Code) sorting via FluidMortonUtils.ush,
+// which provides cache-coherent memory access and no hash collisions.
+//
+// This file is used when:
+// - Z-Order sorting is disabled
+// - Legacy fallback mode is explicitly enabled
+//
+// For new features, prefer using Morton code functions in FluidMortonUtils.ush
 
 #pragma once
 
 //=============================================================================
-// Spatial Hash Configuration
+// LEGACY: Spatial Hash Configuration
 //=============================================================================
 
 // Hash table size (must be power of 2 for fast modulo)

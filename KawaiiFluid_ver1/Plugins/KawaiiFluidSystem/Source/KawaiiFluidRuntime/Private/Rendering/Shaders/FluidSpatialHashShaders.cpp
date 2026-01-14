@@ -1,4 +1,6 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
+// LEGACY: Traditional Spatial Hash Shader Implementations
+// See FluidSpatialHashShaders.h for details on legacy vs. Z-Order approach.
 
 #include "Rendering/Shaders/FluidSpatialHashShaders.h"
 #include "RenderGraphBuilder.h"

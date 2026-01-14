@@ -10,7 +10,7 @@
 #include "GPU/Managers/GPUSpawnManager.h"
 #include "GPU/Managers/GPUStreamCompactionManager.h"
 #include "GPU/Managers/GPUCollisionManager.h"
-#include "GPU/Managers/GPUSpatialHashManager.h"
+#include "GPU/Managers/GPUZOrderSortManager.h"
 #include "GPU/Managers/GPUBoundarySkinningManager.h"
 #include "GPU/Managers/GPUAdhesionManager.h"
 #include "Core/FluidAnisotropy.h"
@@ -199,10 +199,10 @@ public:
 	{
 		SimulationBoundsMin = BoundsMin;
 		SimulationBoundsMax = BoundsMax;
-		// Also update SpatialHashManager
-		if (SpatialHashManager.IsValid())
+		// Also update ZOrderSortManager
+		if (ZOrderSortManager.IsValid())
 		{
-			SpatialHashManager->SetSimulationBounds(BoundsMin, BoundsMax);
+			ZOrderSortManager->SetSimulationBounds(BoundsMin, BoundsMax);
 		}
 	}
 
@@ -219,9 +219,9 @@ public:
 	 */
 	void SetGridResolutionPreset(EGridResolutionPreset Preset)
 	{
-		if (SpatialHashManager.IsValid())
+		if (ZOrderSortManager.IsValid())
 		{
-			SpatialHashManager->SetGridResolutionPreset(Preset);
+			ZOrderSortManager->SetGridResolutionPreset(Preset);
 		}
 	}
 
@@ -703,10 +703,10 @@ private:
 		const FGPUFluidSimulationParams& Params);
 
 	//=============================================================================
-	// Z-Order (Morton Code) Sorting Pipeline (Delegated to FGPUSpatialHashManager)
+	// Z-Order (Morton Code) Sorting Pipeline (Delegated to FGPUZOrderSortManager)
 	//=============================================================================
 
-	/** Execute Z-Order sorting pipeline (delegates to SpatialHashManager) */
+	/** Execute Z-Order sorting pipeline (delegates to ZOrderSortManager) */
 	FRDGBufferRef ExecuteZOrderSortingPipeline(
 		FRDGBuilder& GraphBuilder,
 		FRDGBufferRef InParticleBuffer,
@@ -851,11 +851,11 @@ private:
 	TUniquePtr<FGPUCollisionManager> CollisionManager;
 
 	//=============================================================================
-	// Spatial Hash (Delegated to FGPUSpatialHashManager)
+	// Z-Order Sorting (Delegated to FGPUZOrderSortManager)
 	// Z-Order Morton code sorting for cache-coherent neighbor search
 	//=============================================================================
 
-	TUniquePtr<FGPUSpatialHashManager> SpatialHashManager;
+	TUniquePtr<FGPUZOrderSortManager> ZOrderSortManager;
 
 	//=============================================================================
 	// Boundary Skinning (Delegated to FGPUBoundarySkinningManager)

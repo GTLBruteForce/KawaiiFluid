@@ -3,7 +3,7 @@
 #include "GPU/GPUFluidSimulator.h"
 #include "GPU/GPUFluidSimulatorShaders.h"
 #include "GPU/FluidAnisotropyComputeShader.h"
-#include "GPU/Managers/GPUSpatialHashManager.h"
+#include "GPU/Managers/GPUZOrderSortManager.h"
 #include "GPU/Managers/GPUBoundarySkinningManager.h"
 #include "Core/FluidParticle.h"
 #include "Core/KawaiiFluidSimulationStats.h"
@@ -96,9 +96,9 @@ void FGPUFluidSimulator::Initialize(int32 InMaxParticleCount)
 	CollisionManager = MakeUnique<FGPUCollisionManager>();
 	CollisionManager->Initialize();
 
-	// Initialize SpatialHashManager
-	SpatialHashManager = MakeUnique<FGPUSpatialHashManager>();
-	SpatialHashManager->Initialize();
+	// Initialize ZOrderSortManager
+	ZOrderSortManager = MakeUnique<FGPUZOrderSortManager>();
+	ZOrderSortManager->Initialize();
 
 	// Initialize BoundarySkinningManager
 	BoundarySkinningManager = MakeUnique<FGPUBoundarySkinningManager>();
@@ -148,11 +148,11 @@ void FGPUFluidSimulator::Release()
 		CollisionManager.Reset();
 	}
 
-	// Release SpatialHashManager
-	if (SpatialHashManager.IsValid())
+	// Release ZOrderSortManager
+	if (ZOrderSortManager.IsValid())
 	{
-		SpatialHashManager->Release();
-		SpatialHashManager.Reset();
+		ZOrderSortManager->Release();
+		ZOrderSortManager.Reset();
 	}
 
 	// Release BoundarySkinningManager
@@ -786,7 +786,7 @@ FGPUFluidSimulator::FSimulationSpatialData FGPUFluidSimulator::BuildSpatialStruc
 	AddExtractPositionsPass(GraphBuilder, OutParticlesSRV, OutPositionsUAV, CurrentParticleCount, true);
 
 	// Pass 3: Spatial Data Structure
-	if (SpatialHashManager.IsValid())
+	if (ZOrderSortManager.IsValid())
 	{
 		// Z-Order Sorting
 		FRDGBufferUAVRef CellStartUAVLocal = nullptr;
@@ -806,7 +806,7 @@ FGPUFluidSimulator::FSimulationSpatialData FGPUFluidSimulator::BuildSpatialStruc
 		// Re-extract positions from sorted particles
 		AddExtractPositionsPass(GraphBuilder, OutParticlesSRV, OutPositionsUAV, CurrentParticleCount, true);
 
-		// Also build hash table (Legacy/Compatibility)
+		// LEGACY: Also build hash table (kept for backward compatibility with bUseZOrderSorting=false path)
 		if (!PersistentCellCountsBuffer.IsValid())
 		{
 			SpatialData.CellCountsBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_SPATIAL_HASH_SIZE), TEXT("SpatialHash.CellCounts"));
@@ -848,7 +848,7 @@ FGPUFluidSimulator::FSimulationSpatialData FGPUFluidSimulator::BuildSpatialStruc
 	}
 	else
 	{
-		// Traditional Hash Table (Fallback)
+		// LEGACY: Traditional Hash Table (Fallback when ZOrderSortManager is not available)
 		if (!PersistentCellCountsBuffer.IsValid())
 		{
 			SpatialData.CellCountsBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_SPATIAL_HASH_SIZE), TEXT("SpatialHash.CellCounts"));
@@ -1121,8 +1121,8 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 				AnisotropyParams.CellSize = Params.CellSize;
 
 				// Morton-sorted spatial lookup (cache-friendly sequential access)
-				AnisotropyParams.bUseZOrderSorting = SpatialHashManager.IsValid();
-				if (SpatialHashManager.IsValid())
+				AnisotropyParams.bUseZOrderSorting = ZOrderSortManager.IsValid();
+				if (ZOrderSortManager.IsValid())
 				{
 					AnisotropyParams.CellStartSRV = SpatialData.CellStartSRV;
 					AnisotropyParams.CellEndSRV = SpatialData.CellEndSRV;
@@ -1251,7 +1251,7 @@ void FGPUFluidSimulator::AddBoundarySkinningPass(FRDGBuilder& GraphBuilder, cons
 }
 
 //=============================================================================
-// Z-Order Sorting (Delegated to FGPUSpatialHashManager)
+// Z-Order Sorting (Delegated to FGPUZOrderSortManager)
 //=============================================================================
 
 FRDGBufferRef FGPUFluidSimulator::ExecuteZOrderSortingPipeline(
@@ -1260,8 +1260,8 @@ FRDGBufferRef FGPUFluidSimulator::ExecuteZOrderSortingPipeline(
 	FRDGBufferUAVRef& OutCellEndUAV, FRDGBufferSRVRef& OutCellEndSRV,
 	const FGPUFluidSimulationParams& Params)
 {
-	if (!SpatialHashManager.IsValid()) { return InParticleBuffer; }
-	return SpatialHashManager->ExecuteZOrderSortingPipeline(GraphBuilder, InParticleBuffer,
+	if (!ZOrderSortManager.IsValid()) { return InParticleBuffer; }
+	return ZOrderSortManager->ExecuteZOrderSortingPipeline(GraphBuilder, InParticleBuffer,
 		OutCellStartUAV, OutCellStartSRV, OutCellEndUAV, OutCellEndSRV, CurrentParticleCount, Params);
 }
 
