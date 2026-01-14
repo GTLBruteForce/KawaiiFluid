@@ -94,9 +94,12 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 {
 	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 
+	// Check if Z-Order sorting is enabled (both manager valid AND flag enabled)
+	const bool bUseZOrderSorting = ZOrderSortManager.IsValid() && ZOrderSortManager->IsZOrderSortingEnabled();
+
 	// Get GridResolutionPreset for shader permutation (Z-Order neighbor search)
 	EGridResolutionPreset GridPreset = EGridResolutionPreset::Medium;
-	if (ZOrderSortManager.IsValid())
+	if (bUseZOrderSorting)
 	{
 		GridPreset = ZOrderSortManager->GetGridResolutionPreset();
 	}
@@ -114,8 +117,8 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 	// Z-Order sorted mode (new)
 	PassParameters->CellStart = InCellStartSRV;
 	PassParameters->CellEnd = InCellEndSRV;
-	// Z-Order sorting is always enabled when ZOrderSortManager is valid
-	PassParameters->bUseZOrderSorting = ZOrderSortManager.IsValid() ? 1 : 0;
+	// Use Z-Order sorting only when manager is valid AND enabled
+	PassParameters->bUseZOrderSorting = bUseZOrderSorting ? 1 : 0;
 	// Morton bounds for Z-Order cell ID calculation (must match FluidMortonCode.usf)
 	PassParameters->MortonBoundsMin = SimulationBoundsMin;
 	PassParameters->MortonBoundsExtent = SimulationBoundsMax - SimulationBoundsMin;

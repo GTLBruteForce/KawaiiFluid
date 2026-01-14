@@ -740,12 +740,15 @@ FRDGBufferRef FGPUFluidSimulator::PrepareParticleBuffer(
 		SpawnManager->ClearActiveRequests();
 	}
 
-	// Async Readback
+	// Async Readback for despawn
+	// ProcessAsyncReadback() returns:
+	//   > 0: actual dead particle count from GPU readback
+	//   -1:  readback not ready yet (must NOT be treated as dead count!)
 	if (SpawnManager.IsValid())
 	{
 		int32 DeadCount = SpawnManager->ProcessAsyncReadback();
-		if (DeadCount != 0)
-		{ //이 새끼가 문제임
+		if (DeadCount > 0)  // Only process when we have valid dead count (not -1)
+		{
 			CurrentParticleCount -= DeadCount;
 			PreviousParticleCount = CurrentParticleCount;
 		}
@@ -786,7 +789,9 @@ FGPUFluidSimulator::FSimulationSpatialData FGPUFluidSimulator::BuildSpatialStruc
 	AddExtractPositionsPass(GraphBuilder, OutParticlesSRV, OutPositionsUAV, CurrentParticleCount, true);
 
 	// Pass 3: Spatial Data Structure
-	if (ZOrderSortManager.IsValid())
+	// Check both manager validity AND enabled flag for Z-Order sorting
+	const bool bUseZOrderSorting = ZOrderSortManager.IsValid() && ZOrderSortManager->IsZOrderSortingEnabled();
+	if (bUseZOrderSorting)
 	{
 		// Z-Order Sorting
 		FRDGBufferUAVRef CellStartUAVLocal = nullptr;
@@ -1121,8 +1126,9 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 				AnisotropyParams.CellSize = Params.CellSize;
 
 				// Morton-sorted spatial lookup (cache-friendly sequential access)
-				AnisotropyParams.bUseZOrderSorting = ZOrderSortManager.IsValid();
-				if (ZOrderSortManager.IsValid())
+				const bool bAnisotropyUseZOrder = ZOrderSortManager.IsValid() && ZOrderSortManager->IsZOrderSortingEnabled();
+				AnisotropyParams.bUseZOrderSorting = bAnisotropyUseZOrder;
+				if (bAnisotropyUseZOrder)
 				{
 					AnisotropyParams.CellStartSRV = SpatialData.CellStartSRV;
 					AnisotropyParams.CellEndSRV = SpatialData.CellEndSRV;
@@ -1260,7 +1266,11 @@ FRDGBufferRef FGPUFluidSimulator::ExecuteZOrderSortingPipeline(
 	FRDGBufferUAVRef& OutCellEndUAV, FRDGBufferSRVRef& OutCellEndSRV,
 	const FGPUFluidSimulationParams& Params)
 {
-	if (!ZOrderSortManager.IsValid()) { return InParticleBuffer; }
+	// Check both manager validity AND enabled flag
+	if (!ZOrderSortManager.IsValid() || !ZOrderSortManager->IsZOrderSortingEnabled())
+	{
+		return InParticleBuffer;
+	}
 	return ZOrderSortManager->ExecuteZOrderSortingPipeline(GraphBuilder, InParticleBuffer,
 		OutCellStartUAV, OutCellStartSRV, OutCellEndUAV, OutCellEndSRV, CurrentParticleCount, Params);
 }

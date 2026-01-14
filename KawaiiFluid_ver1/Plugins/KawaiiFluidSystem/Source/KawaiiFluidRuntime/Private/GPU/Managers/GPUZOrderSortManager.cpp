@@ -15,7 +15,6 @@ DEFINE_LOG_CATEGORY(LogGPUZOrderSort);
 
 FGPUZOrderSortManager::FGPUZOrderSortManager()
 	: bIsInitialized(false)
-	, bUseZOrderSorting(true)
 	, ZOrderBufferParticleCapacity(0)
 {
 }
