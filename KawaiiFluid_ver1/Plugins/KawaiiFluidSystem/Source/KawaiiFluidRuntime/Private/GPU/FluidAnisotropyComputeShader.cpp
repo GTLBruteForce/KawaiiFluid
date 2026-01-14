@@ -39,7 +39,11 @@ void FFluidAnisotropyPassBuilder::AddAnisotropyPass(
 	}
 
 	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-	TShaderMapRef<FFluidAnisotropyCS> ComputeShader(GlobalShaderMap);
+
+	// Create permutation vector based on grid resolution preset
+	FFluidAnisotropyCS::FPermutationDomain PermutationVector;
+	PermutationVector.Set<FGridResolutionDim>(GridResolutionPermutation::FromPreset(Params.GridResolutionPreset));
+	TShaderMapRef<FFluidAnisotropyCS> ComputeShader(GlobalShaderMap, PermutationVector);
 
 	FFluidAnisotropyCS::FParameters* PassParameters =
 		GraphBuilder.AllocParameters<FFluidAnisotropyCS::FParameters>();
@@ -155,8 +159,8 @@ void FFluidAnisotropyPassBuilder::AddAnisotropyPass(
 
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
-		RDG_EVENT_NAME("FluidAnisotropy(%d particles, mode=%d)",
-			Params.ParticleCount, static_cast<int32>(Params.Mode)),
+		RDG_EVENT_NAME("FluidAnisotropy(%d,Preset=%d,mode=%d)",
+			Params.ParticleCount, static_cast<int32>(Params.GridResolutionPreset), static_cast<int32>(Params.Mode)),
 		ComputeShader,
 		PassParameters,
 		FIntVector(NumGroups, 1, 1));

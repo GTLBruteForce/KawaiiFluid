@@ -8,6 +8,7 @@
 #include "RenderGraphResources.h"
 #include "RenderGraphUtils.h"
 #include "Core/FluidAnisotropy.h"
+#include "GPU/GPUFluidSimulatorShaders.h"  // For FGridResolutionDim, GridResolutionPermutation
 
 // Forward declaration
 struct FGPUFluidParticle;
@@ -61,6 +62,9 @@ struct KAWAIIFLUIDRUNTIME_API FAnisotropyComputeParams
 	bool bUseZOrderSorting = false;		// true = use Morton-sorted CellStart/End, false = legacy hash
 	FVector3f MortonBoundsMin = FVector3f::ZeroVector;	// Grid origin for Morton code calculation
 
+	// Grid resolution preset for shader permutation selection
+	EGridResolutionPreset GridResolutionPreset = EGridResolutionPreset::Medium;
+
 	// Attached particle anisotropy params
 	float AttachedFlattenScale = 0.3f;	// How much to flatten attached particles (0.3 = 30% of original height)
 	float AttachedStretchScale = 1.5f;	// How much to stretch perpendicular to normal
@@ -89,6 +93,9 @@ class FFluidAnisotropyCS : public FGlobalShader
 public:
 	DECLARE_GLOBAL_SHADER(FFluidAnisotropyCS);
 	SHADER_USE_PARAMETER_STRUCT(FFluidAnisotropyCS, FGlobalShader);
+
+	// Permutation domain for grid resolution (must match physics solver)
+	using FPermutationDomain = TShaderPermutationDomain<FGridResolutionDim>;
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		// Input: Physics particle buffer (FGPUFluidParticle)
@@ -154,6 +161,15 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE"), ThreadGroupSize);
 		OutEnvironment.SetDefine(TEXT("SPATIAL_HASH_SIZE"), ANISOTROPY_SPATIAL_HASH_SIZE);
 		OutEnvironment.SetDefine(TEXT("MAX_PARTICLES_PER_CELL"), ANISOTROPY_MAX_PARTICLES_PER_CELL);
+
+		// Get grid resolution from permutation for Morton code calculation
+		const FPermutationDomain PermutationVector(Parameters.PermutationId);
+		const int32 GridPreset = PermutationVector.Get<FGridResolutionDim>();
+		const int32 AxisBits = GridResolutionPermutation::GetAxisBits(GridPreset);
+		const int32 MaxCells = GridResolutionPermutation::GetMaxCells(GridPreset);
+
+		OutEnvironment.SetDefine(TEXT("MORTON_GRID_AXIS_BITS"), AxisBits);
+		OutEnvironment.SetDefine(TEXT("MAX_CELLS"), MaxCells);
 	}
 };
 

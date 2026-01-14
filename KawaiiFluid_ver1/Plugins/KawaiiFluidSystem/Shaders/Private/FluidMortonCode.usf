@@ -4,17 +4,15 @@
 // Morton Code encodes 3D spatial coordinates into a 1D integer that preserves spatial locality.
 // Particles sorted by Morton Code will have spatially close particles also close in memory.
 //
-// Configuration:
-//   MORTON_GRID_AXIS_BITS = 7 (defined by C++ GPUFluidSimulatorShaders.h)
-//   Grid Resolution = 2^7 = 128 per axis
-//   Morton Code = 21 bits (7 × 3)
-//   Max Cells = 128^3 = 2,097,152
-//
-// This matches the Preset's GridAxisBits and provides optimal cell size = SmoothingRadius.
+// Configuration (set via C++ shader permutation):
+//   - Small:  6 bits per axis = 64³ cells
+//   - Medium: 7 bits per axis = 128³ cells
+//   - Large:  8 bits per axis = 256³ cells
 
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"
 #include "FluidGPUPhysics.ush"
+#include "FluidMortonUtils.ush"  // Unified Morton code functions
 
 //=============================================================================
 // Shader Parameters
@@ -32,127 +30,7 @@ float3 BoundsExtent;   // Simulation bounds extent (Max - Min)
 float CellSize;        // Grid cell size (= SmoothingRadius)
 
 //=============================================================================
-// Z-Order Sorting Configuration
-// CRITICAL: Must match GPUFluidSimulatorShaders.h and FluidCellStartEnd.usf
-//
-// Default: 7 bits per axis → 21-bit Morton code → 2M cells
-// The Morton code IS the Cell ID (no truncation needed)
-//=============================================================================
-#ifndef MORTON_GRID_AXIS_BITS
-#define MORTON_GRID_AXIS_BITS 7  // 7 bits per axis (from GPUFluidSimulatorShaders.h)
-#endif
-
-#define MORTON_GRID_SIZE (1 << MORTON_GRID_AXIS_BITS)  // 128 (2^7)
-#define MORTON_MAX_VALUE (MORTON_GRID_SIZE - 1)        // 127 (7-bit max)
-#define MAX_CELLS (MORTON_GRID_SIZE * MORTON_GRID_SIZE * MORTON_GRID_SIZE)  // 2,097,152
-
-//=============================================================================
-// Morton Code Encoding Functions
-// Interleaves bits: x0y0z0 x1y1z1 x2y2z2 ...
-// Supports 6, 7, and 8-bit presets (Small, Medium, Large)
-//=============================================================================
-
-//-----------------------------------------------------------------------------
-// 6-bit Morton Code (Small preset: 64³ cells)
-// Each coordinate is 0-63, Morton code is 18 bits
-//-----------------------------------------------------------------------------
-uint ExpandBits6(uint v)
-{
-    v = v & 0x3Fu;  // 63 max (6 bits)
-    v = (v | (v << 8)) & 0x0000F00Fu;
-    v = (v | (v << 4)) & 0x000C30C3u;
-    v = (v | (v << 2)) & 0x00249249u;
-    return v;
-}
-
-uint Morton3D_6bit(uint x, uint y, uint z)
-{
-    x = min(x, 63u);
-    y = min(y, 63u);
-    z = min(z, 63u);
-    return (ExpandBits6(z) << 2) | (ExpandBits6(y) << 1) | ExpandBits6(x);
-}
-
-//-----------------------------------------------------------------------------
-// 7-bit Morton Code (Medium preset: 128³ cells)
-// Each coordinate is 0-127, Morton code is 21 bits
-//-----------------------------------------------------------------------------
-uint ExpandBits7(uint v)
-{
-    v = v & 0x7Fu;  // 127 max (7 bits)
-    v = (v | (v << 8)) & 0x0000F00Fu;
-    v = (v | (v << 4)) & 0x000C30C3u;
-    v = (v | (v << 2)) & 0x00249249u;
-    return v;
-}
-
-uint Morton3D_7bit(uint x, uint y, uint z)
-{
-    x = min(x, 127u);
-    y = min(y, 127u);
-    z = min(z, 127u);
-    return (ExpandBits7(z) << 2) | (ExpandBits7(y) << 1) | ExpandBits7(x);
-}
-
-//-----------------------------------------------------------------------------
-// 8-bit Morton Code (Large preset: 256³ cells)
-// Each coordinate is 0-255, Morton code is 24 bits
-//-----------------------------------------------------------------------------
-uint ExpandBits8(uint v)
-{
-    v = v & 0xFFu;  // 255 max (8 bits)
-    v = (v | (v << 16)) & 0x030000FFu;
-    v = (v | (v << 8)) & 0x0300F00Fu;
-    v = (v | (v << 4)) & 0x030C30C3u;
-    v = (v | (v << 2)) & 0x09249249u;
-    return v;
-}
-
-uint Morton3D_8bit(uint x, uint y, uint z)
-{
-    x = min(x, 255u);
-    y = min(y, 255u);
-    z = min(z, 255u);
-    return (ExpandBits8(z) << 2) | (ExpandBits8(y) << 1) | ExpandBits8(x);
-}
-
-//-----------------------------------------------------------------------------
-// Generic Morton3D function - selects based on MORTON_GRID_AXIS_BITS
-//-----------------------------------------------------------------------------
-uint Morton3D(uint x, uint y, uint z)
-{
-#if MORTON_GRID_AXIS_BITS == 6
-    return Morton3D_6bit(x, y, z);
-#elif MORTON_GRID_AXIS_BITS == 8
-    return Morton3D_8bit(x, y, z);
-#else  // Default to 7-bit (Medium)
-    return Morton3D_7bit(x, y, z);
-#endif
-}
-
-// Legacy 10-bit version (for reference, not used)
-uint ExpandBits10(uint v)
-{
-    v = (v * 0x00010001u) & 0xFF0000FFu;
-    v = (v * 0x00000101u) & 0x0F00F00Fu;
-    v = (v * 0x00000011u) & 0xC30C30C3u;
-    v = (v * 0x00000005u) & 0x49249249u;
-    return v;
-}
-
-uint Morton3D_10bit(uint x, uint y, uint z)
-{
-    x = min(x, 1023u);
-    y = min(y, 1023u);
-    z = min(z, 1023u);
-    uint xx = ExpandBits10(x);
-    uint yy = ExpandBits10(y);
-    uint zz = ExpandBits10(z);
-    return (zz << 2) | (yy << 1) | xx;
-}
-
-//=============================================================================
-// Alternative: Cell-based Morton Code
+// Cell-based Morton Code Helpers
 // Uses cell coordinates instead of normalized positions
 // Better for spatial hash grid alignment
 //=============================================================================
@@ -172,7 +50,7 @@ uint Morton3DFromCell(int3 CellCoord, int3 GridMin)
     uint3 uoffset = uint3(max(offset, int3(0, 0, 0)));
     uoffset = min(uoffset, uint3(MORTON_MAX_VALUE, MORTON_MAX_VALUE, MORTON_MAX_VALUE));
 
-    // Use preset-specific Morton function
+    // Use preset-specific Morton function from FluidMortonUtils.ush
     return Morton3D(uoffset.x, uoffset.y, uoffset.z);
 }
 

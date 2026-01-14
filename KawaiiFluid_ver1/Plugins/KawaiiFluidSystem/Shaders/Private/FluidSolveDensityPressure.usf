@@ -12,6 +12,7 @@
 #include "/Engine/Private/Common.ush"
 #include "FluidGPUPhysics.ush"
 #include "FluidSpatialHash.ush"
+#include "FluidMortonUtils.ush"  // Unified Morton code functions
 
 //=============================================================================
 // Shader Parameters
@@ -71,103 +72,13 @@ int BoundaryParticleCount;
 int bUseBoundaryDensity;
 
 //=============================================================================
-// Z-Order Sorting Configuration (must match FluidMortonCode.usf and FluidCellStartEnd.usf)
-//
-// Configuration: 7 bits per axis → 21-bit Morton code = Cell ID
-//   - GridResolution = 128 (2^7)
-//   - MaxCells = GridResolution^3
-//   - Morton code = Cell ID (no truncation needed)
-//   - CellSize = SmoothingRadius (optimal for SPH)
+// Z-Order Cell ID Calculation (uses shader parameters)
+// Morton code functions are provided by FluidMortonUtils.ush
 //=============================================================================
-#define INVALID_INDEX 0xFFFFFFFF
-
-// Grid configuration (from C++ permutation via ModifyCompilationEnvironment)
-#ifndef MORTON_GRID_AXIS_BITS
-#define MORTON_GRID_AXIS_BITS 7  // Default: Medium preset
-#endif
-#ifndef MORTON_GRID_SIZE
-#define MORTON_GRID_SIZE (1 << MORTON_GRID_AXIS_BITS)
-#endif
-#define MORTON_MAX_VALUE (MORTON_GRID_SIZE - 1)
-#ifndef MAX_CELLS
-#define MAX_CELLS (MORTON_GRID_SIZE * MORTON_GRID_SIZE * MORTON_GRID_SIZE)
-#endif
-
-//=============================================================================
-// Morton Code Encoding Functions (for Z-Order cell lookup)
-// Supports 6, 7, and 8-bit presets (Small, Medium, Large)
-//=============================================================================
-
-// 6-bit Morton Code (Small preset: 64³ cells)
-uint MortonExpandBits6(uint v)
-{
-	v = v & 0x3Fu;  // 63 max (6 bits)
-	v = (v | (v << 8)) & 0x0000F00Fu;
-	v = (v | (v << 4)) & 0x000C30C3u;
-	v = (v | (v << 2)) & 0x00249249u;
-	return v;
-}
-
-uint Morton3D_6bit(uint x, uint y, uint z)
-{
-	x = min(x, 63u);
-	y = min(y, 63u);
-	z = min(z, 63u);
-	return (MortonExpandBits6(z) << 2) | (MortonExpandBits6(y) << 1) | MortonExpandBits6(x);
-}
-
-// 7-bit Morton Code (Medium preset: 128³ cells)
-uint MortonExpandBits7(uint v)
-{
-	v = v & 0x7Fu;  // 127 max (7 bits)
-	v = (v | (v << 8)) & 0x0000F00Fu;
-	v = (v | (v << 4)) & 0x000C30C3u;
-	v = (v | (v << 2)) & 0x00249249u;
-	return v;
-}
-
-uint Morton3D_7bit(uint x, uint y, uint z)
-{
-	x = min(x, 127u);
-	y = min(y, 127u);
-	z = min(z, 127u);
-	return (MortonExpandBits7(z) << 2) | (MortonExpandBits7(y) << 1) | MortonExpandBits7(x);
-}
-
-// 8-bit Morton Code (Large preset: 256³ cells)
-uint MortonExpandBits8(uint v)
-{
-	v = v & 0xFFu;  // 255 max (8 bits)
-	v = (v | (v << 16)) & 0x030000FFu;
-	v = (v | (v << 8)) & 0x0300F00Fu;
-	v = (v | (v << 4)) & 0x030C30C3u;
-	v = (v | (v << 2)) & 0x09249249u;
-	return v;
-}
-
-uint Morton3D_8bit(uint x, uint y, uint z)
-{
-	x = min(x, 255u);
-	y = min(y, 255u);
-	z = min(z, 255u);
-	return (MortonExpandBits8(z) << 2) | (MortonExpandBits8(y) << 1) | MortonExpandBits8(x);
-}
-
-// Generic Morton3D function - selects based on MORTON_GRID_AXIS_BITS
-uint Morton3D(uint x, uint y, uint z)
-{
-#if MORTON_GRID_AXIS_BITS == 6
-	return Morton3D_6bit(x, y, z);
-#elif MORTON_GRID_AXIS_BITS == 8
-	return Morton3D_8bit(x, y, z);
-#else  // Default to 7-bit (Medium)
-	return Morton3D_7bit(x, y, z);
-#endif
-}
 
 // Compute Morton-based cell ID from cell coordinates (integer)
-// IMPORTANT: This must match FluidMortonCode.usf's ComputeMortonCodesCellBasedCS
-// Both use cell coordinates relative to GridMin, NOT normalized positions!
+// This version uses shader parameters (MortonBoundsMin, CellSize) directly.
+// IMPORTANT: Must match FluidMortonCode.usf's ComputeMortonCodesCellBasedCS
 uint GetMortonCellIDFromCellCoord(int3 cellCoord)
 {
 	// Compute grid minimum cell (same as in FluidMortonCode.usf)
@@ -180,7 +91,7 @@ uint GetMortonCellIDFromCellCoord(int3 cellCoord)
 	uint3 uoffset = uint3(max(offset, int3(0, 0, 0)));
 	uoffset = min(uoffset, uint3(MORTON_MAX_VALUE, MORTON_MAX_VALUE, MORTON_MAX_VALUE));
 
-	// Compute Morton code using preset-specific function
+	// Compute Morton code using preset-specific function from FluidMortonUtils.ush
 	return Morton3D(uoffset.x, uoffset.y, uoffset.z);
 }
 

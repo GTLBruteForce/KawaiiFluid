@@ -1051,6 +1051,7 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 					AnisotropyParams.CellStartSRV = SpatialData.CellStartSRV;
 					AnisotropyParams.CellEndSRV = SpatialData.CellEndSRV;
 					AnisotropyParams.MortonBoundsMin = SimulationBoundsMin;
+					AnisotropyParams.GridResolutionPreset = SpatialHashManager->GetGridResolutionPreset();
 				}
 
 				FFluidAnisotropyPassBuilder::AddAnisotropyPass(GraphBuilder, AnisotropyParams);
