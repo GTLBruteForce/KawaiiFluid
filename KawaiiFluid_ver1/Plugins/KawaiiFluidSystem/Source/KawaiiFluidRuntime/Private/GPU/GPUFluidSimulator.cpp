@@ -1096,21 +1096,6 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 				AnisotropyParams.bStretchIsolatedByVelocity = CachedAnisotropyParams.bStretchIsolatedByVelocity;
 				AnisotropyParams.bFadeSlowIsolated = CachedAnisotropyParams.bFadeSlowIsolated;
 				AnisotropyParams.IsolationFadeSpeed = CachedAnisotropyParams.IsolationFadeSpeed;
-				AnisotropyParams.IsolationShrinkSpeed = CachedAnisotropyParams.IsolationShrinkSpeed;
-				AnisotropyParams.IsolationGrowSpeed = CachedAnisotropyParams.IsolationGrowSpeed;
-				AnisotropyParams.DeltaTime = Params.DeltaTime;
-
-				// Neighbor-average based growth control
-				AnisotropyParams.bUseNeighborAverageGrowth = CachedAnisotropyParams.bUseNeighborAverageGrowth;
-				AnisotropyParams.MinNeighborsForGrowth = CachedAnisotropyParams.MinNeighborsForGrowth;
-				AnisotropyParams.NeighborScaleMatchRatio = CachedAnisotropyParams.NeighborScaleMatchRatio;
-
-				// Previous frame anisotropy for neighbor scale averaging
-				// Uses the same buffer registered above (contains previous frame data)
-				if (bHasPersistentAnisotropyBuffers)
-				{
-					AnisotropyParams.PrevAnisotropyAxis1SRV = GraphBuilder.CreateSRV(Axis1Buffer);
-				}
 
 				// Density-based anisotropy needs wider neighbor search than simulation
 				AnisotropyParams.SmoothingRadius = Params.SmoothingRadius * 2.5f;
