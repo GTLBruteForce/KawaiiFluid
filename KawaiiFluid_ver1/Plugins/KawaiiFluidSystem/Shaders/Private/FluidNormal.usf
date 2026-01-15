@@ -94,13 +94,34 @@ void ReconstructNormalCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     float3 ddx = PositionRight - PositionCenter;
     float3 ddy = PositionBottom - PositionCenter;
 
-    // Normal 계산
-    float3 Normal = normalize(cross(ddx, ddy));
+    // Normal 계산 with NaN protection
+    // When ddx and ddy are parallel or zero, cross product returns zero vector
+    // normalize(zero) causes division by zero, resulting in NaN
+    float3 CrossProduct = cross(ddx, ddy);
+    float CrossLength = length(CrossProduct);
 
-    // 올바른 방향으로 노멀 반전
-    if (Normal.z > 0.0)
+    float3 Normal;
+    if (CrossLength < 1e-8)
     {
-        Normal = -Normal;
+        // Degenerate case: ddx and ddy are parallel or zero
+        // Use default view-facing normal (camera looks down -Z in view space)
+        Normal = float3(0, 0, -1);
+    }
+    else
+    {
+        Normal = CrossProduct / CrossLength;
+
+        // 올바른 방향으로 노멀 반전
+        if (Normal.z > 0.0)
+        {
+            Normal = -Normal;
+        }
+    }
+
+    // Final NaN check (safety net)
+    if (any(isnan(Normal)) || any(isinf(Normal)))
+    {
+        Normal = float3(0, 0, -1);
     }
 
     // 저장

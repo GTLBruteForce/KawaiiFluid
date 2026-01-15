@@ -912,6 +912,9 @@ private:
 	/** Async readback objects for anisotropy data (separate from position readback) */
 	FRHIGPUBufferReadback* ShadowAnisotropyReadbacks[NUM_SHADOW_READBACK_BUFFERS][3] = { {nullptr} };
 
+	/** Particle count at the time anisotropy readback was enqueued (prevents buffer overrun) */
+	int32 ShadowAnisotropyReadbackParticleCounts[NUM_SHADOW_READBACK_BUFFERS] = { 0 };
+
 	/** Frame number of ready positions */
 	std::atomic<uint64> ReadyShadowPositionsFrame{0};
 

@@ -126,9 +126,13 @@ void MainPS(
 	float3 Normal = FluidNormalTexture.Sample(InputSampler, UV).xyz;
 	float Thickness = FluidThicknessTexture.Sample(InputSampler, UV).r;
 
-	// Normal이 (0,0,0)인 경우 방어 코드 (혹시 모를 에러 방지)
-	if (length(Normal) < 0.1f)
+	// Normal validation with proper NaN/Inf check
+	// Note: length(NaN) returns NaN, and NaN < 0.1f is always false
+	// So we must explicitly check for NaN/Inf before length comparison
+	bool bInvalidNormal = any(isnan(Normal)) || any(isinf(Normal)) || length(Normal) < 0.1f;
+	if (bInvalidNormal)
 	{
+		// Default to view-facing normal (View space: camera looks down -Z)
 		Normal = float3(0, 0, 1);
 	}
 

@@ -146,10 +146,27 @@ FGBufferOutput MainPS(FGBufferVSToPS Input)
 	float FluidDeviceZ = FluidClipPos.z / FluidClipPos.w;
 
 	float3 ViewSpaceNormal = NormalTexture.SampleLevel(BilinearClampSampler, UV, 0).xyz;
-	ViewSpaceNormal = normalize(ViewSpaceNormal);
+
+	// Normal validation with proper NaN/Inf check
+	bool bInvalidNormal = any(isnan(ViewSpaceNormal)) || any(isinf(ViewSpaceNormal)) || length(ViewSpaceNormal) < 0.1f;
+	if (bInvalidNormal)
+	{
+		// Default to view-facing normal (View space: camera looks down -Z)
+		ViewSpaceNormal = float3(0, 0, -1);
+	}
+	else
+	{
+		ViewSpaceNormal = normalize(ViewSpaceNormal);
+	}
 
 	float3 WorldNormal = mul((float3x3)View.ViewToTranslatedWorld, ViewSpaceNormal);
 	WorldNormal = normalize(WorldNormal);
+
+	// Final safety check for WorldNormal
+	if (any(isnan(WorldNormal)) || any(isinf(WorldNormal)))
+	{
+		WorldNormal = float3(0, 0, 1);
+	}
 
 	float Thickness = ThicknessTexture.SampleLevel(BilinearClampSampler, UV, 0);
 	float3 AbsorbedColor = ApplyBeerLawAbsorption(FluidBaseColor, Thickness);

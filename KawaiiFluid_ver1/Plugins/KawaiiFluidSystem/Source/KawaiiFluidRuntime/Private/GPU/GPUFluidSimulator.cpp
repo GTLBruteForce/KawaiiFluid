@@ -1994,6 +1994,9 @@ void FGPUFluidSimulator::EnqueueAnisotropyReadback(FRHICommandListImmediate& RHI
 	// So we use the previous index
 	const int32 WriteIdx = (ShadowReadbackWriteIndex + NUM_SHADOW_READBACK_BUFFERS - 1) % NUM_SHADOW_READBACK_BUFFERS;
 
+	// Store the particle count at enqueue time to prevent buffer overrun during processing
+	ShadowAnisotropyReadbackParticleCounts[WriteIdx] = ParticleCount;
+
 	// Calculate copy size (float4 per particle per axis)
 	const uint32 RequiredSize = ParticleCount * sizeof(FVector4f);
 
@@ -2049,8 +2052,10 @@ void FGPUFluidSimulator::ProcessAnisotropyReadback()
 		return;
 	}
 
-	const int32 ParticleCount = ReadyShadowPositions.Num();
-	if (ParticleCount <= 0)
+	// Use the particle count that was stored when the readback was enqueued
+	// This prevents buffer overrun when particle count changes between enqueue and process
+	const int32 EnqueuedParticleCount = ShadowAnisotropyReadbackParticleCounts[ReadIdx];
+	if (EnqueuedParticleCount <= 0)
 	{
 		return;
 	}
@@ -2065,14 +2070,14 @@ void FGPUFluidSimulator::ProcessAnisotropyReadback()
 		}
 	}
 
-	const int32 BufferSize = ParticleCount * sizeof(FVector4f);
+	const int32 BufferSize = EnqueuedParticleCount * sizeof(FVector4f);
 	FScopeLock Lock(&BufferLock);
 
-	// Copy all 3 axes
+	// Copy all 3 axes using the enqueued particle count (safe, matches actual buffer size)
 	const FVector4f* Axis1Data = (const FVector4f*)ShadowAnisotropyReadbacks[ReadIdx][0]->Lock(BufferSize);
 	if (Axis1Data)
 	{
-		ReadyShadowAnisotropyAxis1.SetNumUninitialized(ParticleCount);
+		ReadyShadowAnisotropyAxis1.SetNumUninitialized(EnqueuedParticleCount);
 		FMemory::Memcpy(ReadyShadowAnisotropyAxis1.GetData(), Axis1Data, BufferSize);
 		ShadowAnisotropyReadbacks[ReadIdx][0]->Unlock();
 	}
@@ -2080,7 +2085,7 @@ void FGPUFluidSimulator::ProcessAnisotropyReadback()
 	const FVector4f* Axis2Data = (const FVector4f*)ShadowAnisotropyReadbacks[ReadIdx][1]->Lock(BufferSize);
 	if (Axis2Data)
 	{
-		ReadyShadowAnisotropyAxis2.SetNumUninitialized(ParticleCount);
+		ReadyShadowAnisotropyAxis2.SetNumUninitialized(EnqueuedParticleCount);
 		FMemory::Memcpy(ReadyShadowAnisotropyAxis2.GetData(), Axis2Data, BufferSize);
 		ShadowAnisotropyReadbacks[ReadIdx][1]->Unlock();
 	}
@@ -2088,7 +2093,7 @@ void FGPUFluidSimulator::ProcessAnisotropyReadback()
 	const FVector4f* Axis3Data = (const FVector4f*)ShadowAnisotropyReadbacks[ReadIdx][2]->Lock(BufferSize);
 	if (Axis3Data)
 	{
-		ReadyShadowAnisotropyAxis3.SetNumUninitialized(ParticleCount);
+		ReadyShadowAnisotropyAxis3.SetNumUninitialized(EnqueuedParticleCount);
 		FMemory::Memcpy(ReadyShadowAnisotropyAxis3.GetData(), Axis3Data, BufferSize);
 		ShadowAnisotropyReadbacks[ReadIdx][2]->Unlock();
 	}
