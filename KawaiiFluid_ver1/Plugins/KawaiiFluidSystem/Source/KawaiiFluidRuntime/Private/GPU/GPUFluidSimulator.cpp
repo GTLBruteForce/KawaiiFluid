@@ -2038,41 +2038,42 @@ void FGPUFluidSimulator::EnqueueAnisotropyReadback(FRHICommandListImmediate& RHI
 	// So we use the previous index
 	const int32 WriteIdx = (ShadowReadbackWriteIndex + NUM_SHADOW_READBACK_BUFFERS - 1) % NUM_SHADOW_READBACK_BUFFERS;
 
-	// Store the particle count at enqueue time to prevent buffer overrun during processing
-	ShadowAnisotropyReadbackParticleCounts[WriteIdx] = ParticleCount;
-
 	// Calculate copy size (float4 per particle per axis)
 	const uint32 RequiredSize = ParticleCount * sizeof(FVector4f);
 
-	// Enqueue async copy for each axis
+	// Get RHI buffers
 	FRHIBuffer* Axis1RHI = PersistentAnisotropyAxis1Buffer->GetRHI();
 	FRHIBuffer* Axis2RHI = PersistentAnisotropyAxis2Buffer->GetRHI();
 	FRHIBuffer* Axis3RHI = PersistentAnisotropyAxis3Buffer->GetRHI();
 
-	if (Axis1RHI && ShadowAnisotropyReadbacks[WriteIdx][0])
+	// Validate all buffers and readbacks exist
+	if (!Axis1RHI || !Axis2RHI || !Axis3RHI ||
+		!ShadowAnisotropyReadbacks[WriteIdx][0] ||
+		!ShadowAnisotropyReadbacks[WriteIdx][1] ||
+		!ShadowAnisotropyReadbacks[WriteIdx][2])
 	{
-		const uint32 BufferSize = Axis1RHI->GetSize();
-		if (RequiredSize <= BufferSize)
-		{
-			ShadowAnisotropyReadbacks[WriteIdx][0]->EnqueueCopy(RHICmdList, Axis1RHI, RequiredSize);
-		}
+		return;
 	}
-	if (Axis2RHI && ShadowAnisotropyReadbacks[WriteIdx][1])
+
+	// Check if ALL buffers have sufficient size BEFORE enqueueing any copies
+	// This prevents partial copies and ensures ParticleCount matches actual copied data
+	const uint32 Axis1Size = Axis1RHI->GetSize();
+	const uint32 Axis2Size = Axis2RHI->GetSize();
+	const uint32 Axis3Size = Axis3RHI->GetSize();
+
+	if (RequiredSize > Axis1Size || RequiredSize > Axis2Size || RequiredSize > Axis3Size)
 	{
-		const uint32 BufferSize = Axis2RHI->GetSize();
-		if (RequiredSize <= BufferSize)
-		{
-			ShadowAnisotropyReadbacks[WriteIdx][1]->EnqueueCopy(RHICmdList, Axis2RHI, RequiredSize);
-		}
+		// Buffer too small - don't enqueue and don't update particle count
+		// This prevents buffer overrun in ProcessAnisotropyReadback
+		return;
 	}
-	if (Axis3RHI && ShadowAnisotropyReadbacks[WriteIdx][2])
-	{
-		const uint32 BufferSize = Axis3RHI->GetSize();
-		if (RequiredSize <= BufferSize)
-		{
-			ShadowAnisotropyReadbacks[WriteIdx][2]->EnqueueCopy(RHICmdList, Axis3RHI, RequiredSize);
-		}
-	}
+
+	// All buffers are valid and large enough - now safe to store particle count and enqueue
+	ShadowAnisotropyReadbackParticleCounts[WriteIdx] = ParticleCount;
+
+	ShadowAnisotropyReadbacks[WriteIdx][0]->EnqueueCopy(RHICmdList, Axis1RHI, RequiredSize);
+	ShadowAnisotropyReadbacks[WriteIdx][1]->EnqueueCopy(RHICmdList, Axis2RHI, RequiredSize);
+	ShadowAnisotropyReadbacks[WriteIdx][2]->EnqueueCopy(RHICmdList, Axis3RHI, RequiredSize);
 }
 
 /**

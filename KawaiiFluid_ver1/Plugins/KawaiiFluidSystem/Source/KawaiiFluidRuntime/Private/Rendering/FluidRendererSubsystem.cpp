@@ -333,7 +333,18 @@ void UFluidRendererSubsystem::UpdateShadowInstances(const FVector* ParticlePosit
 	for (int32 i = 0, InstanceIdx = 0; i < NumParticles && InstanceIdx < NumInstances; i += SkipFactor, ++InstanceIdx)
 	{
 		FTransform& InstanceTransform = CachedInstanceTransforms[InstanceIdx];
-		InstanceTransform.SetLocation(ParticlePositions[i]);
+
+		// Validate position - skip particles with NaN/Inf positions
+		const FVector& Position = ParticlePositions[i];
+		if (!FMath::IsFinite(Position.X) || !FMath::IsFinite(Position.Y) || !FMath::IsFinite(Position.Z))
+		{
+			InstanceTransform.SetLocation(FVector::ZeroVector);
+			InstanceTransform.SetRotation(FQuat::Identity);
+			InstanceTransform.SetScale3D(FVector::ZeroVector);  // Zero scale = invisible
+			continue;
+		}
+
+		InstanceTransform.SetLocation(Position);
 		InstanceTransform.SetRotation(FQuat::Identity);
 		InstanceTransform.SetScale3D(SphereScale);
 	}
@@ -504,7 +515,19 @@ void UFluidRendererSubsystem::UpdateShadowInstancesWithAnisotropy(
 		for (int32 i = 0, InstanceIdx = 0; i < NumParticles && InstanceIdx < NumInstances; i += SkipFactor, ++InstanceIdx)
 		{
 			FTransform& InstanceTransform = CachedInstanceTransforms[InstanceIdx];
-			InstanceTransform.SetLocation(ParticlePositions[i]);
+
+			// Validate position - skip particles with NaN/Inf positions
+			const FVector& Position = ParticlePositions[i];
+			if (!FMath::IsFinite(Position.X) || !FMath::IsFinite(Position.Y) || !FMath::IsFinite(Position.Z))
+			{
+				// Use a safe default transform for invalid particles
+				InstanceTransform.SetLocation(FVector::ZeroVector);
+				InstanceTransform.SetRotation(FQuat::Identity);
+				InstanceTransform.SetScale3D(FVector::ZeroVector);  // Zero scale = invisible
+				continue;
+			}
+
+			InstanceTransform.SetLocation(Position);
 
 			if (bHasAnisotropy)
 			{
@@ -513,19 +536,35 @@ void UFluidRendererSubsystem::UpdateShadowInstancesWithAnisotropy(
 				const FVector4& Axis2 = AnisotropyAxis2[i];
 				const FVector4& Axis3 = AnisotropyAxis3[i];
 
-				// Extract scale from W components (eigenvalues) with clamping
-				const float Scale1 = FMath::Clamp(Axis1.W, 0.1f, 3.0f);
-				const float Scale2 = FMath::Clamp(Axis2.W, 0.1f, 3.0f);
-				const float Scale3 = FMath::Clamp(Axis3.W, 0.1f, 3.0f);
+				// Validate scale values - FMath::Clamp does NOT handle NaN properly!
+				// NaN comparisons always return false, so Clamp(NaN, min, max) returns NaN
+				const bool bValidScales =
+					FMath::IsFinite(Axis1.W) &&
+					FMath::IsFinite(Axis2.W) &&
+					FMath::IsFinite(Axis3.W);
 
-				// Build rotation matrix from eigenvectors
-				FMatrix RotationMatrix = FMatrix::Identity;
-				RotationMatrix.SetAxis(0, FVector(Axis1.X, Axis1.Y, Axis1.Z).GetSafeNormal());
-				RotationMatrix.SetAxis(1, FVector(Axis2.X, Axis2.Y, Axis2.Z).GetSafeNormal());
-				RotationMatrix.SetAxis(2, FVector(Axis3.X, Axis3.Y, Axis3.Z).GetSafeNormal());
+				if (bValidScales)
+				{
+					// Extract scale from W components (eigenvalues) with clamping
+					const float Scale1 = FMath::Clamp(Axis1.W, 0.1f, 3.0f);
+					const float Scale2 = FMath::Clamp(Axis2.W, 0.1f, 3.0f);
+					const float Scale3 = FMath::Clamp(Axis3.W, 0.1f, 3.0f);
 
-				InstanceTransform.SetRotation(RotationMatrix.ToQuat());
-				InstanceTransform.SetScale3D(FVector(Scale1, Scale2, Scale3) * BaseScale);
+					// Build rotation matrix from eigenvectors
+					FMatrix RotationMatrix = FMatrix::Identity;
+					RotationMatrix.SetAxis(0, FVector(Axis1.X, Axis1.Y, Axis1.Z).GetSafeNormal());
+					RotationMatrix.SetAxis(1, FVector(Axis2.X, Axis2.Y, Axis2.Z).GetSafeNormal());
+					RotationMatrix.SetAxis(2, FVector(Axis3.X, Axis3.Y, Axis3.Z).GetSafeNormal());
+
+					InstanceTransform.SetRotation(RotationMatrix.ToQuat());
+					InstanceTransform.SetScale3D(FVector(Scale1, Scale2, Scale3) * BaseScale);
+				}
+				else
+				{
+					// Invalid anisotropy data - fall back to uniform sphere
+					InstanceTransform.SetRotation(FQuat::Identity);
+					InstanceTransform.SetScale3D(FVector(BaseScale));
+				}
 			}
 			else
 			{
