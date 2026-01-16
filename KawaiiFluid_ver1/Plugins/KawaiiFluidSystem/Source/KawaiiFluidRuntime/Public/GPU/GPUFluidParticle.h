@@ -997,7 +997,7 @@ static_assert(sizeof(FAttachedParticleUpdate) == 32, "FAttachedParticleUpdate mu
 //=============================================================================
 
 /**
- * GPU Boundary Particle Structure (32 bytes)
+ * GPU Boundary Particle Structure (48 bytes)
  * Represents a point on the mesh surface for Flex-style adhesion
  * Uploaded from FluidInteractionComponent each frame
  */
@@ -1007,24 +1007,30 @@ struct FGPUBoundaryParticle
 	float Psi;                // 4 bytes  - Boundary particle "mass" (volume contribution)
 	FVector3f Normal;         // 12 bytes - Surface normal at this position
 	int32 OwnerID;            // 4 bytes  - Owner FluidInteractionComponent ID
+	FVector3f Velocity;       // 12 bytes - World velocity (for moving boundaries)
+	float Padding;            // 4 bytes  - Alignment padding
 
 	FGPUBoundaryParticle()
 		: Position(FVector3f::ZeroVector)
 		, Psi(1.0f)
 		, Normal(FVector3f(0.0f, 0.0f, 1.0f))
 		, OwnerID(-1)
+		, Velocity(FVector3f::ZeroVector)
+		, Padding(0.0f)
 	{
 	}
 
-	FGPUBoundaryParticle(const FVector3f& InPosition, const FVector3f& InNormal, int32 InOwnerID, float InPsi = 1.0f)
+	FGPUBoundaryParticle(const FVector3f& InPosition, const FVector3f& InNormal, int32 InOwnerID, float InPsi = 1.0f, const FVector3f& InVelocity = FVector3f::ZeroVector)
 		: Position(InPosition)
 		, Psi(InPsi)
 		, Normal(InNormal)
 		, OwnerID(InOwnerID)
+		, Velocity(InVelocity)
+		, Padding(0.0f)
 	{
 	}
 };
-static_assert(sizeof(FGPUBoundaryParticle) == 32, "FGPUBoundaryParticle must be 32 bytes");
+static_assert(sizeof(FGPUBoundaryParticle) == 48, "FGPUBoundaryParticle must be 48 bytes");
 
 /**
  * GPU Boundary Particle Local Structure (32 bytes)

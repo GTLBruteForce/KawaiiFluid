@@ -106,11 +106,13 @@ public:
 	 * @param GraphBuilder - RDG builder
 	 * @param OutWorldBoundaryBuffer - Output: World-space boundary particles buffer
 	 * @param OutBoundaryParticleCount - Output: Number of boundary particles
+	 * @param DeltaTime - Frame delta time for velocity calculation
 	 */
 	void AddBoundarySkinningPass(
 		FRDGBuilder& GraphBuilder,
 		FRDGBufferRef& OutWorldBoundaryBuffer,
-		int32& OutBoundaryParticleCount);
+		int32& OutBoundaryParticleCount,
+		float DeltaTime);
 
 	/**
 	 * Add boundary adhesion pass
@@ -223,7 +225,9 @@ private:
 
 	TMap<int32, TRefCountPtr<FRDGPooledBuffer>> PersistentLocalBoundaryBuffers;
 	TRefCountPtr<FRDGPooledBuffer> PersistentWorldBoundaryBuffer;
+	TRefCountPtr<FRDGPooledBuffer> PreviousWorldBoundaryBuffer;  // For velocity calculation
 	int32 WorldBoundaryBufferCapacity = 0;
+	bool bHasPreviousFrame = false;  // True after first frame
 
 	//=========================================================================
 	// Dirty Tracking

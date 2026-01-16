@@ -25,6 +25,8 @@ struct FGPUBoundaryParticle
 	float Psi;            // 4 bytes  - Boundary particle "mass"
 	float3 Normal;        // 12 bytes - Surface normal
 	int OwnerID;          // 4 bytes  - Owner component ID
+	float3 Velocity;      // 12 bytes - World velocity (for moving boundaries)
+	float Padding;        // 4 bytes  - Alignment padding
 };
 
 //=============================================================================
@@ -161,7 +163,7 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3 pos = particle.PredictedPosition;
 	float3 adhesionForce = float3(0, 0, 0);
 	float3 cohesionForce = float3(0, 0, 0);
-	float h = SmoothingRadius;
+	float h = AdhesionRadius;  // Use AdhesionRadius for tighter adhesion range
 
 	if (bUseBoundaryZOrder)
 	{
@@ -170,7 +172,7 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		// SortedBoundaryParticles are sorted by Morton code
 		//=====================================================================
 		int3 centerCell = WorldToCell(pos, CellSize);
-		int cellRadius = (int)ceil(SmoothingRadius / CellSize);
+		int cellRadius = (int)ceil(AdhesionRadius / CellSize);  // Use AdhesionRadius
 
 		for (int dz = -cellRadius; dz <= cellRadius; ++dz)
 		{
@@ -198,15 +200,19 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 						{
 							float3 r_normalized = r_vec / r;
 
+							// Distance-based strength: closer = stronger adhesion
+							// r=0 → closeFactor=3, r=h → closeFactor=1
+							float closeFactor = 1.0 + 20.0 * (1.0 - r / h);
+
 							// Adhesion force (Akinci 2013)
 							// F_adhesion = -beta * m_i * psi_b * A(r,h) * r_normalized
 							float A = AdhesionKernel(r, h);
-							adhesionForce -= AdhesionStrength * particle.Mass * boundary.Psi * A * r_normalized;
+							adhesionForce -= AdhesionStrength * particle.Mass * closeFactor * A * r_normalized;
 
 							// Cohesion force (surface tension at boundary)
 							// F_cohesion = -gamma * m_i * psi_b * C(r,h) * r_normalized
 							float C = CohesionKernel(r, h);
-							cohesionForce -= CohesionStrength * particle.Mass * boundary.Psi * C * r_normalized;
+							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
 						}
 					}
 				}
@@ -245,15 +251,19 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 						{
 							float3 r_normalized = r_vec / r;
 
+							// Distance-based strength: closer = stronger adhesion
+							// r=0 → closeFactor=3, r=h → closeFactor=1
+							float closeFactor = 1.0 + 20.0 * (1.0 - r / h);
+
 							// Adhesion force (Akinci 2013)
 							// F_adhesion = -beta * m_i * psi_b * A(r,h) * r_normalized
 							float A = AdhesionKernel(r, h);
-							adhesionForce -= AdhesionStrength * particle.Mass * boundary.Psi * A * r_normalized;
+							adhesionForce -= AdhesionStrength * particle.Mass * closeFactor * A * r_normalized;
 
 							// Cohesion force (surface tension at boundary)
 							// F_cohesion = -gamma * m_i * psi_b * C(r,h) * r_normalized
 							float C = CohesionKernel(r, h);
-							cohesionForce -= CohesionStrength * particle.Mass * boundary.Psi * C * r_normalized;
+							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
 						}
 					}
 				}
@@ -266,7 +276,7 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	// Clamp force magnitude to prevent instability
 	float forceMag = length(totalForce);
-	float maxForce = 10000.0f;  // Maximum force magnitude
+	float maxForce = 100000.0f;  // Maximum force magnitude (increased for stronger adhesion)
 	if (forceMag > maxForce)
 	{
 		totalForce = totalForce * (maxForce / forceMag);

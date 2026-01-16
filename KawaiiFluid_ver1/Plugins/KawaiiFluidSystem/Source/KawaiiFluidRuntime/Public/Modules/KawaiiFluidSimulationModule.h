@@ -677,7 +677,7 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", InlineEditConditionToggle))
 	bool bOverride_AdhesionStrength = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", EditCondition = "bOverride_AdhesionStrength", ClampMin = "0.0", ClampMax = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", EditCondition = "bOverride_AdhesionStrength", ClampMin = "0.0", ClampMax = "200.0"))
 	float Override_AdhesionStrength = 0.5f;
 	//========================================
 	// Internal

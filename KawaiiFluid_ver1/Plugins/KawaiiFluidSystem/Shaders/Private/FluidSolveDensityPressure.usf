@@ -65,6 +65,8 @@ struct FGPUBoundaryParticle
 	float Psi;          // Boundary particle "mass" (volume contribution)
 	float3 Normal;      // Surface normal
 	int OwnerID;        // Owner component ID
+	float3 Velocity;    // World velocity (for moving boundaries)
+	float Padding;      // Alignment padding
 };
 
 StructuredBuffer<FGPUBoundaryParticle> BoundaryParticles;

@@ -332,6 +332,8 @@ public:
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUBoundaryParticle>, BoundaryParticles)
 		SHADER_PARAMETER(int32, BoundaryParticleCount)
 		SHADER_PARAMETER(int32, bUseBoundaryViscosity)
+		SHADER_PARAMETER(float, AdhesionStrength)  // 0~10, normalized for boundary viscosity
+		SHADER_PARAMETER(float, AdhesionRadius)    // Boundary viscosity influence radius (cm)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;
@@ -1724,13 +1726,18 @@ public:
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUBoundaryParticleLocal>, LocalBoundaryParticles)
 		// Output: World-space boundary particles (updated each frame)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUBoundaryParticle>, WorldBoundaryParticles)
+		// Previous frame positions for velocity calculation
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUBoundaryParticle>, PreviousWorldBoundaryParticles)
 		// Bone transforms (uploaded each frame)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4x4>, BoneTransforms)
 		SHADER_PARAMETER(int32, BoundaryParticleCount)
 		SHADER_PARAMETER(int32, BoneCount)
 		SHADER_PARAMETER(int32, OwnerID)
+		SHADER_PARAMETER(int32, bHasPreviousFrame)
 		// Fallback transform for static meshes (BoneIndex == -1)
 		SHADER_PARAMETER(FMatrix44f, ComponentTransform)
+		// Delta time for velocity calculation
+		SHADER_PARAMETER(float, DeltaTime)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;

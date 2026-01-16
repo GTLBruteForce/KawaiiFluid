@@ -48,8 +48,10 @@ void FGPUBoundarySkinningManager::Release()
 	BoundarySkinningDataMap.Empty();
 	PersistentLocalBoundaryBuffers.Empty();
 	PersistentWorldBoundaryBuffer.SafeRelease();
+	PreviousWorldBoundaryBuffer.SafeRelease();
 	WorldBoundaryBufferCapacity = 0;
 	TotalLocalBoundaryParticleCount = 0;
+	bHasPreviousFrame = false;
 
 	CachedBoundaryParticles.Empty();
 	bBoundaryParticlesValid = false;
@@ -160,8 +162,10 @@ void FGPUBoundarySkinningManager::ClearAllBoundarySkinningData()
 	BoundarySkinningDataMap.Empty();
 	PersistentLocalBoundaryBuffers.Empty();
 	PersistentWorldBoundaryBuffer.SafeRelease();
+	PreviousWorldBoundaryBuffer.SafeRelease();
 	WorldBoundaryBufferCapacity = 0;
 	TotalLocalBoundaryParticleCount = 0;
+	bHasPreviousFrame = false;
 	bBoundarySkinningDataDirty = true;
 
 	UE_LOG(LogGPUBoundarySkinning, Log, TEXT("ClearAllBoundarySkinningData"));
@@ -180,9 +184,21 @@ bool FGPUBoundarySkinningManager::IsBoundaryAdhesionEnabled() const
 void FGPUBoundarySkinningManager::AddBoundarySkinningPass(
 	FRDGBuilder& GraphBuilder,
 	FRDGBufferRef& OutWorldBoundaryBuffer,
-	int32& OutBoundaryParticleCount)
+	int32& OutBoundaryParticleCount,
+	float DeltaTime)
 {
 	FScopeLock Lock(&BoundarySkinningLock);
+
+	// Debug: Log DeltaTime and estimated velocity (every 60 frames)
+	static int32 DebugCounter = 0;
+	if (++DebugCounter % 60 == 1)
+	{
+		// Example: 10cm movement per frame with this DeltaTime = velocity
+		float exampleMovement = 10.0f; // cm
+		float estimatedVelocity = DeltaTime > 0.0001f ? exampleMovement / DeltaTime : 0.0f;
+		UE_LOG(LogGPUBoundarySkinning, Warning, TEXT("[BoundaryVelocityDebug] DeltaTime=%.6f, If 10cm/frame -> Velocity=%.1f cm/s"),
+			DeltaTime, estimatedVelocity);
+	}
 
 	OutWorldBoundaryBuffer = nullptr;
 	OutBoundaryParticleCount = 0;
@@ -199,7 +215,9 @@ void FGPUBoundarySkinningManager::AddBoundarySkinningPass(
 	if (WorldBoundaryBufferCapacity < TotalLocalBoundaryParticleCount)
 	{
 		PersistentWorldBoundaryBuffer.SafeRelease();
+		PreviousWorldBoundaryBuffer.SafeRelease();
 		WorldBoundaryBufferCapacity = TotalLocalBoundaryParticleCount;
+		bHasPreviousFrame = false;
 	}
 
 	// Create or reuse world boundary buffer
@@ -216,6 +234,22 @@ void FGPUBoundarySkinningManager::AddBoundarySkinningPass(
 		);
 	}
 	FRDGBufferUAVRef WorldBoundaryUAV = GraphBuilder.CreateUAV(WorldBoundaryBuffer);
+
+	// Create or reuse previous frame buffer for velocity calculation
+	FRDGBufferRef PreviousBoundaryBuffer;
+	if (bHasPreviousFrame && PreviousWorldBoundaryBuffer.IsValid())
+	{
+		PreviousBoundaryBuffer = GraphBuilder.RegisterExternalBuffer(PreviousWorldBoundaryBuffer, TEXT("GPUFluidPreviousBoundaryParticles"));
+	}
+	else
+	{
+		// Create dummy buffer for first frame (velocity will be 0)
+		PreviousBoundaryBuffer = GraphBuilder.CreateBuffer(
+			FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUBoundaryParticle), FMath::Max(1, WorldBoundaryBufferCapacity)),
+			TEXT("GPUFluidPreviousBoundaryParticles_Dummy")
+		);
+	}
+	FRDGBufferSRVRef PreviousBoundarySRV = GraphBuilder.CreateSRV(PreviousBoundaryBuffer);
 
 	int32 OutputOffset = 0;
 
@@ -289,11 +323,14 @@ void FGPUBoundarySkinningManager::AddBoundarySkinningPass(
 		FBoundarySkinningCS::FParameters* PassParams = GraphBuilder.AllocParameters<FBoundarySkinningCS::FParameters>();
 		PassParams->LocalBoundaryParticles = LocalBoundarySRV;
 		PassParams->WorldBoundaryParticles = WorldBoundaryUAV;
+		PassParams->PreviousWorldBoundaryParticles = PreviousBoundarySRV;
 		PassParams->BoneTransforms = SkinningBoneTransformsSRV;
 		PassParams->BoundaryParticleCount = LocalParticleCount;
 		PassParams->BoneCount = FMath::Max(1, BoneCount);
 		PassParams->OwnerID = OwnerID;
+		PassParams->bHasPreviousFrame = bHasPreviousFrame ? 1 : 0;
 		PassParams->ComponentTransform = SkinningData.ComponentTransform;
+		PassParams->DeltaTime = DeltaTime;
 
 		const uint32 NumGroups = FMath::DivideAndRoundUp(LocalParticleCount, FBoundarySkinningCS::ThreadGroupSize);
 
@@ -312,7 +349,11 @@ void FGPUBoundarySkinningManager::AddBoundarySkinningPass(
 	OutWorldBoundaryBuffer = WorldBoundaryBuffer;
 	OutBoundaryParticleCount = TotalLocalBoundaryParticleCount;
 
+	// Store current frame as previous for next frame velocity calculation
+	// Swap: Previous <- Current, then extract new Current
+	PreviousWorldBoundaryBuffer = PersistentWorldBoundaryBuffer;
 	GraphBuilder.QueueBufferExtraction(WorldBoundaryBuffer, &PersistentWorldBoundaryBuffer);
+	bHasPreviousFrame = true;
 }
 
 //=============================================================================
@@ -499,6 +540,20 @@ void FGPUBoundarySkinningManager::AddBoundaryAdhesionPass(
 		PassParameters->DeltaTime = Params.DeltaTime;
 		PassParameters->RestDensity = Params.RestDensity;
 		PassParameters->Poly6Coeff = Params.Poly6Coeff;
+
+		// Debug: Log adhesion pass parameters (every 60 frames)
+		static int32 AdhesionDebugCounter = 0;
+		if (++AdhesionDebugCounter % 60 == 1)
+		{
+			UE_LOG(LogGPUBoundarySkinning, Warning,
+				TEXT("[BoundaryAdhesionPass] Running! AdhesionStrength=%.2f, CohesionStrength=%.2f, AdhesionRadius=%.2f, SmoothingRadius=%.2f, BoundaryCount=%d, FluidCount=%d"),
+				CachedBoundaryAdhesionParams.AdhesionStrength,
+				CachedBoundaryAdhesionParams.CohesionStrength,
+				CachedBoundaryAdhesionParams.AdhesionRadius,
+				Params.SmoothingRadius,
+				BoundaryParticleCount,
+				CurrentParticleCount);
+		}
 
 		const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FBoundaryAdhesionCS::ThreadGroupSize);
 

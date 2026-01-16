@@ -25,6 +25,8 @@ struct FGPUBoundaryParticle
 	float Psi;              // Volume contribution
 	float3 Normal;          // World normal
 	int OwnerID;            // Owner component ID
+	float3 Velocity;        // World velocity (for moving boundaries)
+	float Padding;          // Alignment padding
 };
 
 //=============================================================================
@@ -37,6 +39,9 @@ StructuredBuffer<FGPUBoundaryParticleLocal> LocalBoundaryParticles;
 // Output: World-space boundary particles (updated each frame)
 RWStructuredBuffer<FGPUBoundaryParticle> WorldBoundaryParticles;
 
+// Previous frame positions for velocity calculation
+StructuredBuffer<FGPUBoundaryParticle> PreviousWorldBoundaryParticles;
+
 // Bone transforms (uploaded each frame) - 4x3 matrix packed as 3 float4
 // [Row0.xyz, Row1.x] [Row1.yz, Row2.xy] [Row2.z, Translation.xyz]
 // Using float4x4 for simplicity - only first 3 rows used
@@ -45,9 +50,13 @@ StructuredBuffer<float4x4> BoneTransforms;
 int BoundaryParticleCount;
 int BoneCount;
 int OwnerID;
+int bHasPreviousFrame;  // 1 if previous frame data is valid, 0 otherwise
 
 // Fallback transform for static meshes (BoneIndex == -1)
 float4x4 ComponentTransform;
+
+// Delta time for velocity calculation
+float DeltaTime;
 
 //=============================================================================
 // Main Skinning Shader
@@ -85,12 +94,22 @@ void BoundarySkinningCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3x3 rotationMatrix = (float3x3)transform;
 	float3 worldNormal = normalize(mul(local.LocalNormal, rotationMatrix));
 
+	// Calculate velocity from position difference
+	float3 velocity = float3(0, 0, 0);
+	if (bHasPreviousFrame && DeltaTime > 0.0001f)
+	{
+		float3 prevPos = PreviousWorldBoundaryParticles[idx].Position;
+		velocity = (worldPos - prevPos) / DeltaTime;
+	}
+
 	// Write output
 	FGPUBoundaryParticle output;
 	output.Position = worldPos;
 	output.Psi = local.Psi;
 	output.Normal = worldNormal;
 	output.OwnerID = OwnerID;
+	output.Velocity = velocity;
+	output.Padding = 0.0f;
 
 	WorldBoundaryParticles[idx] = output;
 }

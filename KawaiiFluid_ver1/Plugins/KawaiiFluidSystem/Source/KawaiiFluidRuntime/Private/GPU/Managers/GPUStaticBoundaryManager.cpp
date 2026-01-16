@@ -194,7 +194,7 @@ float FGPUStaticBoundaryManager::CalculatePsi(float Spacing, float RestDensity) 
 	// - Too high (0.5): causes "wall climbing" due to artificial suction
 	// - Too low (0.05): insufficient density contribution, doesn't fix deficit
 	// - 0.2~0.3: balanced - fills density deficit without over-contribution
-	return RestDensity * EffectiveVolume * 0.05f;
+	return RestDensity * EffectiveVolume * 0.3f;
 }
 
 void FGPUStaticBoundaryManager::GenerateSphereBoundaryParticles(

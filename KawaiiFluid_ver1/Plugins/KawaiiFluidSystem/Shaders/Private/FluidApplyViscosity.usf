@@ -39,11 +39,15 @@ struct FGPUBoundaryParticle
 	float Psi;          // Boundary particle "mass" (volume contribution)
 	float3 Normal;      // Surface normal
 	int OwnerID;        // Owner component ID
+	float3 Velocity;    // World velocity (for moving boundaries)
+	float Padding;      // Alignment padding
 };
 
 StructuredBuffer<FGPUBoundaryParticle> BoundaryParticles;
 int BoundaryParticleCount;
 int bUseBoundaryViscosity;
+float AdhesionStrength;  // 0~10, normalized to 0~1 for boundary viscosity
+float AdhesionRadius;    // Boundary viscosity influence radius (cm)
 
 //=============================================================================
 // Unrolled 27-Cell Viscosity Processing Macro (Fallback when cache not available)
@@ -247,11 +251,20 @@ void ApplyViscosityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	//=========================================================================
 	// Boundary Particles viscosity contribution
-	// Boundary particles are treated as stationary (velocity = 0)
-	// This causes fluid to slow down near surfaces, creating "sticky" flow
+	// Uses boundary velocity to make fluid follow moving boundaries
+	// This enables adhesion to moving characters/objects
+	// Scaled by normalized AdhesionStrength (0~10 -> 0~1)
+	// Uses AdhesionRadius instead of SmoothingRadius for tighter influence
 	//=========================================================================
-	if (bUseBoundaryViscosity && BoundaryParticleCount > 0)
+	if (bUseBoundaryViscosity && BoundaryParticleCount > 0 && AdhesionStrength > 0.0f && AdhesionRadius > 0.0f)
 	{
+		// Clamp AdhesionStrength to 0~1 range
+		float clampedAdhesion = saturate(AdhesionStrength);
+
+		// Use AdhesionRadius for boundary viscosity range
+		float adhesionRadius_m = AdhesionRadius * CM_TO_M;
+		float adhesionRadius2 = adhesionRadius_m * adhesionRadius_m;
+
 		for (int bi = 0; bi < BoundaryParticleCount; ++bi)
 		{
 			FGPUBoundaryParticle boundary = BoundaryParticles[bi];
@@ -259,14 +272,24 @@ void ApplyViscosityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float r2_cm = dot(r_cm, r_cm);
 			float r2 = r2_cm * CM_TO_M_SQ;
 
-			if (r2 < h2 && r2 > SMALL_NUMBER)
+			if (r2 < adhesionRadius2 && r2 > SMALL_NUMBER)
 			{
-				float w = Poly6Kernel(r2, h2) * Poly6Coeff;
-				// Boundary velocity is 0, so velDiff = -vel (slows down fluid)
-				float3 velDiff = -vel;
-				// Weight by Psi (boundary particle's volume contribution)
-				velocityCorrection += velDiff * w * boundary.Psi;
-				weightSum += w * boundary.Psi;
+				// Use adhesionRadius for kernel instead of smoothingRadius
+				float w = Poly6Kernel(r2, adhesionRadius2) * Poly6Coeff;
+
+				// Non-linear velocity transfer: slow = follow, fast = detach
+				// Low speed: fluid follows (speedFactor ~1)
+				// High speed: fluid detaches (speedFactor ~0)
+				float boundarySpeed = length(boundary.Velocity);
+				float speedThreshold = 5000000.0f;  // cm/s - below this, full follow
+				float maxSpeed = 12000000.0f;       // cm/s - above this, detach
+				float speedFactor = 1.0 - smoothstep(speedThreshold, maxSpeed, boundarySpeed);
+
+				// Use actual boundary velocity for moving boundaries
+				float3 velDiff = boundary.Velocity - vel;
+				// Weight by Psi, adhesion strength, and speed factor
+				velocityCorrection += velDiff * w * boundary.Psi * clampedAdhesion * speedFactor;
+				weightSum += w * boundary.Psi * clampedAdhesion;
 			}
 		}
 	}

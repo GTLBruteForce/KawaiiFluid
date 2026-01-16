@@ -1595,7 +1595,7 @@ void UFluidInteractionComponent::CollectGPUBoundaryParticles(FGPUBoundaryParticl
 
 		// Psi는 경계 입자의 볼륨 기여도
 		// 낮을수록 밀려나는 힘 감소, 높을수록 강하게 밀려남
-		float Psi = 0.5f;
+		float Psi = 0.1f;
 
 		OutBoundaryParticles.Add(Position, Normal, OwnerID, Psi);
 	}

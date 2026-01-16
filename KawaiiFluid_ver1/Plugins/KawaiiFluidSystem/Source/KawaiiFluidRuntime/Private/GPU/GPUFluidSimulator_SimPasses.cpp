@@ -367,6 +367,19 @@ void FGPUFluidSimulator::AddApplyViscosityPass(
 		PassParameters->bUseBoundaryViscosity = 0;
 	}
 
+	// AdhesionStrength and AdhesionRadius for boundary viscosity
+	if (BoundarySkinningManager.IsValid())
+	{
+		const FGPUBoundaryAdhesionParams& AdhesionParams = BoundarySkinningManager->GetBoundaryAdhesionParams();
+		PassParameters->AdhesionStrength = AdhesionParams.AdhesionStrength;
+		PassParameters->AdhesionRadius = AdhesionParams.AdhesionRadius;
+	}
+	else
+	{
+		PassParameters->AdhesionStrength = 0.0f;
+		PassParameters->AdhesionRadius = 0.0f;
+	}
+
 	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FApplyViscosityCS::ThreadGroupSize);
 
 	FComputeShaderUtils::AddPass(

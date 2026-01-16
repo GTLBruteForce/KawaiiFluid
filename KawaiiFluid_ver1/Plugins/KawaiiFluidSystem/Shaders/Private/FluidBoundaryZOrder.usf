@@ -17,6 +17,8 @@ struct FGPUBoundaryParticle
 	float Psi;            // 4 bytes  - Boundary particle "volume" (density contribution)
 	float3 Normal;        // 12 bytes - Surface normal
 	int OwnerID;          // 4 bytes  - Owner component ID
+	float3 Velocity;      // 12 bytes - World velocity (for moving boundaries)
+	float Padding;        // 4 bytes  - Alignment padding
 };
 
 //=============================================================================

@@ -237,18 +237,17 @@ float CohesionKernel(float rLen, float h)
 
 /**
  * Adhesion kernel for boundary adhesion
+ * Simple linear falloff: r=0 → max, r=h → 0
  */
 float AdhesionKernel(float rLen, float h)
 {
-	float halfH = h * 0.5f;
-	if (rLen > h || rLen < halfH)
+	if (rLen > h || rLen < 0.0001f)
 	{
 		return 0.0f;
 	}
 
-	float coeff = 0.007f / pow(h, 3.25f);
-	float diff = -4.0f * rLen * rLen / h + 6.0f * rLen - 2.0f * h;
-	return coeff * pow(diff, 0.25f);
+	// Linear falloff: r=0 → 1 (max), r=h → 0 (escape)
+	return 1.0f - (rLen / h);
 }
 
 //=============================================================================

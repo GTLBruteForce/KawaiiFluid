@@ -776,11 +776,13 @@ FGPUFluidSimulator::FSimulationSpatialData FGPUFluidSimulator::BuildSpatialStruc
 		// Re-extract positions from sorted particles
 		AddExtractPositionsPass(GraphBuilder, OutParticlesSRV, OutPositionsUAV, CurrentParticleCount, true);
 
-		// LEGACY: Also build hash table (kept for backward compatibility with bUseZOrderSorting=false path)
+		// Create dummy buffers for shader binding (legacy CellCounts/ParticleIndices are not used when Z-Order is enabled)
+		// The shader requires valid SRVs even if bUseZOrderSorting=1
 		if (!PersistentCellCountsBuffer.IsValid())
 		{
-			SpatialData.CellCountsBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_SPATIAL_HASH_SIZE), TEXT("SpatialHash.CellCounts"));
-			SpatialData.ParticleIndicesBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_SPATIAL_HASH_SIZE * GPU_MAX_PARTICLES_PER_CELL), TEXT("SpatialHash.ParticleIndices"));
+			// Create minimal dummy buffers (1 element each) - not actually used
+			SpatialData.CellCountsBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("SpatialHash.CellCounts.Dummy"));
+			SpatialData.ParticleIndicesBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("SpatialHash.ParticleIndices.Dummy"));
 		}
 		else
 		{
@@ -790,31 +792,7 @@ FGPUFluidSimulator::FSimulationSpatialData FGPUFluidSimulator::BuildSpatialStruc
 
 		SpatialData.CellCountsSRV = GraphBuilder.CreateSRV(SpatialData.CellCountsBuffer);
 		SpatialData.ParticleIndicesSRV = GraphBuilder.CreateSRV(SpatialData.ParticleIndicesBuffer);
-		FRDGBufferUAVRef CellCountsUAVLocal = GraphBuilder.CreateUAV(SpatialData.CellCountsBuffer);
-		FRDGBufferUAVRef ParticleIndicesUAVLocal = GraphBuilder.CreateUAV(SpatialData.ParticleIndicesBuffer);
-
-		// GPU Clear
-		{
-			FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-			TShaderMapRef<FClearCellDataCS> ClearShader(ShaderMap);
-			FClearCellDataCS::FParameters* ClearParams = GraphBuilder.AllocParameters<FClearCellDataCS::FParameters>();
-			ClearParams->CellCounts = CellCountsUAVLocal;
-			FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("SpatialHash::GPUClear(ZOrder)"), ClearShader, ClearParams, FIntVector(FMath::DivideAndRoundUp<uint32>(GPU_SPATIAL_HASH_SIZE, SPATIAL_HASH_THREAD_GROUP_SIZE), 1, 1));
-		}
-
-		// GPU Build
-		{
-			FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-			TShaderMapRef<FBuildSpatialHashSimpleCS> BuildShader(ShaderMap);
-			FBuildSpatialHashSimpleCS::FParameters* BuildParams = GraphBuilder.AllocParameters<FBuildSpatialHashSimpleCS::FParameters>();
-			BuildParams->ParticlePositions = OutPositionsSRV;
-			BuildParams->ParticleCount = CurrentParticleCount;
-			BuildParams->ParticleRadius = Params.ParticleRadius;
-			BuildParams->CellSize = Params.CellSize;
-			BuildParams->CellCounts = CellCountsUAVLocal;
-			BuildParams->ParticleIndices = ParticleIndicesUAVLocal;
-			FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("SpatialHash::GPUBuild(ZOrder)"), BuildShader, BuildParams, FIntVector(FMath::DivideAndRoundUp<uint32>(CurrentParticleCount, SPATIAL_HASH_THREAD_GROUP_SIZE), 1, 1));
-		}
+		// NOTE: GPUClear and GPUBuild passes removed - not needed when Z-Order sorting is enabled
 	}
 	else
 	{
@@ -1135,8 +1113,15 @@ void FGPUFluidSimulator::ExtractPersistentBuffers(
 	const FSimulationSpatialData& SpatialData)
 {
 	GraphBuilder.QueueBufferExtraction(ParticleBuffer, &PersistentParticleBuffer, ERHIAccess::UAVCompute);
-	if (SpatialData.CellCountsBuffer) GraphBuilder.QueueBufferExtraction(SpatialData.CellCountsBuffer, &PersistentCellCountsBuffer, ERHIAccess::UAVCompute);
-	if (SpatialData.ParticleIndicesBuffer) GraphBuilder.QueueBufferExtraction(SpatialData.ParticleIndicesBuffer, &PersistentParticleIndicesBuffer, ERHIAccess::UAVCompute);
+
+	// Only extract legacy hash table buffers when Z-Order sorting is NOT enabled
+	// When Z-Order is enabled, CellCountsBuffer/ParticleIndicesBuffer are dummy buffers that weren't produced
+	const bool bUseZOrderSorting = ZOrderSortManager.IsValid() && ZOrderSortManager->IsZOrderSortingEnabled();
+	if (!bUseZOrderSorting)
+	{
+		if (SpatialData.CellCountsBuffer) GraphBuilder.QueueBufferExtraction(SpatialData.CellCountsBuffer, &PersistentCellCountsBuffer, ERHIAccess::UAVCompute);
+		if (SpatialData.ParticleIndicesBuffer) GraphBuilder.QueueBufferExtraction(SpatialData.ParticleIndicesBuffer, &PersistentParticleIndicesBuffer, ERHIAccess::UAVCompute);
+	}
 }
 
 //=============================================================================
@@ -1298,7 +1283,7 @@ void FGPUFluidSimulator::AddBoundarySkinningPass(FRDGBuilder& GraphBuilder, FSim
 	{
 		FRDGBufferRef OutBuffer = nullptr;
 		int32 OutCount = 0;
-		BoundarySkinningManager->AddBoundarySkinningPass(GraphBuilder, OutBuffer, OutCount);
+		BoundarySkinningManager->AddBoundarySkinningPass(GraphBuilder, OutBuffer, OutCount, Params.DeltaTime);
 
 		if (OutBuffer && OutCount > 0)
 		{
