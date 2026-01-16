@@ -150,6 +150,19 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 	const bool bUseCPUBoundary = !bUseSameFrameBuffer && !bUsePersistentBuffer
 		&& BoundarySkinningManager.IsValid() && BoundarySkinningManager->HasBoundaryParticles();
 
+	// Debug: Log boundary particle path (every 120 frames)
+	static int32 BoundaryDebugCounter = 0;
+	if (++BoundaryDebugCounter % 120 == 1)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[BoundaryDebug] SameFrame=%d, Persistent=%d, CPU=%d, HasManager=%d, HasParticles=%d, LocalCount=%d"),
+			bUseSameFrameBuffer ? 1 : 0,
+			bUsePersistentBuffer ? 1 : 0,
+			bUseCPUBoundary ? 1 : 0,
+			BoundarySkinningManager.IsValid() ? 1 : 0,
+			BoundarySkinningManager.IsValid() ? (BoundarySkinningManager->HasBoundaryParticles() ? 1 : 0) : 0,
+			BoundarySkinningManager.IsValid() ? BoundarySkinningManager->GetTotalLocalBoundaryParticleCount() : 0);
+	}
+
 	if (bUseSameFrameBuffer)
 	{
 		// Use same-frame buffer created in AddBoundarySkinningPass (works on first frame!)
@@ -196,6 +209,16 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 		PassParameters->BoundaryParticles = GraphBuilder.CreateSRV(DummyBuffer);
 		PassParameters->BoundaryParticleCount = 0;
 		PassParameters->bUseBoundaryDensity = 0;
+	}
+
+	// Debug: Log final boundary count being used (every 120 frames)
+	if (BoundaryDebugCounter % 120 == 1)
+	{
+		const TCHAR* PathName = bUseSameFrameBuffer ? TEXT("SameFrame") :
+			(bUsePersistentBuffer ? TEXT("Persistent") :
+			(bUseCPUBoundary ? TEXT("CPU") : TEXT("NONE")));
+		UE_LOG(LogTemp, Warning, TEXT("[BoundaryDebug] Path=%s, BoundaryCount=%d, bUseBoundaryDensity=%d"),
+			PathName, PassParameters->BoundaryParticleCount, PassParameters->bUseBoundaryDensity);
 	}
 
 	// Z-Order sorted boundary particles (Akinci 2012 + Z-Order optimization)

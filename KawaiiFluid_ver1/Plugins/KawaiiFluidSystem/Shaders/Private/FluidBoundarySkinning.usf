@@ -77,13 +77,13 @@ void BoundarySkinningCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		transform = ComponentTransform;
 	}
 
-	// Transform position: WorldPos = Transform * LocalPos
+	// Transform position: WorldPos = LocalPos * Transform (row-major, Unreal convention)
 	float4 localPos4 = float4(local.LocalPosition, 1.0f);
-	float3 worldPos = mul(transform, localPos4).xyz;
+	float3 worldPos = mul(localPos4, transform).xyz;
 
 	// Transform normal (rotation only, no translation)
 	float3x3 rotationMatrix = (float3x3)transform;
-	float3 worldNormal = normalize(mul(rotationMatrix, local.LocalNormal));
+	float3 worldNormal = normalize(mul(local.LocalNormal, rotationMatrix));
 
 	// Write output
 	FGPUBoundaryParticle output;

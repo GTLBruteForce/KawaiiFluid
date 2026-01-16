@@ -204,7 +204,7 @@ public:
 	//========================================
 
 	/** Adhesion strength - stickiness to surfaces (characters, walls) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Adhesion", meta = (ClampMin = "0.0", ClampMax = "50.0"))
 	float AdhesionStrength = 0.5f;
 
 	/** Adhesion radius (cm) */

@@ -625,6 +625,22 @@ public:
 	          meta = (EditCondition = "bShowBoundaryParticles", ClampMin = "0.5", ClampMax = "10.0"))
 	float BoundaryParticleDebugSize = 2.0f;
 
+	/**
+	 * 경계 입자 노말 방향 표시
+	 * 체크 시 경계 입자의 표면 노말을 화살표로 시각화
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
+	          meta = (EditCondition = "bShowBoundaryParticles",
+	                  ToolTip = "경계 입자 노말 방향 표시.\n체크 시 각 경계 입자의 표면 노말을 화살표로 시각화합니다."))
+	bool bShowBoundaryNormals = false;
+
+	/**
+	 * 노말 화살표 길이 (cm)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
+	          meta = (EditCondition = "bShowBoundaryParticles && bShowBoundaryNormals", ClampMin = "1.0", ClampMax = "50.0"))
+	float BoundaryNormalLength = 10.0f;
+
 	/** 경계 입자 수 반환 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Boundary Particles")
 	int32 GetBoundaryParticleCount() const { return BoundaryParticlePositions.Num(); }

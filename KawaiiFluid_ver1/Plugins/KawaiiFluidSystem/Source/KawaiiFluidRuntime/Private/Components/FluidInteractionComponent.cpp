@@ -1517,8 +1517,14 @@ void UFluidInteractionComponent::DrawDebugBoundaryParticles()
 		return;
 	}
 
-	for (const FVector& Pos : BoundaryParticlePositions)
+	const int32 NumParticles = BoundaryParticlePositions.Num();
+	const bool bHasNormals = (BoundaryParticleNormals.Num() == NumParticles);
+
+	for (int32 i = 0; i < NumParticles; ++i)
 	{
+		const FVector& Pos = BoundaryParticlePositions[i];
+
+		// 점 그리기
 		DrawDebugPoint(
 			World,
 			Pos,
@@ -1528,6 +1534,25 @@ void UFluidInteractionComponent::DrawDebugBoundaryParticles()
 			-1.0f,  // LifeTime
 			SDPG_Foreground  // DepthPriority - 메쉬 앞에 항상 표시
 		);
+
+		// 노말 화살표 그리기
+		if (bShowBoundaryNormals && bHasNormals)
+		{
+			const FVector& Normal = BoundaryParticleNormals[i];
+			FVector EndPos = Pos + Normal * BoundaryNormalLength;
+
+			DrawDebugDirectionalArrow(
+				World,
+				Pos,
+				EndPos,
+				3.0f,  // ArrowSize
+				FColor::Yellow,
+				false,  // bPersistentLines
+				-1.0f,  // LifeTime
+				SDPG_Foreground,  // DepthPriority
+				1.0f   // Thickness
+			);
+		}
 	}
 }
 
@@ -1570,7 +1595,7 @@ void UFluidInteractionComponent::CollectGPUBoundaryParticles(FGPUBoundaryParticl
 
 		// Psi는 경계 입자의 볼륨 기여도
 		// 낮을수록 밀려나는 힘 감소, 높을수록 강하게 밀려남
-		float Psi = 0.1f;
+		float Psi = 0.5f;
 
 		OutBoundaryParticles.Add(Position, Normal, OwnerID, Psi);
 	}
