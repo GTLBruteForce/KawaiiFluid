@@ -65,6 +65,23 @@ float DeltaTime;
 float RestDensity;
 float Poly6Coeff;
 
+// Boundary Owner AABB for particle-level early-out
+// Skip adhesion calculation for particles far from boundary AABB
+float3 BoundaryAABBMin;
+float3 BoundaryAABBMax;
+int bUseBoundaryAABBCulling;
+
+//=============================================================================
+// AABB Distance Function for Particle-Level Early-Out
+// Returns squared distance from position to AABB (0 if inside)
+//=============================================================================
+float DistanceSquaredToAABB(float3 testPos, float3 aabbMin, float3 aabbMax)
+{
+	float3 closestPoint = clamp(testPos, aabbMin, aabbMax);
+	float3 diff = testPos - closestPoint;
+	return dot(diff, diff);
+}
+
 //=============================================================================
 // SPH Kernels for Adhesion (Akinci 2013)
 // Note: AdhesionKernel and CohesionKernel are defined in FluidGPUPhysics.ush
@@ -161,9 +178,26 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	float3 pos = particle.PredictedPosition;
+
+	// =========================================================================
+	// PARTICLE-LEVEL EARLY-OUT: Skip if particle is far from boundary AABB
+	// This reduces unnecessary neighbor searches for particles outside boundary region
+	// =========================================================================
+	if (bUseBoundaryAABBCulling)
+	{
+		float distSqToAABB = DistanceSquaredToAABB(pos, BoundaryAABBMin, BoundaryAABBMax);
+		// Note: BoundaryAABB is already expanded by AdhesionRadius on CPU side
+		// So we just check if particle is outside the expanded AABB
+		if (distSqToAABB > 0.0001f)  // Small epsilon to handle floating point precision
+		{
+			return;  // Particle is outside expanded AABB, no boundary interaction possible
+		}
+	}
+
 	float3 adhesionForce = float3(0, 0, 0);
 	float3 cohesionForce = float3(0, 0, 0);
 	float h = AdhesionRadius;  // Use AdhesionRadius for tighter adhesion range
+	float weightSum = 0.0f;  // For normalization
 
 	if (bUseBoundaryZOrder)
 	{
@@ -201,8 +235,8 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							float3 r_normalized = r_vec / r;
 
 							// Distance-based strength: closer = stronger adhesion
-							// r=0 → closeFactor=3, r=h → closeFactor=1
-							float closeFactor = 1.0 + 20.0 * (1.0 - r / h);
+							// r=0 → closeFactor=6, r=h → closeFactor=1
+							float closeFactor = 1.0 + 5.0 * (1.0 - r / h);
 
 							// Adhesion force (Akinci 2013)
 							// F_adhesion = -beta * m_i * psi_b * A(r,h) * r_normalized
@@ -213,6 +247,9 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							// F_cohesion = -gamma * m_i * psi_b * C(r,h) * r_normalized
 							float C = CohesionKernel(r, h);
 							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
+
+							// Accumulate weight for normalization
+							weightSum += A;
 						}
 					}
 				}
@@ -252,8 +289,8 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							float3 r_normalized = r_vec / r;
 
 							// Distance-based strength: closer = stronger adhesion
-							// r=0 → closeFactor=3, r=h → closeFactor=1
-							float closeFactor = 1.0 + 20.0 * (1.0 - r / h);
+							// r=0 → closeFactor=6, r=h → closeFactor=1
+							float closeFactor = 1.0 + 5.0 * (1.0 - r / h);
 
 							// Adhesion force (Akinci 2013)
 							// F_adhesion = -beta * m_i * psi_b * A(r,h) * r_normalized
@@ -264,6 +301,9 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							// F_cohesion = -gamma * m_i * psi_b * C(r,h) * r_normalized
 							float C = CohesionKernel(r, h);
 							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
+
+							// Accumulate weight for normalization
+							weightSum += A;
 						}
 					}
 				}
@@ -271,12 +311,19 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		}
 	}
 
+	// Normalize forces by weight sum (average instead of accumulate)
+	if (weightSum > 0.0001f)
+	{
+		adhesionForce /= weightSum;
+		cohesionForce /= weightSum;
+	}
+
 	// Apply forces to velocity
 	float3 totalForce = adhesionForce + cohesionForce;
 
 	// Clamp force magnitude to prevent instability
 	float forceMag = length(totalForce);
-	float maxForce = 100000.0f;  // Maximum force magnitude (increased for stronger adhesion)
+	float maxForce = 10000.0f;  // Maximum force magnitude
 	if (forceMag > maxForce)
 	{
 		totalForce = totalForce * (maxForce / forceMag);

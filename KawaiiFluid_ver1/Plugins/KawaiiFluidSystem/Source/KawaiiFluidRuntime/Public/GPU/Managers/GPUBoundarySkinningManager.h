@@ -40,23 +40,60 @@ public:
 	bool IsReady() const { return bIsInitialized; }
 
 	//=========================================================================
-	// Boundary Particles Upload (Legacy CPU path)
+	// Static Boundary Particles (StaticMesh colliders - Persistent GPU)
+	// Uploaded once, cached on GPU, re-sorted only when dirty
 	//=========================================================================
 
 	/**
-	 * Upload boundary particles from CPU (legacy path)
-	 * @param BoundaryParticles - World-space boundary particles
+	 * Upload static boundary particles to persistent GPU buffer
+	 * Called once when static colliders are generated, cached on GPU
+	 * @param Particles - World-space static boundary particles
 	 */
-	void UploadBoundaryParticles(const FGPUBoundaryParticles& BoundaryParticles);
+	void UploadStaticBoundaryParticles(const TArray<FGPUBoundaryParticle>& Particles);
 
-	/** Check if boundary particles are valid */
-	bool HasBoundaryParticles() const { return bBoundaryParticlesValid; }
+	/**
+	 * Clear static boundary particles
+	 */
+	void ClearStaticBoundaryParticles();
 
-	/** Get boundary particle count */
-	int32 GetBoundaryParticleCount() const { return CachedBoundaryParticles.Num(); }
+	/**
+	 * Mark static boundary as dirty (needs re-upload and re-sort)
+	 * Call when colliders change (add/remove/move)
+	 */
+	void MarkStaticBoundaryDirty() { bStaticBoundaryDirty = true; }
 
-	/** Get cached boundary particles (for RDG pass) */
-	const TArray<FGPUBoundaryParticle>& GetCachedBoundaryParticles() const { return CachedBoundaryParticles; }
+	/** Check if static boundary is enabled and has data */
+	bool HasStaticBoundaryData() const { return bStaticBoundaryEnabled && StaticBoundaryParticleCount > 0; }
+
+	/** Get static boundary particle count */
+	int32 GetStaticBoundaryParticleCount() const { return StaticBoundaryParticleCount; }
+
+	/** Enable/disable static boundary processing */
+	void SetStaticBoundaryEnabled(bool bEnabled) { bStaticBoundaryEnabled = bEnabled; }
+	bool IsStaticBoundaryEnabled() const { return bStaticBoundaryEnabled; }
+
+	/** Get static boundary buffers (for density/adhesion passes) */
+	TRefCountPtr<FRDGPooledBuffer>& GetStaticBoundaryBuffer() { return PersistentStaticBoundaryBuffer; }
+	TRefCountPtr<FRDGPooledBuffer>& GetStaticZOrderSortedBuffer() { return PersistentStaticZOrderSorted; }
+	TRefCountPtr<FRDGPooledBuffer>& GetStaticCellStartBuffer() { return PersistentStaticCellStart; }
+	TRefCountPtr<FRDGPooledBuffer>& GetStaticCellEndBuffer() { return PersistentStaticCellEnd; }
+
+	/** Check if static Z-Order data is valid */
+	bool HasStaticZOrderData() const
+	{
+		return bStaticZOrderValid
+			&& PersistentStaticZOrderSorted.IsValid()
+			&& PersistentStaticCellStart.IsValid()
+			&& PersistentStaticCellEnd.IsValid();
+	}
+
+	/**
+	 * Execute Z-Order sorting for static boundary particles (if dirty)
+	 * Called once when static boundary is uploaded, cached until dirty
+	 * @param GraphBuilder - RDG builder
+	 * @param Params - Simulation parameters
+	 */
+	void ExecuteStaticBoundaryZOrderSort(FRDGBuilder& GraphBuilder, const FGPUFluidSimulationParams& Params);
 
 	//=========================================================================
 	// GPU Boundary Skinning (Persistent Local + GPU Transform)
@@ -98,6 +135,40 @@ public:
 	bool IsBoundaryAdhesionEnabled() const;
 
 	//=========================================================================
+	// Boundary Owner AABB (for early-out optimization)
+	// Skip boundary adhesion pass entirely when AABB doesn't overlap volume
+	//=========================================================================
+
+	/**
+	 * Update AABB for a boundary owner
+	 * @param OwnerID - Unique ID for the mesh owner
+	 * @param AABB - World-space AABB of the boundary owner
+	 */
+	void UpdateBoundaryOwnerAABB(int32 OwnerID, const FGPUBoundaryOwnerAABB& AABB);
+
+	/**
+	 * Get combined AABB of all boundary owners
+	 * @return Combined AABB encompassing all boundary owners
+	 */
+	const FGPUBoundaryOwnerAABB& GetCombinedBoundaryAABB() const { return CombinedBoundaryAABB; }
+
+	/**
+	 * Check if any boundary owner AABB overlaps with the simulation volume
+	 * @param VolumeMin - Minimum corner of simulation volume (expanded by AdhesionRadius)
+	 * @param VolumeMax - Maximum corner of simulation volume (expanded by AdhesionRadius)
+	 * @param AdhesionRadius - Adhesion search radius
+	 * @return true if any boundary AABB overlaps with the volume
+	 */
+	bool DoesBoundaryOverlapVolume(const FVector3f& VolumeMin, const FVector3f& VolumeMax, float AdhesionRadius) const;
+
+	/**
+	 * Check if boundary adhesion pass should be skipped due to no overlap
+	 * @param Params - Simulation parameters containing volume bounds
+	 * @return true if the pass should be skipped (no overlap)
+	 */
+	bool ShouldSkipBoundaryAdhesionPass(const FGPUFluidSimulationParams& Params) const;
+
+	//=========================================================================
 	// RDG Pass (called from simulator)
 	//=========================================================================
 
@@ -122,6 +193,9 @@ public:
 	 * @param Params - Simulation parameters
 	 * @param InSameFrameBoundaryBuffer - Optional: Same-frame boundary buffer (for first frame support)
 	 * @param InSameFrameBoundaryCount - Optional: Same-frame boundary particle count
+	 * @param InZOrderSortedSRV - Optional: Same-frame Z-Order sorted boundary buffer
+	 * @param InZOrderCellStartSRV - Optional: Same-frame Z-Order cell start buffer
+	 * @param InZOrderCellEndSRV - Optional: Same-frame Z-Order cell end buffer
 	 */
 	void AddBoundaryAdhesionPass(
 		FRDGBuilder& GraphBuilder,
@@ -129,7 +203,10 @@ public:
 		int32 CurrentParticleCount,
 		const FGPUFluidSimulationParams& Params,
 		FRDGBufferRef InSameFrameBoundaryBuffer = nullptr,
-		int32 InSameFrameBoundaryCount = 0);
+		int32 InSameFrameBoundaryCount = 0,
+		FRDGBufferSRVRef InZOrderSortedSRV = nullptr,
+		FRDGBufferSRVRef InZOrderCellStartSRV = nullptr,
+		FRDGBufferSRVRef InZOrderCellEndSRV = nullptr);
 
 	/** Get world boundary buffer for other passes */
 	TRefCountPtr<FRDGPooledBuffer>& GetWorldBoundaryBuffer() { return PersistentWorldBoundaryBuffer; }
@@ -145,16 +222,26 @@ public:
 	/**
 	 * Execute Z-Order sorting pipeline for boundary particles
 	 * Called after BoundarySkinningPass to sort world-space boundary particles
+	 * Works independently of FluidInteraction - supports static boundary particles
 	 * @param GraphBuilder - RDG builder
 	 * @param Params - Simulation parameters (for CellSize, bounds)
 	 * @param InSameFrameBoundaryBuffer - Optional: Same-frame boundary buffer (for first frame support)
 	 * @param InSameFrameBoundaryCount - Optional: Same-frame boundary particle count
+	 * @param OutSortedBuffer - Output: Sorted boundary particles buffer (same-frame access)
+	 * @param OutCellStartBuffer - Output: Cell start indices buffer
+	 * @param OutCellEndBuffer - Output: Cell end indices buffer
+	 * @param OutParticleCount - Output: Number of boundary particles sorted
+	 * @return true if Z-Order sorting was performed
 	 */
-	void ExecuteBoundaryZOrderSort(
+	bool ExecuteBoundaryZOrderSort(
 		FRDGBuilder& GraphBuilder,
 		const FGPUFluidSimulationParams& Params,
-		FRDGBufferRef InSameFrameBoundaryBuffer = nullptr,
-		int32 InSameFrameBoundaryCount = 0);
+		FRDGBufferRef InSameFrameBoundaryBuffer,
+		int32 InSameFrameBoundaryCount,
+		FRDGBufferRef& OutSortedBuffer,
+		FRDGBufferRef& OutCellStartBuffer,
+		FRDGBufferRef& OutCellEndBuffer,
+		int32& OutParticleCount);
 
 	/** Set Z-Order configuration */
 	void SetBoundaryZOrderConfig(EGridResolutionPreset Preset, const FVector3f& BoundsMin, const FVector3f& BoundsMax)
@@ -195,11 +282,22 @@ private:
 	bool bIsInitialized = false;
 
 	//=========================================================================
-	// Boundary Particles (Legacy CPU path)
+	// Static Boundary Particles (StaticMesh colliders - Persistent GPU)
 	//=========================================================================
 
-	TArray<FGPUBoundaryParticle> CachedBoundaryParticles;
-	bool bBoundaryParticlesValid = false;
+	TRefCountPtr<FRDGPooledBuffer> PersistentStaticBoundaryBuffer;
+	TRefCountPtr<FRDGPooledBuffer> PersistentStaticZOrderSorted;
+	TRefCountPtr<FRDGPooledBuffer> PersistentStaticCellStart;
+	TRefCountPtr<FRDGPooledBuffer> PersistentStaticCellEnd;
+	int32 StaticBoundaryParticleCount = 0;
+	int32 StaticBoundaryBufferCapacity = 0;
+	bool bStaticBoundaryEnabled = false;
+	bool bStaticBoundaryDirty = true;
+	bool bStaticZOrderValid = false;
+
+	// Temporary CPU storage for upload (cleared after GPU upload)
+	TArray<FGPUBoundaryParticle> PendingStaticBoundaryParticles;
+
 	FGPUBoundaryAdhesionParams CachedBoundaryAdhesionParams;
 
 	//=========================================================================
@@ -253,6 +351,17 @@ private:
 	TRefCountPtr<FRDGPooledBuffer> PersistentBoundaryCellStart;
 	TRefCountPtr<FRDGPooledBuffer> PersistentBoundaryCellEnd;
 	int32 BoundaryZOrderBufferCapacity = 0;
+
+	//=========================================================================
+	// Boundary Owner AABBs (for early-out optimization)
+	//=========================================================================
+
+	TMap<int32, FGPUBoundaryOwnerAABB> BoundaryOwnerAABBs;
+	FGPUBoundaryOwnerAABB CombinedBoundaryAABB;  // Combined AABB of all owners
+	bool bBoundaryAABBDirty = true;
+
+	/** Recalculate combined AABB from all owner AABBs */
+	void RecalculateCombinedAABB();
 
 	//=========================================================================
 	// Thread Safety

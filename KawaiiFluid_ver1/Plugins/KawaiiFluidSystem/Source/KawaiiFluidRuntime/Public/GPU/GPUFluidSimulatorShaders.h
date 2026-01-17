@@ -325,6 +325,8 @@ public:
 		SHADER_PARAMETER(float, SmoothingRadius)
 		SHADER_PARAMETER(float, ViscosityCoefficient)
 		SHADER_PARAMETER(float, Poly6Coeff)
+		SHADER_PARAMETER(float, ViscLaplacianCoeff)  // 45 / (PI * h^6) for Laplacian viscosity
+		SHADER_PARAMETER(float, DeltaTime)           // Substep delta time for Laplacian viscosity
 		SHADER_PARAMETER(float, CellSize)
 		// Flag to use cached neighbors (1 = use cache, 0 = use hash)
 		SHADER_PARAMETER(int32, bUseNeighborCache)
@@ -334,6 +336,12 @@ public:
 		SHADER_PARAMETER(int32, bUseBoundaryViscosity)
 		SHADER_PARAMETER(float, AdhesionStrength)  // 0~10, normalized for boundary viscosity
 		SHADER_PARAMETER(float, AdhesionRadius)    // Boundary viscosity influence radius (cm)
+		// Z-Order sorted boundary particles (same pattern as FSolveDensityPressureCS)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUBoundaryParticle>, SortedBoundaryParticles)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BoundaryCellStart)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BoundaryCellEnd)
+		SHADER_PARAMETER(int32, bUseBoundaryZOrder)
+		SHADER_PARAMETER(FVector3f, MortonBoundsMin)  // Required for GetMortonCellIDFromCellCoord
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;
@@ -1685,6 +1693,11 @@ public:
 		SHADER_PARAMETER(float, DeltaTime)
 		SHADER_PARAMETER(float, RestDensity)
 		SHADER_PARAMETER(float, Poly6Coeff)
+		// Boundary Owner AABB for particle-level early-out
+		// Skip adhesion calculation for particles far from boundary AABB
+		SHADER_PARAMETER(FVector3f, BoundaryAABBMin)
+		SHADER_PARAMETER(FVector3f, BoundaryAABBMax)
+		SHADER_PARAMETER(int32, bUseBoundaryAABBCulling)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;

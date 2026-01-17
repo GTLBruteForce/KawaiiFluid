@@ -817,19 +817,32 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 			}
 
 			// 2. Generate static boundary particles from collision primitives (Akinci 2012)
-			// Only regenerate when collision primitives have changed (dirty flag)
-			if (bStaticBoundaryParticlesDirty)
+			// Handles both dirty flag and runtime toggle of bEnableStaticBoundaryParticles
 			{
 				TRACE_CPUPROFILER_EVENT_SCOPE(SimGPU_Upload_StaticBoundary);
+				const bool bHasStaticBoundary = GPUSimulator->HasStaticBoundaryParticles();
+				const bool bIsStaticBoundaryEnabledOnGPU = GPUSimulator->IsGPUStaticBoundaryEnabled();
+
 				if (Params.bEnableStaticBoundaryParticles)
 				{
-					GPUSimulator->GenerateStaticBoundaryParticles(Preset->SmoothingRadius, Preset->RestDensity);
+					// Generate if dirty or if we should have particles but don't
+					if (bStaticBoundaryParticlesDirty || !bHasStaticBoundary)
+					{
+						GPUSimulator->GenerateStaticBoundaryParticles(Preset->SmoothingRadius, Preset->RestDensity);
+						bStaticBoundaryParticlesDirty = false;
+					}
 				}
 				else
 				{
-					GPUSimulator->ClearStaticBoundaryParticles();
+					// Clear if we have particles or GPU flag is still enabled
+					if (bHasStaticBoundary || bIsStaticBoundaryEnabledOnGPU)
+					{
+						GPUSimulator->ClearStaticBoundaryParticles();
+						UE_LOG(LogTemp, Log, TEXT("Static boundary cleared: bHasStaticBoundary=%d, bIsGPUEnabled=%d"),
+							bHasStaticBoundary, bIsStaticBoundaryEnabledOnGPU);
+					}
+					bStaticBoundaryParticlesDirty = false;
 				}
-				bStaticBoundaryParticlesDirty = false;
 			}
 
 			// 3. Set adhesion parameters if enabled
@@ -876,10 +889,13 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 
 		for (UFluidInteractionComponent* Interaction : Params.InteractionComponents)
 		{
-			if (Interaction && Interaction->HasLocalBoundaryParticles())
-			{
-				const int32 OwnerID = Interaction->GetBoundaryOwnerID();
+			if (!Interaction) continue;
 
+			const int32 OwnerID = Interaction->GetBoundaryOwnerID();
+
+			// Check if this interaction has active boundary particles (enabled AND initialized)
+			if (Interaction->HasLocalBoundaryParticles())
+			{
 				// Upload local particles only once (first time or after regeneration)
 				if (!GPUSimulator->IsGPUBoundarySkinningEnabled() ||
 				    GPUSimulator->GetTotalLocalBoundaryParticleCount() == 0)
@@ -907,6 +923,24 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 				}
 
 				GPUSimulator->UploadBoneTransformsForBoundary(OwnerID, BoneTransforms44f, FMatrix44f(ComponentTransform));
+
+				// Update boundary owner AABB for early-out optimization
+				// Get bounds from SkeletalMeshComponent if available
+				if (USkeletalMeshComponent* SkelMesh = Interaction->GetOwnerSkeletalMesh())
+				{
+					FBoxSphereBounds MeshBounds = SkelMesh->Bounds;
+					FGPUBoundaryOwnerAABB OwnerAABB(
+						FVector3f(MeshBounds.Origin - MeshBounds.BoxExtent),
+						FVector3f(MeshBounds.Origin + MeshBounds.BoxExtent)
+					);
+					GPUSimulator->UpdateBoundaryOwnerAABB(OwnerID, OwnerAABB);
+				}
+			}
+			else if (Interaction->HasInitializedBoundaryParticles())
+			{
+				// Interaction has initialized particles but bEnableBoundaryParticles is false
+				// Remove skinning data from GPU to prevent unnecessary processing
+				GPUSimulator->RemoveBoundarySkinningData(OwnerID);
 			}
 		}
 

@@ -1078,6 +1078,100 @@ struct FGPUBoundaryAdhesionParams
 static_assert(sizeof(FGPUBoundaryAdhesionParams) == 32, "FGPUBoundaryAdhesionParams must be 32 bytes");
 
 /**
+ * GPU Boundary Owner AABB
+ * Axis-Aligned Bounding Box for boundary owner (e.g., character mesh)
+ * Used for early-out optimization in boundary adhesion pass
+ * 32 bytes, 16-byte aligned
+ */
+struct FGPUBoundaryOwnerAABB
+{
+	FVector3f Min;            // 12 bytes - AABB minimum corner
+	float Padding1;           // 4 bytes  - Alignment padding
+	FVector3f Max;            // 12 bytes - AABB maximum corner
+	float Padding2;           // 4 bytes  - Alignment padding
+
+	FGPUBoundaryOwnerAABB()
+		: Min(FVector3f(FLT_MAX))
+		, Padding1(0.0f)
+		, Max(FVector3f(-FLT_MAX))
+		, Padding2(0.0f)
+	{
+	}
+
+	FGPUBoundaryOwnerAABB(const FVector3f& InMin, const FVector3f& InMax)
+		: Min(InMin)
+		, Padding1(0.0f)
+		, Max(InMax)
+		, Padding2(0.0f)
+	{
+	}
+
+	/** Check if this AABB is valid (Min <= Max) */
+	bool IsValid() const
+	{
+		return Min.X <= Max.X && Min.Y <= Max.Y && Min.Z <= Max.Z;
+	}
+
+	/** Expand AABB by given radius */
+	FGPUBoundaryOwnerAABB ExpandBy(float Radius) const
+	{
+		return FGPUBoundaryOwnerAABB(
+			Min - FVector3f(Radius),
+			Max + FVector3f(Radius)
+		);
+	}
+
+	/** Check if this AABB intersects with another AABB */
+	bool Intersects(const FGPUBoundaryOwnerAABB& Other) const
+	{
+		return (Min.X <= Other.Max.X && Max.X >= Other.Min.X) &&
+			   (Min.Y <= Other.Max.Y && Max.Y >= Other.Min.Y) &&
+			   (Min.Z <= Other.Max.Z && Max.Z >= Other.Min.Z);
+	}
+
+	/** Check if this AABB contains a point */
+	bool Contains(const FVector3f& Point) const
+	{
+		return Point.X >= Min.X && Point.X <= Max.X &&
+			   Point.Y >= Min.Y && Point.Y <= Max.Y &&
+			   Point.Z >= Min.Z && Point.Z <= Max.Z;
+	}
+
+	/** Get squared distance from a point to this AABB (0 if inside) */
+	float DistanceSquaredToPoint(const FVector3f& Point) const
+	{
+		float DistSq = 0.0f;
+
+		// X axis
+		if (Point.X < Min.X)
+			DistSq += FMath::Square(Min.X - Point.X);
+		else if (Point.X > Max.X)
+			DistSq += FMath::Square(Point.X - Max.X);
+
+		// Y axis
+		if (Point.Y < Min.Y)
+			DistSq += FMath::Square(Min.Y - Point.Y);
+		else if (Point.Y > Max.Y)
+			DistSq += FMath::Square(Point.Y - Max.Y);
+
+		// Z axis
+		if (Point.Z < Min.Z)
+			DistSq += FMath::Square(Min.Z - Point.Z);
+		else if (Point.Z > Max.Z)
+			DistSq += FMath::Square(Point.Z - Max.Z);
+
+		return DistSq;
+	}
+
+	/** Get distance from a point to this AABB (0 if inside) */
+	float DistanceToPoint(const FVector3f& Point) const
+	{
+		return FMath::Sqrt(DistanceSquaredToPoint(Point));
+	}
+};
+static_assert(sizeof(FGPUBoundaryOwnerAABB) == 32, "FGPUBoundaryOwnerAABB must be 32 bytes");
+
+/**
  * GPU Boundary Attachment (Flex-style)
  * Tracks which boundary particle a fluid particle is attached to
  * 32 bytes, 16-byte aligned

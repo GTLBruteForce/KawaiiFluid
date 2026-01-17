@@ -850,20 +850,73 @@ FGPUFluidSimulator::FSimulationSpatialData FGPUFluidSimulator::BuildSpatialStruc
 		SpatialData.CellEndSRV = GraphBuilder.CreateSRV(DummyCellEndBuffer);
 	}
 
-	// Pass 3.5: GPU Boundary Skinning
+	// Pass 3.5: GPU Boundary Skinning (SkeletalMesh - same-frame)
 	if (IsGPUBoundarySkinningEnabled())
 	{
 		AddBoundarySkinningPass(GraphBuilder, SpatialData, Params);
 	}
 
-	// Pass 3.6: Boundary Z-Order Sorting (after skinning, before density/adhesion)
-	if (BoundarySkinningManager.IsValid() && BoundarySkinningManager->IsBoundaryZOrderEnabled())
+	// Pass 3.6: Skinned Boundary Z-Order Sorting (after skinning)
+	// CRITICAL: Set bounds to match fluid simulation bounds for correct cell ID calculation
+	if (BoundarySkinningManager.IsValid() && ZOrderSortManager.IsValid())
 	{
-		// Pass same-frame buffer if available
-		BoundarySkinningManager->ExecuteBoundaryZOrderSort(
+		BoundarySkinningManager->SetBoundaryZOrderConfig(
+			ZOrderSortManager->GetGridResolutionPreset(),
+			SimulationBoundsMin,
+			SimulationBoundsMax);
+	}
+
+	if (BoundarySkinningManager.IsValid() && BoundarySkinningManager->IsBoundaryZOrderEnabled()
+		&& SpatialData.bSkinnedBoundaryPerformed)
+	{
+		// Pass same-frame buffer, get Z-Order buffers for same-frame use
+		SpatialData.bSkinnedZOrderPerformed = BoundarySkinningManager->ExecuteBoundaryZOrderSort(
 			GraphBuilder, Params,
-			SpatialData.WorldBoundaryBuffer,
-			SpatialData.WorldBoundaryParticleCount);
+			SpatialData.SkinnedBoundaryBuffer,
+			SpatialData.SkinnedBoundaryParticleCount,
+			SpatialData.SkinnedZOrderSortedBuffer,
+			SpatialData.SkinnedZOrderCellStartBuffer,
+			SpatialData.SkinnedZOrderCellEndBuffer,
+			SpatialData.SkinnedZOrderParticleCount);
+
+		// Create SRVs for same-frame access
+		if (SpatialData.bSkinnedZOrderPerformed)
+		{
+			SpatialData.SkinnedZOrderSortedSRV = GraphBuilder.CreateSRV(SpatialData.SkinnedZOrderSortedBuffer);
+			SpatialData.SkinnedZOrderCellStartSRV = GraphBuilder.CreateSRV(SpatialData.SkinnedZOrderCellStartBuffer);
+			SpatialData.SkinnedZOrderCellEndSRV = GraphBuilder.CreateSRV(SpatialData.SkinnedZOrderCellEndBuffer);
+		}
+	}
+
+	// Pass 3.7: Static Boundary Z-Order Sorting (StaticMesh - persistent GPU, sorted once)
+	if (BoundarySkinningManager.IsValid() && BoundarySkinningManager->IsStaticBoundaryEnabled())
+	{
+		// Execute Z-Order sort for static boundary (only if dirty)
+		BoundarySkinningManager->ExecuteStaticBoundaryZOrderSort(GraphBuilder, Params);
+
+		// Register persistent static buffers if available
+		if (BoundarySkinningManager->HasStaticZOrderData())
+		{
+			FRDGBufferRef StaticBoundaryBuffer = GraphBuilder.RegisterExternalBuffer(
+				BoundarySkinningManager->GetStaticBoundaryBuffer(),
+				TEXT("GPUFluid.StaticBoundaryParticles"));
+			FRDGBufferRef StaticSortedBuffer = GraphBuilder.RegisterExternalBuffer(
+				BoundarySkinningManager->GetStaticZOrderSortedBuffer(),
+				TEXT("GPUFluid.StaticSortedBoundary"));
+			FRDGBufferRef StaticCellStartBuffer = GraphBuilder.RegisterExternalBuffer(
+				BoundarySkinningManager->GetStaticCellStartBuffer(),
+				TEXT("GPUFluid.StaticCellStart"));
+			FRDGBufferRef StaticCellEndBuffer = GraphBuilder.RegisterExternalBuffer(
+				BoundarySkinningManager->GetStaticCellEndBuffer(),
+				TEXT("GPUFluid.StaticCellEnd"));
+
+			SpatialData.StaticBoundarySRV = GraphBuilder.CreateSRV(StaticBoundaryBuffer);
+			SpatialData.StaticZOrderSortedSRV = GraphBuilder.CreateSRV(StaticSortedBuffer);
+			SpatialData.StaticZOrderCellStartSRV = GraphBuilder.CreateSRV(StaticCellStartBuffer);
+			SpatialData.StaticZOrderCellEndSRV = GraphBuilder.CreateSRV(StaticCellEndBuffer);
+			SpatialData.StaticBoundaryParticleCount = BoundarySkinningManager->GetStaticBoundaryParticleCount();
+			SpatialData.bStaticBoundaryAvailable = true;
+		}
 	}
 
 	return SpatialData;
@@ -1212,11 +1265,6 @@ const FGPUBoundaryAdhesionParams& FGPUFluidSimulator::GetBoundaryAdhesionParams(
 	return BoundarySkinningManager.IsValid() ? BoundarySkinningManager->GetBoundaryAdhesionParams() : GDefaultBoundaryAdhesionParams;
 }
 
-void FGPUFluidSimulator::UploadBoundaryParticles(const FGPUBoundaryParticles& BoundaryParticles)
-{
-	if (bIsInitialized && BoundarySkinningManager.IsValid()) { BoundarySkinningManager->UploadBoundaryParticles(BoundaryParticles); }
-}
-
 void FGPUFluidSimulator::UploadLocalBoundaryParticles(int32 OwnerID, const TArray<FGPUBoundaryParticleLocal>& LocalParticles)
 {
 	if (bIsInitialized && BoundarySkinningManager.IsValid()) { BoundarySkinningManager->UploadLocalBoundaryParticles(OwnerID, LocalParticles); }
@@ -1225,6 +1273,11 @@ void FGPUFluidSimulator::UploadLocalBoundaryParticles(int32 OwnerID, const TArra
 void FGPUFluidSimulator::UploadBoneTransformsForBoundary(int32 OwnerID, const TArray<FMatrix44f>& BoneTransforms, const FMatrix44f& ComponentTransform)
 {
 	if (bIsInitialized && BoundarySkinningManager.IsValid()) { BoundarySkinningManager->UploadBoneTransformsForBoundary(OwnerID, BoneTransforms, ComponentTransform); }
+}
+
+void FGPUFluidSimulator::UpdateBoundaryOwnerAABB(int32 OwnerID, const FGPUBoundaryOwnerAABB& AABB)
+{
+	if (bIsInitialized && BoundarySkinningManager.IsValid()) { BoundarySkinningManager->UpdateBoundaryOwnerAABB(OwnerID, AABB); }
 }
 
 void FGPUFluidSimulator::RemoveBoundarySkinningData(int32 OwnerID)
@@ -1258,44 +1311,90 @@ void FGPUFluidSimulator::GenerateStaticBoundaryParticles(float SmoothingRadius, 
 		SmoothingRadius,
 		RestDensity);
 
-	// Upload static boundary particles to BoundarySkinningManager for density solver
-	// This enables the existing code path to use them alongside character boundary particles
+	// Upload static boundary particles to BoundarySkinningManager (Persistent GPU buffer)
+	// Static boundary particles are uploaded once and cached on GPU
 	if (BoundarySkinningManager.IsValid() && StaticBoundaryManager->HasBoundaryParticles())
 	{
 		const TArray<FGPUBoundaryParticle>& StaticParticles = StaticBoundaryManager->GetBoundaryParticles();
 
-		// Create FGPUBoundaryParticles struct for upload
-		FGPUBoundaryParticles BoundaryData;
-		BoundaryData.Particles = StaticParticles;
+		// Upload to persistent GPU buffer (not CPU cache)
+		BoundarySkinningManager->UploadStaticBoundaryParticles(StaticParticles);
+		BoundarySkinningManager->SetStaticBoundaryEnabled(true);
 
-		// Upload to BoundarySkinningManager (this sets the CPU fallback path)
-		BoundarySkinningManager->UploadBoundaryParticles(BoundaryData);
-
-		// Log upload (every 60 frames)
-		static int32 UploadLogCounter = 0;
-		if (++UploadLogCounter % 60 == 1)
-		{
-			UE_LOG(LogGPUFluidSimulator, Log, TEXT("Uploaded %d static boundary particles to density solver"), StaticParticles.Num());
-		}
+		UE_LOG(LogGPUFluidSimulator, Log, TEXT("Static boundary particles queued for GPU upload: %d particles"), StaticParticles.Num());
+	}
+	else if (BoundarySkinningManager.IsValid())
+	{
+		// No static boundary particles - disable static boundary processing
+		BoundarySkinningManager->SetStaticBoundaryEnabled(false);
 	}
 }
 
 void FGPUFluidSimulator::ClearStaticBoundaryParticles()
 {
+	// Clear StaticBoundaryManager
 	if (StaticBoundaryManager.IsValid())
 	{
 		StaticBoundaryManager->ClearBoundaryParticles();
 	}
+
+	// Clear BoundarySkinningManager's persistent static buffers
+	if (BoundarySkinningManager.IsValid())
+	{
+		BoundarySkinningManager->ClearStaticBoundaryParticles();
+		BoundarySkinningManager->SetStaticBoundaryEnabled(false);
+	}
+
+	UE_LOG(LogGPUFluidSimulator, Log, TEXT("Static boundary particles cleared"));
 }
 
 void FGPUFluidSimulator::AddBoundaryAdhesionPass(FRDGBuilder& GraphBuilder, FRDGBufferUAVRef ParticlesUAV, const FSimulationSpatialData& SpatialData, const FGPUFluidSimulationParams& Params)
 {
 	if (BoundarySkinningManager.IsValid())
 	{
-		// Pass same-frame buffer if available, otherwise use persistent buffer
-		FRDGBufferRef BoundaryBuffer = SpatialData.bBoundarySkinningPerformed ? SpatialData.WorldBoundaryBuffer : nullptr;
-		int32 BoundaryCount = SpatialData.bBoundarySkinningPerformed ? SpatialData.WorldBoundaryParticleCount : 0;
-		BoundarySkinningManager->AddBoundaryAdhesionPass(GraphBuilder, ParticlesUAV, CurrentParticleCount, Params, BoundaryBuffer, BoundaryCount);
+		// Determine which boundary to use (Skinned or Static)
+		const bool bHasSkinnedBoundary = SpatialData.bSkinnedBoundaryPerformed && SpatialData.SkinnedBoundaryBuffer != nullptr;
+		const bool bHasStaticBoundary = SpatialData.bStaticBoundaryAvailable && SpatialData.StaticBoundarySRV != nullptr;
+
+		FRDGBufferRef BoundaryBuffer = nullptr;
+		int32 BoundaryCount = 0;
+		FRDGBufferSRVRef ZOrderSortedSRV = nullptr;
+		FRDGBufferSRVRef ZOrderCellStartSRV = nullptr;
+		FRDGBufferSRVRef ZOrderCellEndSRV = nullptr;
+
+		if (bHasSkinnedBoundary)
+		{
+			// Use Skinned boundary
+			BoundaryBuffer = SpatialData.SkinnedBoundaryBuffer;
+			BoundaryCount = SpatialData.SkinnedBoundaryParticleCount;
+
+			if (SpatialData.bSkinnedZOrderPerformed)
+			{
+				ZOrderSortedSRV = SpatialData.SkinnedZOrderSortedSRV;
+				ZOrderCellStartSRV = SpatialData.SkinnedZOrderCellStartSRV;
+				ZOrderCellEndSRV = SpatialData.SkinnedZOrderCellEndSRV;
+			}
+		}
+		else if (bHasStaticBoundary)
+		{
+			// Use Static boundary - need to get buffer from manager
+			BoundaryBuffer = GraphBuilder.RegisterExternalBuffer(
+				BoundarySkinningManager->GetStaticBoundaryBuffer(),
+				TEXT("GPUFluid.StaticBoundaryForAdhesion"));
+			BoundaryCount = SpatialData.StaticBoundaryParticleCount;
+
+			ZOrderSortedSRV = SpatialData.StaticZOrderSortedSRV;
+			ZOrderCellStartSRV = SpatialData.StaticZOrderCellStartSRV;
+			ZOrderCellEndSRV = SpatialData.StaticZOrderCellEndSRV;
+		}
+
+		if (BoundaryBuffer != nullptr && BoundaryCount > 0)
+		{
+			BoundarySkinningManager->AddBoundaryAdhesionPass(
+				GraphBuilder, ParticlesUAV, CurrentParticleCount, Params,
+				BoundaryBuffer, BoundaryCount,
+				ZOrderSortedSRV, ZOrderCellStartSRV, ZOrderCellEndSRV);
+		}
 	}
 }
 

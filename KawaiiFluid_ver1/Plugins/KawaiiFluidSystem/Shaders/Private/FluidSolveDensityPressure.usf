@@ -73,6 +73,12 @@ StructuredBuffer<FGPUBoundaryParticle> BoundaryParticles;
 int BoundaryParticleCount;
 int bUseBoundaryDensity;
 
+// Z-Order sorted boundary particles (Akinci 2012 + Z-Order optimization)
+StructuredBuffer<FGPUBoundaryParticle> SortedBoundaryParticles;
+StructuredBuffer<uint> BoundaryCellStart;
+StructuredBuffer<uint> BoundaryCellEnd;
+int bUseBoundaryZOrder;
+
 //=============================================================================
 // Z-Order Cell ID Calculation (uses shader parameters)
 // Morton code functions are provided by FluidMortonUtils.ush
@@ -602,32 +608,88 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// 2. Pressure gradient: Δx_i += λ_i * ψ_k * ∇W(x_i - x_k) / ρ_0
 	// This makes fluid particles "see" the boundary as solid, preventing penetration
 	// AND pushes fluid away from boundaries (prevents wall climbing)
+	//
+	// Two modes:
+	// 1. Z-Order Mode: O(K) neighbor search using Morton-sorted BoundaryCellStart/End
+	// 2. Legacy Mode: O(M) brute-force (fallback)
 	//=========================================================================
 	if (bUseBoundaryDensity && BoundaryParticleCount > 0)
 	{
-		for (int bi = 0; bi < BoundaryParticleCount; ++bi)
+		if (bUseBoundaryZOrder)
 		{
-			FGPUBoundaryParticle boundary = BoundaryParticles[bi];
-			float3 r_cm = pos - boundary.Position;
-			float r2_cm = dot(r_cm, r_cm);
-			float r2 = r2_cm * CM_TO_M_SQ;
+			//=================================================================
+			// Z-Order Mode: O(K) neighbor search using Morton code
+			// SortedBoundaryParticles are sorted by Morton code
+			//=================================================================
+			int3 centerCell = WorldToCell(pos, CellSize);
+			int cellRadius = (int)ceil(SmoothingRadius / CellSize);
 
-			if (r2 < h2 && r2 > SMALL_NUMBER)
+			for (int dz = -cellRadius; dz <= cellRadius; ++dz)
 			{
-				// Poly6 kernel for density
-				float w = Poly6Kernel(r2, h2);
-				// Psi is the boundary particle's volume contribution (like mass for fluid)
-				density += boundary.Psi * Poly6Coeff * w;
+				for (int dy = -cellRadius; dy <= cellRadius; ++dy)
+				{
+					for (int dx = -cellRadius; dx <= cellRadius; ++dx)
+					{
+						int3 neighborCell = centerCell + int3(dx, dy, dz);
+						uint cellID = GetMortonCellIDFromCellCoord(neighborCell);
+						uint bCellStart = BoundaryCellStart[cellID];
+						uint bCellEnd = BoundaryCellEnd[cellID];
 
-				// Pressure gradient contribution from boundary (Akinci 2012)
-				// This pushes fluid AWAY from boundaries, preventing wall climbing
-				float3 r = r_cm * CM_TO_M;
-				float3 gradW = SpikyGradientFast(r, r2, h, h2);
-				gradW *= SpikyCoeff * CM_TO_M;
+						// Skip empty cells
+						if (bCellStart == INVALID_INDEX || bCellEnd == INVALID_INDEX)
+							continue;
 
-				// Boundary particle pressure response: λ_i * ψ_k * ∇W
-				// Note: boundary λ = 0, so only fluid particle's λ contributes
-				deltaP += lambda_i_prev * boundary.Psi * gradW;
+						// Iterate through boundary particles in this cell
+						for (uint bi = bCellStart; bi <= bCellEnd; ++bi)
+						{
+							FGPUBoundaryParticle boundary = SortedBoundaryParticles[bi];
+							float3 r_cm = pos - boundary.Position;
+							float r2_cm = dot(r_cm, r_cm);
+							float r2 = r2_cm * CM_TO_M_SQ;
+
+							if (r2 < h2 && r2 > SMALL_NUMBER)
+							{
+								// Poly6 kernel for density
+								float w = Poly6Kernel(r2, h2);
+								density += boundary.Psi * Poly6Coeff * w;
+
+								// Pressure gradient contribution from boundary
+								float3 r = r_cm * CM_TO_M;
+								float3 gradW = SpikyGradientFast(r, r2, h, h2);
+								gradW *= SpikyCoeff * CM_TO_M;
+
+								deltaP += lambda_i_prev * boundary.Psi * gradW;
+							}
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			//=================================================================
+			// Legacy Mode: O(M) brute-force (fallback)
+			//=================================================================
+			for (int bi = 0; bi < BoundaryParticleCount; ++bi)
+			{
+				FGPUBoundaryParticle boundary = BoundaryParticles[bi];
+				float3 r_cm = pos - boundary.Position;
+				float r2_cm = dot(r_cm, r_cm);
+				float r2 = r2_cm * CM_TO_M_SQ;
+
+				if (r2 < h2 && r2 > SMALL_NUMBER)
+				{
+					// Poly6 kernel for density
+					float w = Poly6Kernel(r2, h2);
+					density += boundary.Psi * Poly6Coeff * w;
+
+					// Pressure gradient contribution from boundary
+					float3 r = r_cm * CM_TO_M;
+					float3 gradW = SpikyGradientFast(r, r2, h, h2);
+					gradW *= SpikyCoeff * CM_TO_M;
+
+					deltaP += lambda_i_prev * boundary.Psi * gradW;
+				}
 			}
 		}
 	}

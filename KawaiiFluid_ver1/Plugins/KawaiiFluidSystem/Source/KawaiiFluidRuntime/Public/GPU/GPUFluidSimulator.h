@@ -304,13 +304,6 @@ public:
 	// GPU Boundary Particles (Flex-style Adhesion from FluidInteractionComponent)
 	//=============================================================================
 
-	/**
-	 * Upload boundary particles to GPU
-	 * Call this before simulation each frame with boundary particle data from FluidInteractionComponents
-	 * @param BoundaryParticles - Collection of boundary particles
-	 */
-	void UploadBoundaryParticles(const FGPUBoundaryParticles& BoundaryParticles);
-
 	/** Set boundary adhesion parameters */
 	void SetBoundaryAdhesionParams(const FGPUBoundaryAdhesionParams& Params)
 	{
@@ -323,8 +316,12 @@ public:
 	/** Check if boundary adhesion is enabled */
 	bool IsBoundaryAdhesionEnabled() const { return BoundarySkinningManager.IsValid() && BoundarySkinningManager->IsBoundaryAdhesionEnabled(); }
 
-	/** Get boundary particle count */
-	int32 GetBoundaryParticleCount() const { return BoundarySkinningManager.IsValid() ? BoundarySkinningManager->GetBoundaryParticleCount() : 0; }
+	/** Get total boundary particle count (Skinned + Static) */
+	int32 GetBoundaryParticleCount() const
+	{
+		if (!BoundarySkinningManager.IsValid()) return 0;
+		return BoundarySkinningManager->GetTotalLocalBoundaryParticleCount() + BoundarySkinningManager->GetStaticBoundaryParticleCount();
+	}
 
 	//=============================================================================
 	// GPU Boundary Skinning (Delegated to FGPUBoundarySkinningManager)
@@ -346,6 +343,14 @@ public:
 	 * @param ComponentTransform - Fallback transform for static meshes
 	 */
 	void UploadBoneTransformsForBoundary(int32 OwnerID, const TArray<FMatrix44f>& BoneTransforms, const FMatrix44f& ComponentTransform);
+
+	/**
+	 * Update AABB for a boundary owner (call each frame)
+	 * Used for early-out optimization in boundary adhesion pass
+	 * @param OwnerID - Unique ID for this interaction component
+	 * @param AABB - World-space AABB of the boundary owner
+	 */
+	void UpdateBoundaryOwnerAABB(int32 OwnerID, const FGPUBoundaryOwnerAABB& AABB);
 
 	/**
 	 * Remove boundary skinning data for an owner
@@ -407,6 +412,11 @@ public:
 	 * Check if static boundary generation is enabled
 	 */
 	bool IsStaticBoundaryEnabled() const { return StaticBoundaryManager.IsValid() && StaticBoundaryManager->IsEnabled(); }
+
+	/**
+	 * Check if static boundary GPU processing is enabled (BoundarySkinningManager flag)
+	 */
+	bool IsGPUStaticBoundaryEnabled() const { return BoundarySkinningManager.IsValid() && BoundarySkinningManager->IsStaticBoundaryEnabled(); }
 
 	/**
 	 * Get static boundary particles (for debug visualization)
@@ -592,12 +602,46 @@ private:
 		FRDGBufferSRVRef NeighborListSRV = nullptr;
 		FRDGBufferSRVRef NeighborCountsSRV = nullptr;
 
-		// Boundary Particle buffers (for same-frame access)
+		// Skinned Boundary Particle buffers (SkeletalMesh - same-frame)
 		// Created in AddBoundarySkinningPass, used in AddSolveDensityPressurePass
-		FRDGBufferRef WorldBoundaryBuffer = nullptr;
-		FRDGBufferSRVRef WorldBoundarySRV = nullptr;
-		int32 WorldBoundaryParticleCount = 0;
-		bool bBoundarySkinningPerformed = false;
+		FRDGBufferRef SkinnedBoundaryBuffer = nullptr;
+		FRDGBufferSRVRef SkinnedBoundarySRV = nullptr;
+		int32 SkinnedBoundaryParticleCount = 0;
+		bool bSkinnedBoundaryPerformed = false;
+
+		// Skinned Boundary Z-Order buffers (same-frame)
+		FRDGBufferRef SkinnedZOrderSortedBuffer = nullptr;
+		FRDGBufferRef SkinnedZOrderCellStartBuffer = nullptr;
+		FRDGBufferRef SkinnedZOrderCellEndBuffer = nullptr;
+		FRDGBufferSRVRef SkinnedZOrderSortedSRV = nullptr;
+		FRDGBufferSRVRef SkinnedZOrderCellStartSRV = nullptr;
+		FRDGBufferSRVRef SkinnedZOrderCellEndSRV = nullptr;
+		int32 SkinnedZOrderParticleCount = 0;
+		bool bSkinnedZOrderPerformed = false;
+
+		// Static Boundary Particle buffers (StaticMesh - persistent GPU)
+		// Cached on GPU, only re-sorted when dirty
+		FRDGBufferSRVRef StaticBoundarySRV = nullptr;
+		FRDGBufferSRVRef StaticZOrderSortedSRV = nullptr;
+		FRDGBufferSRVRef StaticZOrderCellStartSRV = nullptr;
+		FRDGBufferSRVRef StaticZOrderCellEndSRV = nullptr;
+		int32 StaticBoundaryParticleCount = 0;
+		bool bStaticBoundaryAvailable = false;
+
+		// Legacy aliases (for backward compatibility during transition)
+		FRDGBufferRef& WorldBoundaryBuffer = SkinnedBoundaryBuffer;
+		FRDGBufferSRVRef& WorldBoundarySRV = SkinnedBoundarySRV;
+		int32& WorldBoundaryParticleCount = SkinnedBoundaryParticleCount;
+		bool& bBoundarySkinningPerformed = bSkinnedBoundaryPerformed;
+
+		FRDGBufferRef& BoundaryZOrderSortedBuffer = SkinnedZOrderSortedBuffer;
+		FRDGBufferRef& BoundaryZOrderCellStartBuffer = SkinnedZOrderCellStartBuffer;
+		FRDGBufferRef& BoundaryZOrderCellEndBuffer = SkinnedZOrderCellEndBuffer;
+		FRDGBufferSRVRef& BoundaryZOrderSortedSRV = SkinnedZOrderSortedSRV;
+		FRDGBufferSRVRef& BoundaryZOrderCellStartSRV = SkinnedZOrderCellStartSRV;
+		FRDGBufferSRVRef& BoundaryZOrderCellEndSRV = SkinnedZOrderCellEndSRV;
+		int32& BoundaryZOrderParticleCount = SkinnedZOrderParticleCount;
+		bool& bBoundaryZOrderPerformed = bSkinnedZOrderPerformed;
 	};
 
 	/** Phase 1: Prepare particle buffer (Spawn, Upload, Reuse, Append) */

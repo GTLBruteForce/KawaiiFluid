@@ -665,8 +665,11 @@ public:
 	/** 컴포넌트 고유 ID 반환 (GPU Skinning Owner ID용) */
 	int32 GetBoundaryOwnerID() const { return GetUniqueID(); }
 
-	/** GPU Skinning 활성화 여부 (로컬 입자가 있으면 true) */
-	bool HasLocalBoundaryParticles() const { return bBoundaryParticlesInitialized && BoundaryParticleLocalPositions.Num() > 0; }
+	/** GPU Skinning 활성화 여부 (bEnableBoundaryParticles가 true이고 로컬 입자가 있으면 true) */
+	bool HasLocalBoundaryParticles() const { return bEnableBoundaryParticles && bBoundaryParticlesInitialized && BoundaryParticleLocalPositions.Num() > 0; }
+
+	/** 초기화된 로컬 입자가 있는지 확인 (bEnableBoundaryParticles와 무관) */
+	bool HasInitializedBoundaryParticles() const { return bBoundaryParticlesInitialized && BoundaryParticleLocalPositions.Num() > 0; }
 
 	/** Boundary Adhesion 활성화 여부 */
 	bool IsBoundaryAdhesionEnabled() const { return bEnableBoundaryParticles && bBoundaryParticlesInitialized && BoundaryParticlePositions.Num() > 0; }
