@@ -51,46 +51,6 @@ void FKawaiiFluidRenderResource::ReleaseRHI()
 	bBufferReadyForRendering.store(false);
 }
 
-void FKawaiiFluidRenderResource::AppendParticlesSnapshot(TArray<FKawaiiRenderParticle>&& InParticles)
-{
-	// 렌더 스레드 전용 - ENQUEUE_RENDER_COMMAND 내부에서 호출됨
-	check(IsInRenderingThread());
-
-	// CPU 모드로 마킹
-	bIsInGPUMode.store(false);
-
-	if (InParticles.Num() == 0)
-	{
-		return;
-	}
-
-	// 새 프레임이면 자동 Clear
-	uint32 CurrentFrame = GFrameCounterRenderThread;
-	if (LastSnapshotFrame != CurrentFrame)
-	{
-		CachedParticles.Empty();
-		LastSnapshotFrame = CurrentFrame;
-	}
-
-	// 파티클 추가
-	CachedParticles.Append(MoveTemp(InParticles));
-
-	// Radius 업데이트 (첫 파티클 기준)
-	if (CachedParticles.Num() > 0)
-	{
-		CachedParticleRadius.store(CachedParticles[0].Radius);
-	}
-
-	// 버퍼 크기 조정 필요 시 즉시 ResizeBuffer 호출 (이미 렌더 스레드)
-	const int32 TotalCount = CachedParticles.Num();
-	if (NeedsResize(TotalCount))
-	{
-		FRHICommandListImmediate& RHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
-		int32 NewCapacity = FMath::Max(TotalCount, BufferCapacity * 2);
-		ResizeBuffer(RHICmdList, NewCapacity);
-	}
-}
-
 bool FKawaiiFluidRenderResource::NeedsResize(int32 NewCount) const
 {
 	// Only resize if buffer is too SMALL (not for shrinking)
@@ -214,133 +174,8 @@ void FKawaiiFluidRenderResource::ResizeBuffer(FRHICommandListBase& RHICmdList, i
 	}
 }
 
-void FKawaiiFluidRenderResource::UpdateFromGPUBuffer(
-	TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer,
-	int32 InParticleCount,
-	float InParticleRadius)
-{
-	if (!PhysicsPooledBuffer.IsValid() || InParticleCount <= 0)
-	{
-		ParticleCount = 0;
-		bBufferReadyForRendering.store(false);
-		return;
-	}
-
-	// Mark as GPU mode
-	bIsInGPUMode.store(true);
-
-	// GPU mode: Clear CPU cache to prevent stale data from being used
-	// This fixes the "5 cached particles" issue where old CPU data was being rendered
-	if (CachedParticles.Num() > 0)
-	{
-		CachedParticles.Empty();
-	}
-
-	// NOTE: Do NOT set bBufferReadyForRendering = false here every frame!
-	// Keep using the previous frame's buffer until the new one is ready.
-	// This prevents flickering caused by timing gap between game/render threads.
-	// Only invalidate when buffer needs resize (will be recreated).
-
-	FKawaiiFluidRenderResource* RenderResource = this;
-	const int32 NewCount = InParticleCount;
-	const float Radius = InParticleRadius;
-
-	// Check if resize is needed BEFORE enqueueing
-	const bool bNeedsResizeNow = NeedsResize(NewCount);
-
-	// NOTE: Do NOT set bBufferReadyForRendering = false here in game thread!
-	// The render thread is 1 frame behind, so the previous frame's buffer is still valid.
-	// Setting the flag here causes flickering because render pipeline skips valid data.
-	// The flag will be managed entirely in the render thread.
-
-	// Capture pooled buffer reference for render thread
-	TRefCountPtr<FRDGPooledBuffer> PhysicsBufferRef = PhysicsPooledBuffer;
-
-	ENQUEUE_RENDER_COMMAND(UpdateFromGPUBuffer)(
-		[RenderResource, PhysicsBufferRef, NewCount, Radius, bNeedsResizeNow](FRHICommandListImmediate& RHICmdList)
-		{
-			// 버퍼 크기 조정 필요 시 재생성
-			if (bNeedsResizeNow)
-			{
-				int32 NewCapacity = FMath::Max(NewCount, RenderResource->BufferCapacity * 2);
-				RenderResource->ResizeBuffer(RHICmdList, NewCapacity);
-			}
-
-			if (!RenderResource->PooledParticleBuffer.IsValid())
-			{
-				return;
-			}
-
-			// Use RDG for compute shader dispatch (UE5.5 pattern)
-			FRDGBuilder GraphBuilder(RHICmdList);
-
-			// Register external physics pooled buffer (source - from GPU simulator)
-			FRDGBufferRef PhysicsBufferRDG = GraphBuilder.RegisterExternalBuffer(
-				PhysicsBufferRef,
-				TEXT("PhysicsParticlesBuffer")
-			);
-			FRDGBufferSRVRef PhysicsParticlesSRV = GraphBuilder.CreateSRV(PhysicsBufferRDG);
-
-			// Register our render pooled buffer (destination) - Legacy AoS
-			FRDGBufferRef RenderBufferRDG = GraphBuilder.RegisterExternalBuffer(
-				RenderResource->PooledParticleBuffer,
-				TEXT("RenderParticlesBuffer")
-			);
-			FRDGBufferUAVRef RenderParticlesUAV = GraphBuilder.CreateUAV(RenderBufferRDG);
-
-			// Use existing AddExtractRenderDataPass (Legacy AoS)
-			FGPUFluidSimulatorPassBuilder::AddExtractRenderDataPass(
-				GraphBuilder,
-				PhysicsParticlesSRV,
-				RenderParticlesUAV,
-				NewCount,
-				Radius
-			);
-
-			// SoA 버퍼도 추출 (메모리 대역폭 최적화)
-			if (RenderResource->PooledPositionBuffer.IsValid() && RenderResource->PooledVelocityBuffer.IsValid())
-			{
-				FRDGBufferRef PositionBufferRDG = GraphBuilder.RegisterExternalBuffer(
-					RenderResource->PooledPositionBuffer,
-					TEXT("RenderPositionsSoA")
-				);
-				FRDGBufferUAVRef PositionsUAV = GraphBuilder.CreateUAV(PositionBufferRDG);
-
-				FRDGBufferRef VelocityBufferRDG = GraphBuilder.RegisterExternalBuffer(
-					RenderResource->PooledVelocityBuffer,
-					TEXT("RenderVelocitiesSoA")
-				);
-				FRDGBufferUAVRef VelocitiesUAV = GraphBuilder.CreateUAV(VelocityBufferRDG);
-
-				FGPUFluidSimulatorPassBuilder::AddExtractRenderDataSoAPass(
-					GraphBuilder,
-					PhysicsParticlesSRV,
-					PositionsUAV,
-					VelocitiesUAV,
-					NewCount,
-					Radius
-				);
-			}
-
-			GraphBuilder.Execute();
-
-			RenderResource->ParticleCount = NewCount;
-
-			// Mark buffer as ready for rendering AFTER extract pass completes
-			RenderResource->bBufferReadyForRendering.store(true);
-
-			// Log for debugging
-			static int32 FrameCounter = 0;
-			if (++FrameCounter % 60 == 0)
-			{
-				UE_LOG(LogTemp, Log, TEXT("RenderResource: GPU→GPU copy via RDG (%d particles, buffer ready)"), NewCount);
-			}
-		}
-	);
-}
-
 //========================================
-// 통합 인터페이스 구현 (CPU/GPU 일원화)
+// GPU 시뮬레이터 인터페이스 구현
 //========================================
 
 void FKawaiiFluidRenderResource::SetGPUSimulatorReference(
@@ -354,14 +189,6 @@ void FKawaiiFluidRenderResource::SetGPUSimulatorReference(
 
 	if (InSimulator)
 	{
-		bIsInGPUMode.store(true);
-
-		// GPU 모드에서는 CPU 캐시 비우기
-		if (CachedParticles.Num() > 0)
-		{
-			CachedParticles.Empty();
-		}
-
 		// 버퍼 크기 조정 필요 시 렌더 스레드에서 ResizeBuffer 호출
 		const bool bNeedsResizeNow = NeedsResize(InParticleCount);
 		if (bNeedsResizeNow)
@@ -384,7 +211,6 @@ void FKawaiiFluidRenderResource::ClearGPUSimulatorReference()
 {
 	CachedGPUSimulator.store(nullptr);
 	CachedGPUParticleCount.store(0);
-	bIsInGPUMode.store(false);
 }
 
 int32 FKawaiiFluidRenderResource::GetUnifiedParticleCount() const
@@ -392,14 +218,9 @@ int32 FKawaiiFluidRenderResource::GetUnifiedParticleCount() const
 	FGPUFluidSimulator* Simulator = CachedGPUSimulator.load();
 	if (Simulator)
 	{
-		// GPU 모드: 시뮬레이터에서 최신 파티클 수 가져오기
 		return Simulator->GetParticleCount();
 	}
-	else
-	{
-		// CPU 모드: 캐시된 파티클 수
-		return CachedParticles.Num();
-	}
+	return 0;
 }
 
 FRDGBufferSRVRef FKawaiiFluidRenderResource::GetPhysicsBufferSRV(FRDGBuilder& GraphBuilder) const

@@ -34,26 +34,6 @@ public:
 	virtual void ReleaseRHI() override;
 
 	//========================================
-	// 데이터 업데이트 (게임 스레드에서 호출)
-	//========================================
-
-	/**
-	 * 스냅샷 방식 파티클 추가 (렌더 스레드 전용)
-	 * 게임 스레드에서 ENQUEUE_RENDER_COMMAND로 호출
-	 * 새 프레임이면 자동 Clear 후 Append
-	 * @param InParticles 추가할 파티클 배열 (MoveTemp로 전달)
-	 */
-	void AppendParticlesSnapshot(TArray<FKawaiiRenderParticle>&& InParticles);
-
-	/**
-	 * GPU 버퍼에서 직접 복사 (Phase 2: GPU → GPU, no CPU involvement)
-	 * @param PhysicsPooledBuffer 물리 시뮬레이터의 Pooled 파티클 버퍼
-	 * @param InParticleCount 파티클 수
-	 * @param InParticleRadius 파티클 반경
-	 */
-	void UpdateFromGPUBuffer(TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer, int32 InParticleCount, float InParticleRadius);
-
-	//========================================
 	// GPU 버퍼 접근 (렌더 스레드)
 	//========================================
 
@@ -76,16 +56,6 @@ public:
 	bool IsValid() const { return ParticleBuffer.IsValid() && ParticleSRV.IsValid(); }
 
 	//========================================
-	// CPU 측 데이터 캐시 (게임 스레드)
-	//========================================
-
-	/** 캐시된 파티클 데이터 반환 (RenderGraph Pass에서 사용) */
-	const TArray<FKawaiiRenderParticle>& GetCachedParticles() const
-	{
-		return CachedParticles;
-	}
-
-	//========================================
 	// GPU 버퍼 접근 (Phase 2: GPU → GPU 렌더링)
 	//========================================
 
@@ -103,9 +73,6 @@ public:
 
 	/** Mark buffer as ready for rendering (called after ExtractRenderDataPass completes) */
 	void SetBufferReadyForRendering(bool bReady) { bBufferReadyForRendering = bReady; }
-
-	/** Check if GPU mode is active (UpdateFromGPUBuffer was called instead of UpdateParticleData) */
-	bool IsInGPUMode() const { return bIsInGPUMode.load(); }
 
 	//========================================
 	// SoA (Structure of Arrays) 버퍼 접근
@@ -131,9 +98,7 @@ public:
 	}
 
 	//========================================
-	// 통합 인터페이스 (CPU/GPU 일원화)
-	// - 렌더 스레드에서 호출
-	// - 모드에 따라 적절한 버퍼 반환
+	// GPU 시뮬레이터 인터페이스
 	//========================================
 
 	/**
@@ -271,38 +236,18 @@ private:
 	/** Buffer is ready for rendering (ExtractRenderDataPass has completed) */
 	std::atomic<bool> bBufferReadyForRendering{false};
 
-	/** Flag indicating GPU mode is active (UpdateFromGPUBuffer was called) */
-	std::atomic<bool> bIsInGPUMode{false};
-
 	//========================================
-	// GPU 시뮬레이터 참조 (통합 인터페이스용)
+	// GPU 시뮬레이터 참조
 	//========================================
 
-	/**
-	 * GPU 시뮬레이터 참조 (렌더 스레드에서 직접 버퍼 접근용)
-	 * 게임 스레드에서 설정, 렌더 스레드에서 읽기
-	 * nullptr이면 CPU 모드
-	 */
+	/** GPU 시뮬레이터 참조 (렌더 스레드에서 직접 버퍼 접근용) */
 	std::atomic<FGPUFluidSimulator*> CachedGPUSimulator{nullptr};
 
-	/** GPU 모드에서 캐시된 파티클 수 */
+	/** 캐시된 파티클 수 */
 	std::atomic<int32> CachedGPUParticleCount{0};
 
-	/** 캐시된 파티클 반경 (GPU/CPU 공용) */
+	/** 캐시된 파티클 반경 */
 	std::atomic<float> CachedParticleRadius{10.0f};
-
-	//========================================
-	// CPU 측 데이터 캐시 (게임 스레드)
-	//========================================
-
-	/** 
-	 * 파티클 데이터 캐시 (게임 스레드에서 접근)
-	 * RenderGraph Pass에서 Position 추출용으로 사용
-	 */
-	TArray<FKawaiiRenderParticle> CachedParticles;
-
-	/** 마지막 스냅샷 프레임 번호 (렌더 스레드 전용, 자동 Clear용) */
-	uint32 LastSnapshotFrame = 0;
 
 	//========================================
 	// 내부 헬퍼

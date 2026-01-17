@@ -147,244 +147,85 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 		}
 		ProcessedResources.Add(RenderResource);
 
-		// GPU/CPU 모드 통합 처리
+		// GPU-only: GPUSimulator에서 버퍼 추출
 		FGPUFluidSimulator* GPUSimulator = RenderResource->GetGPUSimulator();
 		const float ParticleRadius = RenderResource->GetUnifiedParticleRadius();
 
-		if (GPUSimulator)
+		if (!GPUSimulator)
 		{
-			//========================================
-			// GPU 모드: GPUSimulator에서 버퍼 추출
-			//========================================
-			TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer = GPUSimulator->GetPersistentParticleBuffer();
-			const int32 ParticleCount = GPUSimulator->GetParticleCount();
+			continue;
+		}
 
-			if (!PhysicsPooledBuffer.IsValid() || ParticleCount <= 0)
-			{
-				continue;
-			}
+		TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer = GPUSimulator->GetPersistentParticleBuffer();
+		const int32 ParticleCount = GPUSimulator->GetParticleCount();
 
-			RDG_EVENT_SCOPE(GraphBuilder, "ExtractToRenderResource_GPU");
+		if (!PhysicsPooledBuffer.IsValid() || ParticleCount <= 0)
+		{
+			continue;
+		}
 
-			// Physics 버퍼 등록
-			FRDGBufferRef PhysicsBuffer = GraphBuilder.RegisterExternalBuffer(
-				PhysicsPooledBuffer,
-				TEXT("PhysicsParticles_Extract")
+		RDG_EVENT_SCOPE(GraphBuilder, "ExtractToRenderResource_GPU");
+
+		// Physics 버퍼 등록
+		FRDGBufferRef PhysicsBuffer = GraphBuilder.RegisterExternalBuffer(
+			PhysicsPooledBuffer,
+			TEXT("PhysicsParticles_Extract")
+		);
+		FRDGBufferSRVRef PhysicsBufferSRV = GraphBuilder.CreateSRV(PhysicsBuffer);
+
+		// Pooled 버퍼 가져오기
+		TRefCountPtr<FRDGPooledBuffer> PositionPooledBuffer = RenderResource->GetPooledPositionBuffer();
+		TRefCountPtr<FRDGPooledBuffer> VelocityPooledBuffer = RenderResource->GetPooledVelocityBuffer();
+		TRefCountPtr<FRDGPooledBuffer> RenderParticlePooled = RenderResource->GetPooledRenderParticleBuffer();
+		TRefCountPtr<FRDGPooledBuffer> BoundsPooled = RenderResource->GetPooledBoundsBuffer();
+
+		// RenderParticle + Bounds 버퍼 추출 (SDF용)
+		float BoundsMargin = ParticleRadius * 2.0f + 5.0f;
+
+		if (RenderParticlePooled.IsValid() && BoundsPooled.IsValid())
+		{
+			FRDGBufferRef RenderParticleBuffer = GraphBuilder.RegisterExternalBuffer(
+				RenderParticlePooled, TEXT("RenderParticles_Extract"));
+			FRDGBufferUAVRef RenderParticleUAV = GraphBuilder.CreateUAV(RenderParticleBuffer);
+
+			FRDGBufferRef BoundsBuffer = GraphBuilder.RegisterExternalBuffer(
+				BoundsPooled, TEXT("ParticleBounds_Extract"));
+			FRDGBufferUAVRef BoundsBufferUAV = GraphBuilder.CreateUAV(BoundsBuffer);
+
+			FGPUFluidSimulatorPassBuilder::AddExtractRenderDataWithBoundsPass(
+				GraphBuilder,
+				PhysicsBufferSRV,
+				RenderParticleUAV,
+				BoundsBufferUAV,
+				ParticleCount,
+				ParticleRadius,
+				BoundsMargin
 			);
-			FRDGBufferSRVRef PhysicsBufferSRV = GraphBuilder.CreateSRV(PhysicsBuffer);
-
-			// Pooled 버퍼 가져오기
-			TRefCountPtr<FRDGPooledBuffer> PositionPooledBuffer = RenderResource->GetPooledPositionBuffer();
-			TRefCountPtr<FRDGPooledBuffer> VelocityPooledBuffer = RenderResource->GetPooledVelocityBuffer();
-			TRefCountPtr<FRDGPooledBuffer> RenderParticlePooled = RenderResource->GetPooledRenderParticleBuffer();
-			TRefCountPtr<FRDGPooledBuffer> BoundsPooled = RenderResource->GetPooledBoundsBuffer();
-
-			// RenderParticle + Bounds 버퍼 추출 (SDF용)
-			float BoundsMargin = ParticleRadius * 2.0f + 5.0f;
-
-			if (RenderParticlePooled.IsValid() && BoundsPooled.IsValid())
-			{
-				FRDGBufferRef RenderParticleBuffer = GraphBuilder.RegisterExternalBuffer(
-					RenderParticlePooled, TEXT("RenderParticles_Extract"));
-				FRDGBufferUAVRef RenderParticleUAV = GraphBuilder.CreateUAV(RenderParticleBuffer);
-
-				FRDGBufferRef BoundsBuffer = GraphBuilder.RegisterExternalBuffer(
-					BoundsPooled, TEXT("ParticleBounds_Extract"));
-				FRDGBufferUAVRef BoundsBufferUAV = GraphBuilder.CreateUAV(BoundsBuffer);
-
-				FGPUFluidSimulatorPassBuilder::AddExtractRenderDataWithBoundsPass(
-					GraphBuilder,
-					PhysicsBufferSRV,
-					RenderParticleUAV,
-					BoundsBufferUAV,
-					ParticleCount,
-					ParticleRadius,
-					BoundsMargin
-				);
-			}
-
-			// SoA 버퍼 추출 (Position/Velocity)
-			if (PositionPooledBuffer.IsValid() && VelocityPooledBuffer.IsValid())
-			{
-				FRDGBufferRef PositionBuffer = GraphBuilder.RegisterExternalBuffer(
-					PositionPooledBuffer, TEXT("RenderPositions_Extract"));
-				FRDGBufferUAVRef PositionUAV = GraphBuilder.CreateUAV(PositionBuffer);
-
-				FRDGBufferRef VelocityBuffer = GraphBuilder.RegisterExternalBuffer(
-					VelocityPooledBuffer, TEXT("RenderVelocities_Extract"));
-				FRDGBufferUAVRef VelocityUAV = GraphBuilder.CreateUAV(VelocityBuffer);
-
-				FGPUFluidSimulatorPassBuilder::AddExtractRenderDataSoAPass(
-					GraphBuilder,
-					PhysicsBufferSRV,
-					PositionUAV,
-					VelocityUAV,
-					ParticleCount,
-					ParticleRadius
-				);
-			}
-
-			// 버퍼 준비 완료
-			RenderResource->SetBufferReadyForRendering(true);
 		}
-		else
+
+		// SoA 버퍼 추출 (Position/Velocity)
+		if (PositionPooledBuffer.IsValid() && VelocityPooledBuffer.IsValid())
 		{
-			//========================================
-			// CPU 모드: CachedParticles에서 GPU 버퍼로 업로드
-			// 버퍼가 없으면 여기서 생성
-			//========================================
-			const TArray<FKawaiiRenderParticle>& CachedParticles = RenderResource->GetCachedParticles();
-			const int32 ParticleCount = CachedParticles.Num();
+			FRDGBufferRef PositionBuffer = GraphBuilder.RegisterExternalBuffer(
+				PositionPooledBuffer, TEXT("RenderPositions_Extract"));
+			FRDGBufferUAVRef PositionUAV = GraphBuilder.CreateUAV(PositionBuffer);
 
-			if (ParticleCount <= 0)
-			{
-				continue;
-			}
+			FRDGBufferRef VelocityBuffer = GraphBuilder.RegisterExternalBuffer(
+				VelocityPooledBuffer, TEXT("RenderVelocities_Extract"));
+			FRDGBufferUAVRef VelocityUAV = GraphBuilder.CreateUAV(VelocityBuffer);
 
-			RDG_EVENT_SCOPE(GraphBuilder, "UploadToRenderResource_CPU");
-
-			// Position/Velocity 데이터 추출
-			TArray<FVector3f> Positions;
-			TArray<FVector3f> Velocities;
-			Positions.SetNumUninitialized(ParticleCount);
-			Velocities.SetNumUninitialized(ParticleCount);
-			for (int32 i = 0; i < ParticleCount; ++i)
-			{
-				Positions[i] = CachedParticles[i].Position;
-				Velocities[i] = CachedParticles[i].Velocity;
-			}
-
-			// Bounds 계산 (CPU에서)
-			FVector3f BoundsMin(FLT_MAX, FLT_MAX, FLT_MAX);
-			FVector3f BoundsMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-			const float BoundsMargin = ParticleRadius * 2.0f + 5.0f;
-			for (int32 i = 0; i < ParticleCount; ++i)
-			{
-				const FVector3f& Pos = CachedParticles[i].Position;
-				BoundsMin = FVector3f::Min(BoundsMin, Pos);
-				BoundsMax = FVector3f::Max(BoundsMax, Pos);
-			}
-			BoundsMin -= FVector3f(BoundsMargin);
-			BoundsMax += FVector3f(BoundsMargin);
-			FVector3f BoundsData[2] = { BoundsMin, BoundsMax };
-
-			// Pooled 버퍼 가져오기
-			TRefCountPtr<FRDGPooledBuffer> PositionPooledBuffer = RenderResource->GetPooledPositionBuffer();
-			TRefCountPtr<FRDGPooledBuffer> VelocityPooledBuffer = RenderResource->GetPooledVelocityBuffer();
-			TRefCountPtr<FRDGPooledBuffer> RenderParticlePooled = RenderResource->GetPooledRenderParticleBuffer();
-			TRefCountPtr<FRDGPooledBuffer> BoundsPooled = RenderResource->GetPooledBoundsBuffer();
-
-			// 버퍼 용량 확인 - 용량 부족 시 기존 버퍼 사용하지 않음
-			const int32 BufferCapacity = RenderResource->GetBufferCapacity();
-			const bool bHasSufficientCapacity = (BufferCapacity >= ParticleCount);
-
-			//========================================
-			// Position 버퍼: 기존 사용 또는 새로 생성
-			//========================================
-			{
-				FRDGBufferRef PositionBuffer;
-				bool bNeedExtraction = false;
-				if (PositionPooledBuffer.IsValid() && bHasSufficientCapacity)
-				{
-					PositionBuffer = GraphBuilder.RegisterExternalBuffer(
-						PositionPooledBuffer, TEXT("RenderPositions_Upload"));
-				}
-				else
-				{
-					FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), ParticleCount);
-					Desc.Usage |= EBufferUsageFlags::UnorderedAccess;
-					PositionBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("RenderPositions_New"));
-					bNeedExtraction = true;
-				}
-				// Upload first (produces the buffer), then extract
-				GraphBuilder.QueueBufferUpload(PositionBuffer, Positions.GetData(), ParticleCount * sizeof(FVector3f));
-				if (bNeedExtraction)
-				{
-					GraphBuilder.QueueBufferExtraction(PositionBuffer, RenderResource->GetPooledPositionBufferPtr());
-				}
-			}
-
-			//========================================
-			// Velocity 버퍼: 기존 사용 또는 새로 생성
-			//========================================
-			{
-				FRDGBufferRef VelocityBuffer;
-				bool bNeedExtraction = false;
-				if (VelocityPooledBuffer.IsValid() && bHasSufficientCapacity)
-				{
-					VelocityBuffer = GraphBuilder.RegisterExternalBuffer(
-						VelocityPooledBuffer, TEXT("RenderVelocities_Upload"));
-				}
-				else
-				{
-					FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), ParticleCount);
-					Desc.Usage |= EBufferUsageFlags::UnorderedAccess;
-					VelocityBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("RenderVelocities_New"));
-					bNeedExtraction = true;
-				}
-				// Upload first (produces the buffer), then extract
-				GraphBuilder.QueueBufferUpload(VelocityBuffer, Velocities.GetData(), ParticleCount * sizeof(FVector3f));
-				if (bNeedExtraction)
-				{
-					GraphBuilder.QueueBufferExtraction(VelocityBuffer, RenderResource->GetPooledVelocityBufferPtr());
-				}
-			}
-
-			//========================================
-			// RenderParticle 버퍼: 기존 사용 또는 새로 생성
-			//========================================
-			{
-				FRDGBufferRef RenderParticleBuffer;
-				bool bNeedExtraction = false;
-				if (RenderParticlePooled.IsValid() && bHasSufficientCapacity)
-				{
-					RenderParticleBuffer = GraphBuilder.RegisterExternalBuffer(
-						RenderParticlePooled, TEXT("RenderParticles_Upload"));
-				}
-				else
-				{
-					FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FKawaiiRenderParticle), ParticleCount);
-					Desc.Usage |= EBufferUsageFlags::UnorderedAccess;
-					RenderParticleBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("RenderParticles_New"));
-					bNeedExtraction = true;
-				}
-				// Upload first (produces the buffer), then extract
-				GraphBuilder.QueueBufferUpload(RenderParticleBuffer, CachedParticles.GetData(), ParticleCount * sizeof(FKawaiiRenderParticle));
-				if (bNeedExtraction)
-				{
-					GraphBuilder.QueueBufferExtraction(RenderParticleBuffer, RenderResource->GetPooledRenderParticleBufferPtr());
-				}
-			}
-
-			//========================================
-			// Bounds 버퍼: 기존 사용 또는 새로 생성
-			//========================================
-			{
-				FRDGBufferRef BoundsBuffer;
-				bool bNeedExtraction = false;
-				if (BoundsPooled.IsValid())
-				{
-					BoundsBuffer = GraphBuilder.RegisterExternalBuffer(
-						BoundsPooled, TEXT("ParticleBounds_Upload"));
-				}
-				else
-				{
-					FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), 2);
-					Desc.Usage |= EBufferUsageFlags::UnorderedAccess;
-					BoundsBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("ParticleBounds_New"));
-					bNeedExtraction = true;
-				}
-				// Upload first (produces the buffer), then extract
-				GraphBuilder.QueueBufferUpload(BoundsBuffer, BoundsData, sizeof(BoundsData));
-				if (bNeedExtraction)
-				{
-					GraphBuilder.QueueBufferExtraction(BoundsBuffer, RenderResource->GetPooledBoundsBufferPtr());
-				}
-			}
-
-			// 버퍼 준비 완료
-			RenderResource->SetBufferReadyForRendering(true);
+			FGPUFluidSimulatorPassBuilder::AddExtractRenderDataSoAPass(
+				GraphBuilder,
+				PhysicsBufferSRV,
+				PositionUAV,
+				VelocityUAV,
+				ParticleCount,
+				ParticleRadius
+			);
 		}
+
+		// 버퍼 준비 완료
+		RenderResource->SetBufferReadyForRendering(true);
 	}
 }
 
@@ -433,7 +274,7 @@ void FFluidSceneViewExtension::PostRenderBasePassDeferred_RenderThread(
 	RDG_EVENT_SCOPE(GraphBuilder, "KawaiiFluid_PostBasePass");
 
 	// Collect GBuffer/Translucent renderers only
-	// Batching by (Preset + GPUMode) - allows GPU/CPU mixing with same Preset
+	// Batching by Preset
 	// PostProcess mode is handled entirely in SubscribeToPostProcessingPass
 	// - GBuffer: writes to GBuffer
 	// - Translucent: writes to GBuffer + Stencil marking
@@ -627,7 +468,7 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 	}
 
 	// Collect all renderers for PrePostProcess (before TSR)
-	// Batching by (Preset + GPUMode) - allows GPU/CPU mixing with same Preset
+	// Batching by Preset
 	// - Translucent: GBuffer write already done, transparency compositing here
 	// - ScreenSpace: Full pipeline (depth/normal/thickness generation + shading)
 	TMap<FContextCacheKey, TArray<UKawaiiFluidMetaballRenderer*>> TranslucentBatches;

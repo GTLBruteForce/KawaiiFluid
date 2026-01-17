@@ -173,12 +173,6 @@ protected:
 	// Metaball Renderer Internals
 	//========================================
 
-	/** Update GPU render resources from CPU particle array (for save/load) */
-	void UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius);
-
-	/** Update GPU render resources from GPU simulator buffer (direct GPU->GPU) */
-	void UpdateGPUResourcesFromGPUBuffer(FGPUFluidSimulator* Simulator, int32 ParticleCount, float ParticleRadius);
-
 	/** Update Pipeline based on LocalParameters (Pipeline handles ShadingMode internally) */
 	void UpdatePipeline();
 
@@ -198,9 +192,6 @@ private:
 
 	/** Cached simulation context (owns the shared RenderResource) */
 	TWeakObjectPtr<UKawaiiFluidSimulationContext> CachedSimulationContext;
-
-	/** Converted render particles cache (FFluidParticle -> FKawaiiRenderParticle) */
-	TArray<FKawaiiRenderParticle> RenderParticlesCache;
 
 	//========================================
 	// Pipeline Architecture

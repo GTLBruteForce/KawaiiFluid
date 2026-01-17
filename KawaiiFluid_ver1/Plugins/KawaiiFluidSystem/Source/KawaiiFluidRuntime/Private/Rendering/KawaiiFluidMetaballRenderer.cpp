@@ -64,7 +64,6 @@ void UKawaiiFluidMetaballRenderer::Cleanup()
 
 	// Clear cached data
 	CachedParticlePositions.Empty();
-	RenderParticlesCache.Empty();
 	RendererSubsystem = nullptr;
 	bIsRenderingActive = false;
 
@@ -196,83 +195,6 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 	{
 		UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: GPU mode - RenderResource에 시뮬레이터 참조 설정 (%d particles, radius: %.2f)"),
 			GPUParticleCount, RenderRadius);
-	}
-}
-
-void UKawaiiFluidMetaballRenderer::UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius)
-{
-	// Optionally filter to render only surface particles (for slime optimization)
-	RenderParticlesCache.Reset();
-	RenderParticlesCache.Reserve(FMath::Min(Particles.Num(), MaxRenderParticles));
-
-	for (int32 i = 0; i < Particles.Num() && RenderParticlesCache.Num() < MaxRenderParticles; ++i)
-	{
-		// If bRenderSurfaceOnly is false, render all particles (normal fluid)
-		// If bRenderSurfaceOnly is true, only render surface particles (slime optimization)
-		if (!bRenderSurfaceOnly || Particles[i].bIsSurfaceParticle)
-		{
-			FKawaiiRenderParticle& RenderP = RenderParticlesCache.AddDefaulted_GetRef();
-			RenderP.Position = FVector3f(Particles[i].Position);
-			RenderP.Velocity = FVector3f(Particles[i].Velocity);
-			RenderP.Radius = ParticleRadius;
-			RenderP.Padding = 0.0f;
-		}
-	}
-
-	// Log rendered particle count
-	UE_LOG(LogTemp, Log, TEXT("Metaball: Rendered particles = %d / Total = %d (SurfaceOnly: %s)"),
-		RenderParticlesCache.Num(), Particles.Num(), bRenderSurfaceOnly ? TEXT("true") : TEXT("false"));
-
-	// 스냅샷 방식: 렌더 스레드로 파티클 데이터 전송 (배칭 렌더링용)
-	// ENQUEUE_RENDER_COMMAND로 안전하게 전달, 렌더 스레드에서 Append
-	if (CachedSimulationContext.IsValid() && CachedSimulationContext->HasValidRenderResource())
-	{
-		FKawaiiFluidRenderResource* RR = CachedSimulationContext->GetRenderResource();
-		ENQUEUE_RENDER_COMMAND(AppendParticlesSnapshot)(
-			[RR, Snapshot = MoveTemp(RenderParticlesCache)](FRHICommandListImmediate& RHICmdList) mutable
-			{
-				RR->AppendParticlesSnapshot(MoveTemp(Snapshot));
-			}
-		);
-	}
-
-	// Cache particle radius for ViewExtension access
-	CachedParticleRadius = ParticleRadius;
-}
-
-void UKawaiiFluidMetaballRenderer::UpdateGPUResourcesFromGPUBuffer(
-	FGPUFluidSimulator* Simulator,
-	int32 ParticleCount,
-	float ParticleRadius)
-{
-	if (!Simulator || ParticleCount <= 0)
-	{
-		return;
-	}
-
-	// Get physics particle pooled buffer from GPU simulator
-	TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer = Simulator->GetPersistentParticleBuffer();
-	if (!PhysicsPooledBuffer.IsValid())
-	{
-		UE_LOG(LogTemp, Warning, TEXT("MetaballRenderer: GPU Simulator has no valid pooled buffer"));
-		return;
-	}
-
-	// Update render resource using GPU→GPU copy (no CPU involvement)
-	if (FKawaiiFluidRenderResource* RR = GetFluidRenderResource())
-	{
-		RR->UpdateFromGPUBuffer(PhysicsPooledBuffer, ParticleCount, ParticleRadius);
-	}
-
-	// Cache particle radius for ViewExtension access
-	CachedParticleRadius = ParticleRadius;
-
-	// Log periodically for debugging
-	static int32 FrameCounter = 0;
-	if (++FrameCounter % 60 == 0)
-	{
-		UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: GPU→GPU path active (%d particles, radius: %.2f)"),
-			ParticleCount, ParticleRadius);
 	}
 }
 
