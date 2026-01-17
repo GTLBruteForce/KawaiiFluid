@@ -173,10 +173,10 @@ protected:
 	// Metaball Renderer Internals
 	//========================================
 
-	/** Update GPU render resources (CPU path - uploads from CPU array) */
+	/** Update GPU render resources from CPU particle array (for save/load) */
 	void UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius);
 
-	/** Update GPU render resources from GPU simulator buffer (GPU path - no CPU upload) */
+	/** Update GPU render resources from GPU simulator buffer (direct GPU->GPU) */
 	void UpdateGPUResourcesFromGPUBuffer(FGPUFluidSimulator* Simulator, int32 ParticleCount, float ParticleRadius);
 
 	/** Update Pipeline based on LocalParameters (Pipeline handles ShadingMode internally) */

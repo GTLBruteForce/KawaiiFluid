@@ -227,23 +227,16 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 			// @TODO 이거 풀면 날라가는거 고쳐야함
 			Params.bEnableStaticBoundaryParticles = false;
 			Params.CollisionChannel = Preset->CollisionChannel;
-			
-			// GPU 시뮬레이션 설정 (서브시스템과 동일하게)
-			if (Params.bUseGPUSimulation)
+
+			// GPU 시뮬레이션 설정 (항상 GPU 사용)
+			if (!Context->IsGPUSimulatorReady())
 			{
-				if (!Context->IsGPUSimulatorReady())
-				{
-					Context->InitializeGPUSimulator(Preset->MaxParticles);
-				}
-				if (Context->IsGPUSimulatorReady())
-				{
-					SimulationModule->SetGPUSimulator(Context->GetGPUSimulator());
-					SimulationModule->SetGPUSimulationActive(true);
-				}
+				Context->InitializeGPUSimulator(Preset->MaxParticles);
 			}
-			else
+			if (Context->IsGPUSimulatorReady())
 			{
-				SimulationModule->SetGPUSimulationActive(false);
+				SimulationModule->SetGPUSimulator(Context->GetGPUSimulator());
+				SimulationModule->SetGPUSimulationActive(true);
 			}
 
 			float AccumulatedTime = SimulationModule->GetAccumulatedTime();
@@ -301,7 +294,7 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 	// Uses SimulationModule->BoundsExtent which is calculated from CellSize
 	// Skip if external TargetSimulationVolume is set - the Volume will draw its own bounds instead
 #if WITH_EDITOR
-	if (SimulationModule && bUseGPUSimulation && !bIsGameWorld && !GetTargetSimulationVolume())
+	if (SimulationModule && !bIsGameWorld && !GetTargetSimulationVolume())
 	{
 		// Use BoundsExtent from SimulationModule (calculated from CellSize * GridResolution)
 		const float BoundsExtent = SimulationModule->BoundsExtent;
@@ -1149,68 +1142,48 @@ int32 UKawaiiFluidComponent::RemoveParticlesInRadius(const FVector& WorldCenter,
 	SimulationModule->Modify();
 #endif
 
-	if (bUseGPUSimulation)
+	// ID-based despawn: CPU에서 리드백 데이터로 영역 내 ParticleID 수집 후 GPU에서 제거
+	FGPUFluidSimulator* GPUSimulator = SimulationModule->GetGPUSimulator();
+	if (!GPUSimulator)
 	{
-		// ID-based despawn: CPU에서 리드백 데이터로 영역 내 ParticleID 수집 후 GPU에서 제거
-		FGPUFluidSimulator* GPUSimulator = SimulationModule->GetGPUSimulator();
-		if (!GPUSimulator)
-		{
-			return 0;
-		}
-
-		// Get readback particle data from GPU
-		TArray<FGPUFluidParticle> ReadbackParticles;
-		if (!GPUSimulator->GetReadbackGPUParticles(ReadbackParticles))
-		{
-			// No valid readback data yet, skip this frame
-			return 0;
-		}
-
-		// Find particles within radius and collect their IDs
-		const float RadiusSq = Radius * Radius;
-		const FVector3f WorldCenterF = FVector3f(WorldCenter);
-		TArray<int32> ParticleIDsToRemove;
-		TArray<int32> AllReadbackIDs;
-		ParticleIDsToRemove.Reserve(128);  // Pre-allocate for typical brush operation
-		AllReadbackIDs.Reserve(ReadbackParticles.Num());
-
-		for (const FGPUFluidParticle& Particle : ReadbackParticles)
-		{
-			AllReadbackIDs.Add(Particle.ParticleID);
-
-			const float DistSq = FVector3f::DistSquared(Particle.Position, WorldCenterF);
-			if (DistSq <= RadiusSq)
-			{
-				ParticleIDsToRemove.Add(Particle.ParticleID);
-			}
-		}
-
-		// Submit ID-based despawn request with all readback IDs for cleanup
-		if (ParticleIDsToRemove.Num() > 0)
-		{
-			GPUSimulator->AddDespawnByIDRequests(ParticleIDsToRemove, AllReadbackIDs);
-			UE_LOG(LogTemp, Verbose, TEXT("RemoveParticlesInRadius: Found %d particles to remove by ID"), ParticleIDsToRemove.Num());
-		}
-
-		return ParticleIDsToRemove.Num();
+		return 0;
 	}
-	else
+
+	// Get readback particle data from GPU
+	TArray<FGPUFluidParticle> ReadbackParticles;
+	if (!GPUSimulator->GetReadbackGPUParticles(ReadbackParticles))
 	{
-		float RadiusSq = Radius * Radius;
-
-		TArray<FFluidParticle>& Particles = SimulationModule->GetParticlesMutable();
-		int32 RemovedCount = 0;
-
-		for (int32 i = Particles.Num() - 1; i >= 0; --i)
-		{
-			if (FVector::DistSquared(Particles[i].Position, WorldCenter) <= RadiusSq)
-			{
-				Particles.RemoveAtSwap(i);
-				++RemovedCount;
-			}
-		}
-		return RemovedCount;
+		// No valid readback data yet, skip this frame
+		return 0;
 	}
+
+	// Find particles within radius and collect their IDs
+	const float RadiusSq = Radius * Radius;
+	const FVector3f WorldCenterF = FVector3f(WorldCenter);
+	TArray<int32> ParticleIDsToRemove;
+	TArray<int32> AllReadbackIDs;
+	ParticleIDsToRemove.Reserve(128);  // Pre-allocate for typical brush operation
+	AllReadbackIDs.Reserve(ReadbackParticles.Num());
+
+	for (const FGPUFluidParticle& Particle : ReadbackParticles)
+	{
+		AllReadbackIDs.Add(Particle.ParticleID);
+
+		const float DistSq = FVector3f::DistSquared(Particle.Position, WorldCenterF);
+		if (DistSq <= RadiusSq)
+		{
+			ParticleIDsToRemove.Add(Particle.ParticleID);
+		}
+	}
+
+	// Submit ID-based despawn request with all readback IDs for cleanup
+	if (ParticleIDsToRemove.Num() > 0)
+	{
+		GPUSimulator->AddDespawnByIDRequests(ParticleIDsToRemove, AllReadbackIDs);
+		UE_LOG(LogTemp, Verbose, TEXT("RemoveParticlesInRadius: Found %d particles to remove by ID"), ParticleIDsToRemove.Num());
+	}
+
+	return ParticleIDsToRemove.Num();
 }
 
 void UKawaiiFluidComponent::ClearAllParticles()

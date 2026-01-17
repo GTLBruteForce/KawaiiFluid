@@ -97,9 +97,8 @@ public:
 	//========================================
 
 	/**
-	 * Check if GPU simulation is active
-	 * When true, renderers should use GPU buffer directly instead of CPU particles
-	 * @return True if GPU simulation is running
+	 * Check if GPU simulation is active and ready for rendering
+	 * @return True if GPU simulation is running and buffers are ready
 	 */
 	virtual bool IsGPUSimulationActive() const { return false; }
 

@@ -517,11 +517,9 @@ FKawaiiFluidSimulationParams UKawaiiFluidSimulationModule::BuildSimulationParams
 	Params.IgnoreActor = GetOwnerActor();
 	Params.bUseWorldCollision = bUseWorldCollision;
 
-	// GPU Simulation - get from owner component
+	// Get owner component for simulation origin
 	if (UKawaiiFluidComponent* OwnerComp = Cast<UKawaiiFluidComponent>(GetOuter()))
 	{
-		Params.bUseGPUSimulation = OwnerComp->bUseGPUSimulation;
-
 		// Set simulation origin for bounds offset (preset bounds are relative to component)
 		Params.SimulationOrigin = OwnerComp->GetComponentLocation();
 

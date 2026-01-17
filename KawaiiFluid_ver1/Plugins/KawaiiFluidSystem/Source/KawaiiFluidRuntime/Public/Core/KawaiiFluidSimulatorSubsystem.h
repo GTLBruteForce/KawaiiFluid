@@ -23,8 +23,7 @@ struct FFluidParticle;
 
 /**
  * Cache key for Context lookup
- * Allows same Preset to have different Contexts for GPU vs CPU simulation
- * and different Solvers for different Z-Order spaces
+ * Different VolumeComponents use different Z-Order spaces
  */
 USTRUCT()
 struct FContextCacheKey
@@ -38,27 +37,23 @@ struct FContextCacheKey
 	UPROPERTY()
 	TObjectPtr<UKawaiiFluidPresetDataAsset> Preset = nullptr;
 
-	UPROPERTY()
-	bool bUseGPUSimulation = false;
-
 	FContextCacheKey() = default;
-	FContextCacheKey(UKawaiiFluidSimulationVolumeComponent* InVolumeComponent, UKawaiiFluidPresetDataAsset* InPreset, bool bInUseGPU)
-		: VolumeComponent(InVolumeComponent), Preset(InPreset), bUseGPUSimulation(bInUseGPU) {}
+	FContextCacheKey(UKawaiiFluidSimulationVolumeComponent* InVolumeComponent, UKawaiiFluidPresetDataAsset* InPreset)
+		: VolumeComponent(InVolumeComponent), Preset(InPreset) {}
 
 	// Legacy constructor for backward compatibility
-	FContextCacheKey(UKawaiiFluidPresetDataAsset* InPreset, bool bInUseGPU)
-		: VolumeComponent(nullptr), Preset(InPreset), bUseGPUSimulation(bInUseGPU) {}
+	explicit FContextCacheKey(UKawaiiFluidPresetDataAsset* InPreset)
+		: VolumeComponent(nullptr), Preset(InPreset) {}
 
 	bool operator==(const FContextCacheKey& Other) const
 	{
-		return VolumeComponent == Other.VolumeComponent && Preset == Other.Preset && bUseGPUSimulation == Other.bUseGPUSimulation;
+		return VolumeComponent == Other.VolumeComponent && Preset == Other.Preset;
 	}
 
 	friend uint32 GetTypeHash(const FContextCacheKey& Key)
 	{
 		uint32 Hash = GetTypeHash(Key.VolumeComponent);
 		Hash = HashCombine(Hash, GetTypeHash(Key.Preset));
-		Hash = HashCombine(Hash, GetTypeHash(Key.bUseGPUSimulation));
 		return Hash;
 	}
 };
@@ -196,16 +191,16 @@ public:
 	// Context Management
 	//========================================
 
-	/** Get or create context for volume component, preset and simulation mode
-	 *  Same Preset can have different Contexts for GPU vs CPU simulation
+	/** Get or create context for volume component and preset
 	 *  Same VolumeComponent = same Z-Order space = particles can interact
+	 *  Always uses GPU simulation
 	 */
-	UKawaiiFluidSimulationContext* GetOrCreateContext(UKawaiiFluidSimulationVolumeComponent* VolumeComponent, UKawaiiFluidPresetDataAsset* Preset, bool bUseGPUSimulation);
+	UKawaiiFluidSimulationContext* GetOrCreateContext(UKawaiiFluidSimulationVolumeComponent* VolumeComponent, UKawaiiFluidPresetDataAsset* Preset);
 
 	/** Legacy: Get or create context without volume (uses component-relative bounds) */
-	UKawaiiFluidSimulationContext* GetOrCreateContext(UKawaiiFluidPresetDataAsset* Preset, bool bUseGPUSimulation)
+	UKawaiiFluidSimulationContext* GetOrCreateContext(UKawaiiFluidPresetDataAsset* Preset)
 	{
-		return GetOrCreateContext(nullptr, Preset, bUseGPUSimulation);
+		return GetOrCreateContext(nullptr, Preset);
 	}
 
 private:
@@ -241,10 +236,7 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UFluidInteractionComponent>> GlobalInteractionComponents;
 
-	/** Context cache (Preset + SimulationMode -> Instance)
-	 *  Same Preset can have different Contexts for GPU vs CPU simulation
-	 *  This allows mixing GPU and CPU components with the same Preset
-	 */
+	/** Context cache (Preset + VolumeComponent -> Instance) */
 	UPROPERTY()
 	TMap<FContextCacheKey, TObjectPtr<UKawaiiFluidSimulationContext>> ContextCache;
 
@@ -288,7 +280,7 @@ private:
 	/** Simulate batched modules */
 	void SimulateBatchedFluidComponents(float DeltaTime);
 
-	/** Group modules by (Preset + SimulationMode) - allows GPU/CPU mixing with same Preset */
+	/** Group modules by Preset + VolumeComponent */
 	TMap<FContextCacheKey, TArray<TObjectPtr<UKawaiiFluidSimulationModule>>> GroupModulesByContext() const;
 
 	/** Merge particles from modules */

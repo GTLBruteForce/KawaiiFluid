@@ -159,72 +159,44 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 	}
 
 	// =====================================================
-	// GPU/CPU 통합 경로: RenderResource에 시뮬레이터 참조 설정
-	// 렌더 스레드에서 RenderResource를 통해 일원화된 접근 가능
+	// GPU 경로: RenderResource에 시뮬레이터 참조 설정
+	// 렌더 스레드에서 RenderResource를 통해 GPU 버퍼에 직접 접근
 	// =====================================================
-	if (DataProvider->IsGPUSimulationActive())
-	{
-		FGPUFluidSimulator* Simulator = DataProvider->GetGPUSimulator();
+	FGPUFluidSimulator* Simulator = DataProvider->GetGPUSimulator();
 
-		if (Simulator)
-		{
-			// Update anisotropy parameters to GPU simulator
-			Simulator->SetAnisotropyParams(GetLocalParameters().AnisotropyParams);
-
-			// Get particle count (atomic, thread-safe read)
-			const int32 GPUParticleCount = Simulator->GetParticleCount();
-
-			// 렌더 스레드에서 RenderResource를 통해 GPU 버퍼에 접근
-			if (FKawaiiFluidRenderResource* RR = GetFluidRenderResource())
-			{
-				RR->SetGPUSimulatorReference(Simulator, GPUParticleCount, RenderRadius);
-			}
-
-			// Update stats
-			LastRenderedParticleCount = FMath::Min(GPUParticleCount, MaxRenderParticles);
-			bIsRenderingActive = (GPUParticleCount > 0);
-
-			// Cache radius for shader parameters
-			CachedParticleRadius = RenderRadius;
-
-			// Debug logging
-			static int32 FrameCounter = 0;
-			if (++FrameCounter % 60 == 0)
-			{
-				UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: GPU mode - RenderResource에 시뮬레이터 참조 설정 (%d particles, radius: %.2f)"),
-					GPUParticleCount, RenderRadius);
-			}
-
-			return;
-		}
-	}
-
-	// CPU 모드: GPU 시뮬레이터 참조 해제
-	if (FKawaiiFluidRenderResource* RR = GetFluidRenderResource())
-	{
-		RR->ClearGPUSimulatorReference();
-	}
-
-	// =====================================================
-	// CPU path: Traditional CPU → GPU upload
-	// =====================================================
-	const TArray<FFluidParticle>& SimParticles = DataProvider->GetParticles();
-
-	if (SimParticles.Num() == 0)
+	if (!Simulator)
 	{
 		bIsRenderingActive = false;
 		LastRenderedParticleCount = 0;
 		return;
 	}
 
-	int32 NumParticles = FMath::Min(SimParticles.Num(), MaxRenderParticles);
+	// Update anisotropy parameters to GPU simulator
+	Simulator->SetAnisotropyParams(GetLocalParameters().AnisotropyParams);
 
-	// Update GPU resources (ViewExtension will handle rendering automatically)
-	UpdateGPUResources(SimParticles, RenderRadius);
+	// Get particle count (atomic, thread-safe read)
+	const int32 GPUParticleCount = Simulator->GetParticleCount();
+
+	// 렌더 스레드에서 RenderResource를 통해 GPU 버퍼에 접근
+	if (FKawaiiFluidRenderResource* RR = GetFluidRenderResource())
+	{
+		RR->SetGPUSimulatorReference(Simulator, GPUParticleCount, RenderRadius);
+	}
 
 	// Update stats
-	LastRenderedParticleCount = NumParticles;
-	bIsRenderingActive = true;
+	LastRenderedParticleCount = FMath::Min(GPUParticleCount, MaxRenderParticles);
+	bIsRenderingActive = (GPUParticleCount > 0);
+
+	// Cache radius for shader parameters
+	CachedParticleRadius = RenderRadius;
+
+	// Debug logging
+	static int32 FrameCounter = 0;
+	if (++FrameCounter % 60 == 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: GPU mode - RenderResource에 시뮬레이터 참조 설정 (%d particles, radius: %.2f)"),
+			GPUParticleCount, RenderRadius);
+	}
 }
 
 void UKawaiiFluidMetaballRenderer::UpdateGPUResources(const TArray<FFluidParticle>& Particles, float ParticleRadius)

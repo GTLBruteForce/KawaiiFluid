@@ -226,9 +226,6 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSimulationParams
 	// GPU Simulation
 	//========================================
 
-	/** Use GPU compute shaders for physics simulation */
-	bool bUseGPUSimulation = false;
-
 	/** Grid resolution preset for Z-Order sorting (determines shader permutation) */
 	EGridResolutionPreset GridResolutionPreset = EGridResolutionPreset::Medium;
 

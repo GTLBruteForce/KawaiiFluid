@@ -1203,52 +1203,8 @@ void UKawaiiFluidSimulationContext::Simulate(
 		return;
 	}
 
-	// Debug: Check GPU simulation flag
-	static int32 SimulateLogCounter = 0;
-	if (++SimulateLogCounter % 60 == 1)
-	{
-		UE_LOG(LogTemp, Log, TEXT("Context::Simulate: bUseGPUSimulation=%d, Particles.Num=%d"),
-			Params.bUseGPUSimulation ? 1 : 0, Particles.Num());
-	}
-
-	// GPU mode: dispatch early (GPU has its own particle count check via pending spawns)
-	// Do NOT check CPU Particles.Num() here - GPU mode doesn't use CPU array
-	if (Params.bUseGPUSimulation)
-	{
-		SimulateGPU(Particles, Preset, Params, SpatialHash, DeltaTime, AccumulatedTime);
-		return;
-	}
-
-	// CPU mode: require particles in CPU array
-	if (Particles.Num() == 0)
-	{
-		return;
-	}
-
-	EnsureSolversInitialized(Preset);
-
-	// Accumulator method: simulate with fixed dt
-	const int32 MaxSubstepsPerFrame = Preset->MaxSubsteps;
-	const float MaxAllowedTime = Preset->SubstepDeltaTime * MaxSubstepsPerFrame;
-	AccumulatedTime += FMath::Min(DeltaTime, MaxAllowedTime);
-
-	// Cache collider shapes once per frame
-	CacheColliderShapes(Params.Colliders);
-
-	// Update attached particle positions (bone tracking - before physics)
-	UpdateAttachedParticlePositions(Particles, Params.InteractionComponents);
-
-	// Substep loop
-	int32 SubstepCount = 0;
-	while (AccumulatedTime >= Preset->SubstepDeltaTime && SubstepCount < MaxSubstepsPerFrame)
-	{
-		SimulateSubstep(Particles, Preset, Params, SpatialHash, Preset->SubstepDeltaTime);
-		AccumulatedTime -= Preset->SubstepDeltaTime;
-		++SubstepCount;
-	}
-
-	// Collect simulation statistics
-	CollectSimulationStats(Particles, Preset, SubstepCount, false);
+	// Always use GPU simulation
+	SimulateGPU(Particles, Preset, Params, SpatialHash, DeltaTime, AccumulatedTime);
 }
 
 void UKawaiiFluidSimulationContext::SimulateSubstep(

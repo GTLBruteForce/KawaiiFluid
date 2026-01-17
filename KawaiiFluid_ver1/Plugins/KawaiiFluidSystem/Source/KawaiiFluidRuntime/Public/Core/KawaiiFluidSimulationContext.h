@@ -52,15 +52,8 @@ public:
 	//========================================
 
 	/**
-	 * Enable/disable GPU simulation mode
-	 * When enabled, physics calculations run on GPU compute shaders
-	 * Attached particles are still handled by CPU
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GPU")
-	bool bUseGPUSimulation = false;
-
-	/**
 	 * Initialize GPU simulator (call before using GPU mode)
+	 * GPU simulation is always used
 	 */
 	virtual void InitializeGPUSimulator(int32 MaxParticleCount);
 
@@ -345,7 +338,7 @@ protected:
 
 	/**
 	 * Simulate using GPU compute shaders
-	 * Called when bUseGPUSimulation is true
+	 * Always uses GPU simulation
 	 */
 	virtual void SimulateGPU(
 		TArray<FFluidParticle>& Particles,

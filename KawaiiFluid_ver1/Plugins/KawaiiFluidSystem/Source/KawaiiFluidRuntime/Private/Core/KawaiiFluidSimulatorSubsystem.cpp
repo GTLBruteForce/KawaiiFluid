@@ -153,20 +153,13 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 		// so spawn calls before first Tick use the correct path
 		UKawaiiFluidPresetDataAsset* Preset = Module->GetEffectivePreset();
 
-		// Check GPU setting from owner component (not preset)
-		bool bWantsGPUSimulation = false;
-		if (UKawaiiFluidComponent* OwnerComp = Cast<UKawaiiFluidComponent>(Module->GetOuter()))
-		{
-			bWantsGPUSimulation = OwnerComp->bUseGPUSimulation;
-		}
-
 		// Always setup Context reference (needed for rendering)
-		// Context is keyed by (VolumeComponent + Preset + SimulationMode)
+		// Context is keyed by (VolumeComponent + Preset)
 		// Same VolumeComponent = same Z-Order space = particles can interact
 		if (Preset)
 		{
 			UKawaiiFluidSimulationVolumeComponent* TargetVolume = Module->GetTargetVolumeComponent();
-			UKawaiiFluidSimulationContext* Context = GetOrCreateContext(TargetVolume, Preset, bWantsGPUSimulation);
+			UKawaiiFluidSimulationContext* Context = GetOrCreateContext(TargetVolume, Preset);
 			if (Context)
 			{
 				// Set context reference for rendering access
@@ -178,24 +171,21 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 					Context->SetCachedPreset(Preset);
 				}
 
-				// GPU simulation setup
-				if (bWantsGPUSimulation)
+				// GPU simulation setup (always enabled)
+				if (!Context->IsGPUSimulatorReady())
 				{
-					if (!Context->IsGPUSimulatorReady())
-					{
-						Context->InitializeGPUSimulator(Preset->MaxParticles);
-					}
+					Context->InitializeGPUSimulator(Preset->MaxParticles);
+				}
 
-					if (Context->IsGPUSimulatorReady())
-					{
-						Module->SetGPUSimulator(Context->GetGPUSimulator());
-						Module->SetGPUSimulationActive(true);
+				if (Context->IsGPUSimulatorReady())
+				{
+					Module->SetGPUSimulator(Context->GetGPUSimulator());
+					Module->SetGPUSimulationActive(true);
 
-						// PIE/로드 후 캐시된 CPU 파티클을 GPU로 업로드
-						Module->UploadCPUParticlesToGPU();
+					// PIE/로드 후 캐시된 CPU 파티클을 GPU로 업로드
+					Module->UploadCPUParticlesToGPU();
 
-						UE_LOG(LogTemp, Log, TEXT("SimulationModule: GPU simulation initialized at registration"));
-					}
+					UE_LOG(LogTemp, Log, TEXT("SimulationModule: GPU simulation initialized at registration"));
 				}
 
 				// Initialize Context's RenderResource for batch rendering
@@ -390,18 +380,17 @@ UKawaiiFluidSimulationModule* UKawaiiFluidSimulatorSubsystem::GetModuleBySourceI
 //========================================
 
 UKawaiiFluidSimulationContext* UKawaiiFluidSimulatorSubsystem::GetOrCreateContext(
-	UKawaiiFluidSimulationVolumeComponent* VolumeComponent, UKawaiiFluidPresetDataAsset* Preset, bool bUseGPUSimulation)
+	UKawaiiFluidSimulationVolumeComponent* VolumeComponent, UKawaiiFluidPresetDataAsset* Preset)
 {
 	if (!Preset)
 	{
 		return DefaultContext;
 	}
 
-	// Check cache - keyed by (VolumeComponent + Preset + SimulationMode)
+	// Check cache - keyed by (VolumeComponent + Preset)
 	// Same VolumeComponent = same Z-Order space = particles can interact
 	// Same Preset = same physics parameters
-	// Same GPU mode = same simulation path
-	FContextCacheKey CacheKey(VolumeComponent, Preset, bUseGPUSimulation);
+	FContextCacheKey CacheKey(VolumeComponent, Preset);
 	if (TObjectPtr<UKawaiiFluidSimulationContext>* Found = ContextCache.Find(CacheKey))
 	{
 		return *Found;
@@ -422,9 +411,9 @@ UKawaiiFluidSimulationContext* UKawaiiFluidSimulatorSubsystem::GetOrCreateContex
 
 	ContextCache.Add(CacheKey, NewContext);
 
-	UE_LOG(LogTemp, Log, TEXT("Created Context for VolumeComponent '%s' + Preset '%s' (GPU=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created Context for VolumeComponent '%s' + Preset '%s'"),
 		VolumeComponent ? *VolumeComponent->GetName() : TEXT("None"),
-		*Preset->GetName(), bUseGPUSimulation ? 1 : 0);
+		*Preset->GetName());
 
 	return NewContext;
 }
@@ -467,18 +456,11 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 			continue;
 		}
 
-		// Get GPU setting from owner component
-		bool bWantsGPUSimulation = false;
-		if (UKawaiiFluidComponent* OwnerComp = Cast<UKawaiiFluidComponent>(Module->GetOuter()))
-		{
-			bWantsGPUSimulation = OwnerComp->bUseGPUSimulation;
-		}
-
 		// Get target volume component for Z-Order space bounds
 		UKawaiiFluidSimulationVolumeComponent* TargetVolume = Module->GetTargetVolumeComponent();
 
-		// Get or create context (keyed by VolumeComponent + Preset + SimulationMode)
-		UKawaiiFluidSimulationContext* Context = GetOrCreateContext(TargetVolume, EffectivePreset, bWantsGPUSimulation);
+		// Get or create context (keyed by VolumeComponent + Preset)
+		UKawaiiFluidSimulationContext* Context = GetOrCreateContext(TargetVolume, EffectivePreset);
 		if (!Context)
 		{
 			continue;
@@ -500,25 +482,16 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 		Params.CPUCollisionFeedbackBufferPtr = &CPUCollisionFeedbackBuffer;
 		Params.CPUCollisionFeedbackLockPtr = &CPUCollisionFeedbackLock;
 
-		// Phase 1: Setup GPU state BEFORE Simulate so spawn calls go to GPU
-		// This ensures SpawnParticle() during this frame will use GPU path
-		if (Params.bUseGPUSimulation)
+		// GPU simulation setup (always enabled)
+		if (!Context->IsGPUSimulatorReady())
 		{
-			// Initialize GPU simulator if needed (before any spawning)
-			if (!Context->IsGPUSimulatorReady())
-			{
-				Context->InitializeGPUSimulator(EffectivePreset->MaxParticles);
-			}
-
-			if (Context->IsGPUSimulatorReady())
-			{
-				Module->SetGPUSimulator(Context->GetGPUSimulator());
-				Module->SetGPUSimulationActive(true);
-			}
+			Context->InitializeGPUSimulator(EffectivePreset->MaxParticles);
 		}
-		else
+
+		if (Context->IsGPUSimulatorReady())
 		{
-			Module->SetGPUSimulationActive(false);
+			Module->SetGPUSimulator(Context->GetGPUSimulator());
+			Module->SetGPUSimulationActive(true);
 		}
 
 		// Simulate
@@ -541,7 +514,7 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 
 void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaTime)
 {
-	// Group modules by (Preset + SimulationMode) - allows GPU/CPU mixing
+	// Group modules by Preset
 	TMap<FContextCacheKey, TArray<TObjectPtr<UKawaiiFluidSimulationModule>>> ContextGroups = GroupModulesByContext();
 
 	// Process each context group
@@ -556,8 +529,8 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaT
 			continue;
 		}
 
-		// Get context for this (VolumeComponent + Preset + SimulationMode) combination
-		UKawaiiFluidSimulationContext* Context = GetOrCreateContext(CacheKey.VolumeComponent, Preset, CacheKey.bUseGPUSimulation);
+		// Get context for this (VolumeComponent + Preset) combination
+		UKawaiiFluidSimulationContext* Context = GetOrCreateContext(CacheKey.VolumeComponent, Preset);
 		if (!Context)
 		{
 			continue;
@@ -578,42 +551,27 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaT
 		FKawaiiFluidSimulationParams Params = BuildMergedModuleSimulationParams(Modules);
 		Params.Colliders.Append(GlobalColliders);
 		Params.InteractionComponents.Append(GlobalInteractionComponents);
-		Params.bUseGPUSimulation = CacheKey.bUseGPUSimulation;
 
 		// CPU 충돌 피드백 버퍼 포인터 설정 (Context에서 사용)
 		Params.CPUCollisionFeedbackBufferPtr = &CPUCollisionFeedbackBuffer;
 		Params.CPUCollisionFeedbackLockPtr = &CPUCollisionFeedbackLock;
 
-		// Phase 1: Setup GPU state BEFORE Simulate so spawn calls go to GPU
-		if (Params.bUseGPUSimulation)
+		// GPU simulation setup (always enabled)
+		if (!Context->IsGPUSimulatorReady())
 		{
-			// Initialize GPU simulator if needed (before any spawning)
-			if (!Context->IsGPUSimulatorReady())
-			{
-				Context->InitializeGPUSimulator(Preset->MaxParticles);
-			}
-
-			if (Context->IsGPUSimulatorReady())
-			{
-				FGPUFluidSimulator* BatchGPUSimulator = Context->GetGPUSimulator();
-				for (UKawaiiFluidSimulationModule* Module : Modules)
-				{
-					if (Module)
-					{
-						Module->SetGPUSimulator(BatchGPUSimulator);
-						Module->SetGPUSimulationActive(true);
-						// Note: PIE/로드 후 업로드는 RegisterModule에서 처리됨
-					}
-				}
-			}
+			Context->InitializeGPUSimulator(Preset->MaxParticles);
 		}
-		else
+
+		if (Context->IsGPUSimulatorReady())
 		{
+			FGPUFluidSimulator* BatchGPUSimulator = Context->GetGPUSimulator();
 			for (UKawaiiFluidSimulationModule* Module : Modules)
 			{
 				if (Module)
 				{
-					Module->SetGPUSimulationActive(false);
+					Module->SetGPUSimulator(BatchGPUSimulator);
+					Module->SetGPUSimulationActive(true);
+					// Note: PIE/로드 후 업로드는 RegisterModule에서 처리됨
 				}
 			}
 		}
@@ -660,19 +618,12 @@ UKawaiiFluidSimulatorSubsystem::GroupModulesByContext() const
 		    Module->GetParticleCount() > 0 &&
 		    Module->GetPreset())
 		{
-			// Get GPU setting from owner component
-			bool bUseGPU = false;
-			if (UKawaiiFluidComponent* OwnerComp = Cast<UKawaiiFluidComponent>(Module->GetOuter()))
-			{
-				bUseGPU = OwnerComp->bUseGPUSimulation;
-			}
-
 			// Get target volume component for Z-Order space bounds
 			UKawaiiFluidSimulationVolumeComponent* TargetVolume = Module->GetTargetVolumeComponent();
 
-			// Group by (VolumeComponent + Preset + GPUMode)
+			// Group by (VolumeComponent + Preset)
 			// Same VolumeComponent = same Z-Order space = particles can interact
-			FContextCacheKey Key(TargetVolume, Module->GetPreset(), bUseGPU);
+			FContextCacheKey Key(TargetVolume, Module->GetPreset());
 			Result.FindOrAdd(Key).Add(Module);
 		}
 	}
