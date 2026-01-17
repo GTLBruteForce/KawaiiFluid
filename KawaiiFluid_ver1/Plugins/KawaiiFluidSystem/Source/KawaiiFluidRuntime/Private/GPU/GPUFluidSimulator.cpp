@@ -1826,6 +1826,109 @@ bool FGPUFluidSimulator::GetAllGPUParticles(TArray<FFluidParticle>& OutParticles
 	return true;
 }
 
+bool FGPUFluidSimulator::GetAllGPUParticlesSync(TArray<FFluidParticle>& OutParticles)
+{
+	if (!bIsInitialized || CurrentParticleCount == 0)
+	{
+		return false;
+	}
+
+	if (!PersistentParticleBuffer.IsValid())
+	{
+		return false;
+	}
+
+	const int32 Count = CurrentParticleCount;
+
+	// GPU 작업 완료 대기
+	FlushRenderingCommands();
+
+	// 동기 리드백용 임시 배열
+	TArray<FGPUFluidParticle> SyncReadbackBuffer;
+	SyncReadbackBuffer.SetNum(Count);
+
+	// 렌더 스레드에서 동기 리드백 수행
+	FGPUFluidSimulator* Self = this;
+	FGPUFluidParticle* DestPtr = SyncReadbackBuffer.GetData();
+	const int32 DataSize = Count * sizeof(FGPUFluidParticle);
+
+	ENQUEUE_RENDER_COMMAND(SyncReadbackGPUParticles)(
+		[Self, DestPtr, Count, DataSize](FRHICommandListImmediate& RHICmdList)
+		{
+			if (!Self->PersistentParticleBuffer.IsValid())
+			{
+				return;
+			}
+
+			FRHIBuffer* Buffer = Self->PersistentParticleBuffer->GetRHI();
+			if (!Buffer)
+			{
+				return;
+			}
+
+			// GPU 버퍼에서 직접 읽기
+			void* MappedData = RHICmdList.LockBuffer(Buffer, 0, DataSize, RLM_ReadOnly);
+			if (MappedData)
+			{
+				FMemory::Memcpy(DestPtr, MappedData, DataSize);
+				RHICmdList.UnlockBuffer(Buffer);
+			}
+		}
+	);
+
+	// 렌더 명령 완료 대기
+	FlushRenderingCommands();
+
+	// GPU 파티클 -> CPU 파티클 변환
+	OutParticles.SetNum(Count);
+	for (int32 i = 0; i < Count; ++i)
+	{
+		const FGPUFluidParticle& GPUParticle = SyncReadbackBuffer[i];
+		FFluidParticle& OutParticle = OutParticles[i];
+
+		OutParticle = FFluidParticle();
+
+		FVector NewPosition = FVector(GPUParticle.Position);
+		FVector NewVelocity = FVector(GPUParticle.Velocity);
+
+		const float MaxValidValue = 1000000.0f;
+		bool bValidPosition = !NewPosition.ContainsNaN() && NewPosition.GetAbsMax() < MaxValidValue;
+		bool bValidVelocity = !NewVelocity.ContainsNaN() && NewVelocity.GetAbsMax() < MaxValidValue;
+
+		if (bValidPosition)
+		{
+			OutParticle.Position = NewPosition;
+			OutParticle.PredictedPosition = FVector(GPUParticle.PredictedPosition);
+		}
+
+		if (bValidVelocity)
+		{
+			OutParticle.Velocity = NewVelocity;
+		}
+
+		OutParticle.Mass = FMath::IsFinite(GPUParticle.Mass) ? GPUParticle.Mass : 1.0f;
+		OutParticle.Density = FMath::IsFinite(GPUParticle.Density) ? GPUParticle.Density : 0.0f;
+		OutParticle.Lambda = FMath::IsFinite(GPUParticle.Lambda) ? GPUParticle.Lambda : 0.0f;
+		OutParticle.ParticleID = GPUParticle.ParticleID;
+		OutParticle.SourceID = GPUParticle.SourceID;
+
+		OutParticle.bIsAttached = (GPUParticle.Flags & EGPUParticleFlags::IsAttached) != 0;
+		OutParticle.bIsSurfaceParticle = (GPUParticle.Flags & EGPUParticleFlags::IsSurface) != 0;
+		OutParticle.bIsCoreParticle = (GPUParticle.Flags & EGPUParticleFlags::IsCore) != 0;
+		OutParticle.bJustDetached = (GPUParticle.Flags & EGPUParticleFlags::JustDetached) != 0;
+		OutParticle.bNearGround = (GPUParticle.Flags & EGPUParticleFlags::NearGround) != 0;
+
+		if (GPUParticle.NeighborCount > 0)
+		{
+			OutParticle.NeighborIndices.SetNum(GPUParticle.NeighborCount);
+		}
+	}
+
+	UE_LOG(LogGPUFluidSimulator, Log, TEXT("GetAllGPUParticlesSync: Retrieved %d particles (sync readback)"), Count);
+
+	return true;
+}
+
 //=============================================================================
 // Stream Compaction API (Delegated to FGPUStreamCompactionManager)
 //=============================================================================

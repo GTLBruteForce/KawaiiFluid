@@ -106,21 +106,33 @@ void UKawaiiFluidSimulationModule::PreSave(FObjectPreSaveContext SaveContext)
 
 void UKawaiiFluidSimulationModule::SyncGPUParticlesToCPU()
 {
-	if (!bGPUSimulationActive || !CachedGPUSimulator || !CachedGPUSimulator->IsReady())
+	if (!CachedGPUSimulator)
 	{
+		// GPU 시뮬레이터 없으면 기존 CPU Particles 유지
 		return;
 	}
 
 	const int32 GPUCount = CachedGPUSimulator->GetParticleCount();
-	if (GPUCount > 0)
+	if (GPUCount <= 0)
 	{
-		// GetAllGPUParticles 사용 - 새로운 FFluidParticle 생성
-		// (DownloadParticles는 기존 CPU ParticleID 매칭만 함)
-		CachedGPUSimulator->GetAllGPUParticles(Particles);
+		// GPU에 파티클 없으면 기존 유지
+		return;
 	}
-	else
+
+	TArray<FFluidParticle> TempParticles;
+
+	if (CachedGPUSimulator->IsReady())
 	{
-		Particles.Empty();
+		// Async readback 완료됨 -> 기존 방식
+		if (CachedGPUSimulator->GetAllGPUParticles(TempParticles))
+		{
+			Particles = MoveTemp(TempParticles);
+		}
+		// Async readback 안 됨 -> 동기 리드백 강제
+		else if (CachedGPUSimulator->GetAllGPUParticlesSync(TempParticles))
+		{
+			Particles = MoveTemp(TempParticles);
+		}
 	}
 }
 

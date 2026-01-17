@@ -89,6 +89,14 @@ public:
 	bool GetAllGPUParticles(TArray<FFluidParticle>& OutParticles);
 
 	/**
+	 * Synchronous version of GetAllGPUParticles
+	 * Blocks until GPU readback completes - use for PIE/Save when async readback isn't ready
+	 * @param OutParticles - Output array (will be populated with all GPU particles)
+	 * @return true if valid GPU data was retrieved
+	 */
+	bool GetAllGPUParticlesSync(TArray<FFluidParticle>& OutParticles);
+
+	/**
 	 * Get current particle count on GPU
 	 */
 	int32 GetParticleCount() const { return CurrentParticleCount; }
