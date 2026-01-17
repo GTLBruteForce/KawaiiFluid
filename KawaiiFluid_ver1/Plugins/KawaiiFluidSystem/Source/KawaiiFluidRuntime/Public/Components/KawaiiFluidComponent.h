@@ -67,6 +67,16 @@ enum class EFluidShapeType : uint8
 };
 
 /**
+ * Grid pattern for Shape Volume spawn mode
+ */
+UENUM(BlueprintType)
+enum class ESpawnGridPattern : uint8
+{
+	Cubic       UMETA(DisplayName = "Cubic", ToolTip = "Regular cubic grid - simple but can have density fluctuations"),
+	Hexagonal   UMETA(DisplayName = "Hexagonal", ToolTip = "Hexagonal close packing - more stable initial state for calm fluid"),
+};
+
+/**
  * Emitter type for Emitter spawn mode
  */
 UENUM(BlueprintType)
@@ -143,6 +153,11 @@ struct FFluidSpawnSettings
 	float CylinderHalfHeight = 50.0f;
 
 	// === Distribution Settings (ShapeVolume mode) ===
+	/** Grid pattern for particle distribution */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Distribution",
+	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume", EditConditionHides))
+	ESpawnGridPattern GridPattern = ESpawnGridPattern::Hexagonal;
+
 	/** Apply random offset to grid positions */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Distribution",
 	          meta = (EditCondition = "SpawnType == EFluidSpawnType::ShapeVolume", EditConditionHides))

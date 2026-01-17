@@ -737,43 +737,91 @@ void UKawaiiFluidComponent::ExecuteAutoSpawn()
 	if (SpawnSettings.bAutoCalculateParticleCount)
 	{
 		// Auto-calculate mode: use spacing-based spawn
+		const bool bUseHexagonal = (SpawnSettings.GridPattern == ESpawnGridPattern::Hexagonal);
+
 		switch (SpawnSettings.ShapeType)
 		{
 		case EFluidShapeType::Sphere:
-			SimulationModule->SpawnParticlesSphere(
-				Location,
-				SpawnSettings.SphereRadius,
-				ParticleSpacing,
-				SpawnSettings.bUseJitter,
-				SpawnSettings.JitterAmount,
-				SpawnSettings.InitialVelocity,
-				Rotation
-			);
+			if (bUseHexagonal)
+			{
+				SimulationModule->SpawnParticlesSphereHexagonal(
+					Location,
+					SpawnSettings.SphereRadius,
+					ParticleSpacing,
+					SpawnSettings.bUseJitter,
+					SpawnSettings.JitterAmount,
+					SpawnSettings.InitialVelocity,
+					Rotation
+				);
+			}
+			else
+			{
+				SimulationModule->SpawnParticlesSphere(
+					Location,
+					SpawnSettings.SphereRadius,
+					ParticleSpacing,
+					SpawnSettings.bUseJitter,
+					SpawnSettings.JitterAmount,
+					SpawnSettings.InitialVelocity,
+					Rotation
+				);
+			}
 			break;
 
 		case EFluidShapeType::Box:
-			SimulationModule->SpawnParticlesBox(
-				Location,
-				SpawnSettings.BoxExtent,
-				ParticleSpacing,
-				SpawnSettings.bUseJitter,
-				SpawnSettings.JitterAmount,
-				SpawnSettings.InitialVelocity,
-				Rotation
-			);
+			if (bUseHexagonal)
+			{
+				SimulationModule->SpawnParticlesBoxHexagonal(
+					Location,
+					SpawnSettings.BoxExtent,
+					ParticleSpacing,
+					SpawnSettings.bUseJitter,
+					SpawnSettings.JitterAmount,
+					SpawnSettings.InitialVelocity,
+					Rotation
+				);
+			}
+			else
+			{
+				SimulationModule->SpawnParticlesBox(
+					Location,
+					SpawnSettings.BoxExtent,
+					ParticleSpacing,
+					SpawnSettings.bUseJitter,
+					SpawnSettings.JitterAmount,
+					SpawnSettings.InitialVelocity,
+					Rotation
+				);
+			}
 			break;
 
 		case EFluidShapeType::Cylinder:
-			SimulationModule->SpawnParticlesCylinder(
-				Location,
-				SpawnSettings.CylinderRadius,
-				SpawnSettings.CylinderHalfHeight,
-				ParticleSpacing,
-				SpawnSettings.bUseJitter,
-				SpawnSettings.JitterAmount,
-				SpawnSettings.InitialVelocity,
-				Rotation
-			);
+			if (bUseHexagonal)
+			{
+				SimulationModule->SpawnParticlesCylinderHexagonal(
+					Location,
+					SpawnSettings.CylinderRadius,
+					SpawnSettings.CylinderHalfHeight,
+					ParticleSpacing,
+					SpawnSettings.bUseJitter,
+					SpawnSettings.JitterAmount,
+					SpawnSettings.InitialVelocity,
+					Rotation
+				);
+			}
+			else
+			{
+				SimulationModule->SpawnParticlesCylinder(
+					Location,
+					SpawnSettings.CylinderRadius,
+					SpawnSettings.CylinderHalfHeight,
+					ParticleSpacing,
+					SpawnSettings.bUseJitter,
+					SpawnSettings.JitterAmount,
+					SpawnSettings.InitialVelocity,
+					Rotation
+				);
+			}
 			break;
 		}
 	}

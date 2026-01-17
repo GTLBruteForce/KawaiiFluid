@@ -1050,6 +1050,245 @@ int32 UKawaiiFluidSimulationModule::SpawnParticlesCylinder(FVector Center, float
 	return SpawnedCount;
 }
 
+//=============================================================================
+// Hexagonal Close Packing Spawn Functions
+//=============================================================================
+
+int32 UKawaiiFluidSimulationModule::SpawnParticlesBoxHexagonal(FVector Center, FVector Extent, float Spacing,
+                                                                bool bJitter, float JitterAmount, FVector Velocity,
+                                                                FRotator Rotation)
+{
+	if (Spacing <= 0.0f)
+	{
+		return 0;
+	}
+
+	// HCP density compensation: HCP is ~1.42x denser than cubic for the same spacing
+	// To achieve similar number density, multiply spacing by (1/0.707)^(1/3) ≈ 1.122
+	const float HCPCompensation = 1.122f;
+	const float AdjustedSpacing = Spacing * HCPCompensation;
+
+	// Hexagonal Close Packing (HCP) constants
+	// XY plane: hexagonal grid with row offset
+	// Z layers: alternating offset for close packing
+	const float RowSpacingY = AdjustedSpacing * 0.866025f;  // sqrt(3)/2
+	const float LayerSpacingZ = AdjustedSpacing * 0.816497f;  // sqrt(2/3)
+	const float JitterRange = AdjustedSpacing * JitterAmount;
+
+	// Calculate grid counts
+	const int32 CountX = FMath::Max(1, FMath::CeilToInt(Extent.X * 2.0f / AdjustedSpacing));
+	const int32 CountY = FMath::Max(1, FMath::CeilToInt(Extent.Y * 2.0f / RowSpacingY));
+	const int32 CountZ = FMath::Max(1, FMath::CeilToInt(Extent.Z * 2.0f / LayerSpacingZ));
+
+	const FQuat RotationQuat = Rotation.Quaternion();
+	const FVector WorldVelocity = RotationQuat.RotateVector(Velocity);
+
+	int32 SpawnedCount = 0;
+	const int32 EstimatedTotal = CountX * CountY * CountZ;
+	Particles.Reserve(Particles.Num() + EstimatedTotal);
+
+	// Start position (bottom-left-back corner)
+	const FVector LocalStart(-Extent.X + AdjustedSpacing * 0.5f, -Extent.Y + RowSpacingY * 0.5f, -Extent.Z + LayerSpacingZ * 0.5f);
+
+	for (int32 z = 0; z < CountZ; ++z)
+	{
+		// Z layer offset for HCP (ABC stacking pattern)
+		const float ZLayerOffsetX = (z % 3 == 1) ? AdjustedSpacing * 0.5f : ((z % 3 == 2) ? AdjustedSpacing * 0.25f : 0.0f);
+		const float ZLayerOffsetY = (z % 3 == 1) ? RowSpacingY / 3.0f : ((z % 3 == 2) ? RowSpacingY * 2.0f / 3.0f : 0.0f);
+
+		for (int32 y = 0; y < CountY; ++y)
+		{
+			// Row offset for hexagonal pattern in XY plane
+			const float RowOffsetX = (y % 2 == 1) ? AdjustedSpacing * 0.5f : 0.0f;
+
+			for (int32 x = 0; x < CountX; ++x)
+			{
+				FVector LocalPos(
+					LocalStart.X + x * AdjustedSpacing + RowOffsetX + ZLayerOffsetX,
+					LocalStart.Y + y * RowSpacingY + ZLayerOffsetY,
+					LocalStart.Z + z * LayerSpacingZ
+				);
+
+				// Check bounds
+				if (FMath::Abs(LocalPos.X) > Extent.X ||
+				    FMath::Abs(LocalPos.Y) > Extent.Y ||
+				    FMath::Abs(LocalPos.Z) > Extent.Z)
+				{
+					continue;
+				}
+
+				// Apply jitter
+				if (bJitter && JitterRange > 0.0f)
+				{
+					LocalPos += FVector(
+						FMath::FRandRange(-JitterRange, JitterRange),
+						FMath::FRandRange(-JitterRange, JitterRange),
+						FMath::FRandRange(-JitterRange, JitterRange)
+					);
+				}
+
+				const FVector WorldPos = Center + RotationQuat.RotateVector(LocalPos);
+				SpawnParticle(WorldPos, WorldVelocity);
+				++SpawnedCount;
+			}
+		}
+	}
+
+	return SpawnedCount;
+}
+
+int32 UKawaiiFluidSimulationModule::SpawnParticlesSphereHexagonal(FVector Center, float Radius, float Spacing,
+                                                                   bool bJitter, float JitterAmount, FVector Velocity,
+                                                                   FRotator Rotation)
+{
+	if (Spacing <= 0.0f || Radius <= 0.0f)
+	{
+		return 0;
+	}
+
+	// HCP density compensation: HCP is ~1.42x denser than cubic for the same spacing
+	const float HCPCompensation = 1.122f;
+	const float AdjustedSpacing = Spacing * HCPCompensation;
+
+	// Use Box Hexagonal spawn and filter by sphere radius
+	const float RowSpacingY = AdjustedSpacing * 0.866025f;
+	const float LayerSpacingZ = AdjustedSpacing * 0.816497f;
+	const float JitterRange = AdjustedSpacing * JitterAmount;
+	const float RadiusSq = Radius * Radius;
+
+	const int32 GridSize = FMath::CeilToInt(Radius / AdjustedSpacing) + 1;
+	const int32 GridSizeY = FMath::CeilToInt(Radius / RowSpacingY) + 1;
+	const int32 GridSizeZ = FMath::CeilToInt(Radius / LayerSpacingZ) + 1;
+
+	const FQuat RotationQuat = Rotation.Quaternion();
+	const FVector WorldVelocity = RotationQuat.RotateVector(Velocity);
+
+	int32 SpawnedCount = 0;
+	const float EstimatedCount = (4.0f / 3.0f) * PI * Radius * Radius * Radius / (AdjustedSpacing * AdjustedSpacing * AdjustedSpacing);
+	Particles.Reserve(Particles.Num() + FMath::CeilToInt(EstimatedCount));
+
+	for (int32 z = -GridSizeZ; z <= GridSizeZ; ++z)
+	{
+		const float ZLayerOffsetX = (((z + GridSizeZ) % 3) == 1) ? AdjustedSpacing * 0.5f : ((((z + GridSizeZ) % 3) == 2) ? AdjustedSpacing * 0.25f : 0.0f);
+		const float ZLayerOffsetY = (((z + GridSizeZ) % 3) == 1) ? RowSpacingY / 3.0f : ((((z + GridSizeZ) % 3) == 2) ? RowSpacingY * 2.0f / 3.0f : 0.0f);
+
+		for (int32 y = -GridSizeY; y <= GridSizeY; ++y)
+		{
+			const float RowOffsetX = (((y + GridSizeY) % 2) == 1) ? AdjustedSpacing * 0.5f : 0.0f;
+
+			for (int32 x = -GridSize; x <= GridSize; ++x)
+			{
+				FVector LocalPos(
+					x * AdjustedSpacing + RowOffsetX + ZLayerOffsetX,
+					y * RowSpacingY + ZLayerOffsetY,
+					z * LayerSpacingZ
+				);
+
+				// Check sphere bounds
+				if (LocalPos.SizeSquared() > RadiusSq)
+				{
+					continue;
+				}
+
+				// Apply jitter
+				if (bJitter && JitterRange > 0.0f)
+				{
+					LocalPos += FVector(
+						FMath::FRandRange(-JitterRange, JitterRange),
+						FMath::FRandRange(-JitterRange, JitterRange),
+						FMath::FRandRange(-JitterRange, JitterRange)
+					);
+				}
+
+				const FVector WorldPos = Center + RotationQuat.RotateVector(LocalPos);
+				SpawnParticle(WorldPos, WorldVelocity);
+				++SpawnedCount;
+			}
+		}
+	}
+
+	return SpawnedCount;
+}
+
+int32 UKawaiiFluidSimulationModule::SpawnParticlesCylinderHexagonal(FVector Center, float Radius, float HalfHeight, float Spacing,
+                                                                     bool bJitter, float JitterAmount, FVector Velocity,
+                                                                     FRotator Rotation)
+{
+	if (Spacing <= 0.0f || Radius <= 0.0f || HalfHeight <= 0.0f)
+	{
+		return 0;
+	}
+
+	// HCP density compensation: HCP is ~1.42x denser than cubic for the same spacing
+	const float HCPCompensation = 1.122f;
+	const float AdjustedSpacing = Spacing * HCPCompensation;
+
+	const float RowSpacingY = AdjustedSpacing * 0.866025f;
+	const float LayerSpacingZ = AdjustedSpacing * 0.816497f;
+	const float JitterRange = AdjustedSpacing * JitterAmount;
+	const float RadiusSq = Radius * Radius;
+
+	const int32 GridSizeXY = FMath::CeilToInt(Radius / AdjustedSpacing) + 1;
+	const int32 GridSizeY = FMath::CeilToInt(Radius / RowSpacingY) + 1;
+	const int32 GridSizeZ = FMath::CeilToInt(HalfHeight / LayerSpacingZ);
+
+	const FQuat RotationQuat = Rotation.Quaternion();
+	const FVector WorldVelocity = RotationQuat.RotateVector(Velocity);
+
+	int32 SpawnedCount = 0;
+	const float EstimatedCount = PI * Radius * Radius * HalfHeight * 2.0f / (AdjustedSpacing * AdjustedSpacing * AdjustedSpacing);
+	Particles.Reserve(Particles.Num() + FMath::CeilToInt(EstimatedCount));
+
+	for (int32 z = -GridSizeZ; z <= GridSizeZ; ++z)
+	{
+		const float ZLayerOffsetX = (((z + GridSizeZ) % 3) == 1) ? AdjustedSpacing * 0.5f : ((((z + GridSizeZ) % 3) == 2) ? AdjustedSpacing * 0.25f : 0.0f);
+		const float ZLayerOffsetY = (((z + GridSizeZ) % 3) == 1) ? RowSpacingY / 3.0f : ((((z + GridSizeZ) % 3) == 2) ? RowSpacingY * 2.0f / 3.0f : 0.0f);
+
+		for (int32 y = -GridSizeY; y <= GridSizeY; ++y)
+		{
+			const float RowOffsetX = (((y + GridSizeY) % 2) == 1) ? AdjustedSpacing * 0.5f : 0.0f;
+
+			for (int32 x = -GridSizeXY; x <= GridSizeXY; ++x)
+			{
+				FVector LocalPos(
+					x * AdjustedSpacing + RowOffsetX + ZLayerOffsetX,
+					y * RowSpacingY + ZLayerOffsetY,
+					z * LayerSpacingZ
+				);
+
+				// Check cylinder XY bounds
+				const float DistSqXY = LocalPos.X * LocalPos.X + LocalPos.Y * LocalPos.Y;
+				if (DistSqXY > RadiusSq)
+				{
+					continue;
+				}
+
+				// Check Z bounds
+				if (FMath::Abs(LocalPos.Z) > HalfHeight)
+				{
+					continue;
+				}
+
+				// Apply jitter
+				if (bJitter && JitterRange > 0.0f)
+				{
+					LocalPos += FVector(
+						FMath::FRandRange(-JitterRange, JitterRange),
+						FMath::FRandRange(-JitterRange, JitterRange),
+						FMath::FRandRange(-JitterRange, JitterRange)
+					);
+				}
+
+				const FVector WorldPos = Center + RotationQuat.RotateVector(LocalPos);
+				SpawnParticle(WorldPos, WorldVelocity);
+				++SpawnedCount;
+			}
+		}
+	}
+
+	return SpawnedCount;
+}
+
 int32 UKawaiiFluidSimulationModule::SpawnParticleDirectional(FVector Position, FVector Direction, float Speed,
                                                              float Radius, float ConeAngle)
 {

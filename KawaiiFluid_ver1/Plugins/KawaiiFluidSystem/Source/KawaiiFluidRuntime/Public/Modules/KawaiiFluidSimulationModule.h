@@ -323,6 +323,60 @@ public:
 	                             FRotator Rotation = FRotator::ZeroRotator);
 
 	//========================================
+	// Hexagonal Grid 스폰 함수 (안정적인 초기 상태)
+	//========================================
+
+	/** Hexagonal Close Packing으로 박스 내 파티클 스폰
+	 * Cubic grid보다 안정적인 초기 밀도 분포 제공
+	 * @param Center 박스 중심
+	 * @param Extent 박스 Half Extent (X, Y, Z)
+	 * @param Spacing 파티클 간격
+	 * @param bJitter 랜덤 오프셋 적용 여부
+	 * @param JitterAmount 랜덤 오프셋 비율 (0~0.5)
+	 * @param Velocity 초기 속도
+	 * @param Rotation 로컬→월드 회전
+	 * @return 스폰된 파티클 수
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticlesBoxHexagonal(FVector Center, FVector Extent, float Spacing,
+	                                  bool bJitter = true, float JitterAmount = 0.2f,
+	                                  FVector Velocity = FVector::ZeroVector,
+	                                  FRotator Rotation = FRotator::ZeroRotator);
+
+	/** Hexagonal Close Packing으로 구체 내 파티클 스폰
+	 * @param Center 구체 중심
+	 * @param Radius 구체 반경
+	 * @param Spacing 파티클 간격
+	 * @param bJitter 랜덤 오프셋 적용 여부
+	 * @param JitterAmount 랜덤 오프셋 비율 (0~0.5)
+	 * @param Velocity 초기 속도
+	 * @param Rotation 로컬→월드 회전
+	 * @return 스폰된 파티클 수
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticlesSphereHexagonal(FVector Center, float Radius, float Spacing,
+	                                     bool bJitter = true, float JitterAmount = 0.2f,
+	                                     FVector Velocity = FVector::ZeroVector,
+	                                     FRotator Rotation = FRotator::ZeroRotator);
+
+	/** Hexagonal Close Packing으로 원기둥 내 파티클 스폰
+	 * @param Center 원기둥 중심
+	 * @param Radius 원기둥 반경
+	 * @param HalfHeight 원기둥 반높이
+	 * @param Spacing 파티클 간격
+	 * @param bJitter 랜덤 오프셋 적용 여부
+	 * @param JitterAmount 랜덤 오프셋 비율 (0~0.5)
+	 * @param Velocity 초기 속도
+	 * @param Rotation 로컬→월드 회전
+	 * @return 스폰된 파티클 수
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	int32 SpawnParticlesCylinderHexagonal(FVector Center, float Radius, float HalfHeight, float Spacing,
+	                                       bool bJitter = true, float JitterAmount = 0.2f,
+	                                       FVector Velocity = FVector::ZeroVector,
+	                                       FRotator Rotation = FRotator::ZeroRotator);
+
+	//========================================
 	// 명시적 개수 지정 스폰 함수
 	//========================================
 
