@@ -12,6 +12,30 @@ UKawaiiFluidRenderingModule::UKawaiiFluidRenderingModule()
 	MetaballRenderer = CreateDefaultSubobject<UKawaiiFluidMetaballRenderer>(TEXT("MetaballRenderer"));
 }
 
+void UKawaiiFluidRenderingModule::PostDuplicate(bool bDuplicateForPIE)
+{
+	Super::PostDuplicate(bDuplicateForPIE);
+
+	// PIE로 복제될 때 EditorWorld의 객체를 가리키는 stale pointer 초기화
+	// BeginPlay에서 Initialize()가 다시 호출되어 올바른 값으로 설정됨
+	CachedWorld = nullptr;
+	CachedOwnerComponent = nullptr;
+	DataProviderPtr = nullptr;
+
+	// 자식 렌더러들도 정리 (ISMRenderer, MetaballRenderer는 subobject이므로 자동 복제됨)
+	if (ISMRenderer)
+	{
+		ISMRenderer->Cleanup();
+	}
+	if (MetaballRenderer)
+	{
+		MetaballRenderer->Cleanup();
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidRenderingModule::PostDuplicate - Cleared stale pointers (PIE=%d)"),
+		bDuplicateForPIE ? 1 : 0);
+}
+
 void UKawaiiFluidRenderingModule::Initialize(UWorld* InWorld, USceneComponent* InOwnerComponent, IKawaiiFluidDataProvider* InDataProvider, UKawaiiFluidPresetDataAsset* InPreset)
 {
 	CachedWorld = InWorld;

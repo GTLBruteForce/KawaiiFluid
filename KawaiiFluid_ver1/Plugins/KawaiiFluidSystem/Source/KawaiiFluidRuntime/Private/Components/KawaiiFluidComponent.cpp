@@ -224,10 +224,10 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 				Params.InteractionComponents.Append(Subsystem->GetGlobalInteractionComponents());
 			}
 
-			// 에디터 브러시 모드에서는 Static Boundary Particles 비활성화
-			// (에디터 Floor 등 대형 메시가 포함되어 329k+ 파티클 생성 → 프레임 드랍)
-			//Params.bEnableStaticBoundaryParticles = false;
-
+			// @TODO 이거 풀면 날라가는거 고쳐야함
+			Params.bEnableStaticBoundaryParticles = false;
+			Params.CollisionChannel = Preset->CollisionChannel;
+			
 			// GPU 시뮬레이션 설정 (서브시스템과 동일하게)
 			if (Params.bUseGPUSimulation)
 			{

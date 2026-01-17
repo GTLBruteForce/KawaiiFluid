@@ -50,8 +50,11 @@ public:
 	UKawaiiFluidSimulationModule();
 
 	// UObject interface
+	virtual void PostInitProperties() override;
 	virtual void PostLoad() override;
 	virtual void BeginDestroy() override;
+	virtual void PostDuplicate(bool bDuplicateForPIE) override;
+	virtual void PreSave(FObjectPreSaveContext SaveContext) override;
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
@@ -779,6 +782,23 @@ public:
 	void SetGPUSimulationActive(bool bActive) { bGPUSimulationActive = bActive; }
 
 	//========================================
+	// GPU ↔ CPU Particle Sync (PIE/Serialization)
+	//========================================
+
+	/**
+	 * GPU 파티클을 CPU Particles 배열로 동기화
+	 * 저장(PreSave) 및 PIE 전환(PreBeginPIE) 시 호출됨
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid|Module")
+	void SyncGPUParticlesToCPU();
+
+	/**
+	 * CPU Particles 배열을 GPU로 업로드
+	 * 로드(PostLoad) 및 PIE 시작(BeginPlay) 시 호출됨
+	 */
+	void UploadCPUParticlesToGPU();
+
+	//========================================
 	// Simulation Context Reference
 	//========================================
 
@@ -879,6 +899,12 @@ private:
 
 	/** Delegate handle for objects replaced event */
 	FDelegateHandle ObjectsReplacedHandle;
+
+	/** PIE 시작 전 GPU 파티클을 CPU로 동기화 */
+	void OnPreBeginPIE(bool bIsSimulating);
+
+	/** Delegate handle for PreBeginPIE */
+	FDelegateHandle PreBeginPIEHandle;
 #endif
 
 	/** Cached source ID for spawned particles (Component's unique ID, -1 = invalid) */

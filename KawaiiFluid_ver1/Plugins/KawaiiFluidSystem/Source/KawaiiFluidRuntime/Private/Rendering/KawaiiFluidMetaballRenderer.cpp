@@ -172,7 +172,7 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 			Simulator->SetAnisotropyParams(GetLocalParameters().AnisotropyParams);
 
 			// Get particle count (atomic, thread-safe read)
-			const int32 GPUParticleCount = Simulator->GetPersistentParticleCount();
+			const int32 GPUParticleCount = Simulator->GetParticleCount();
 
 			// 렌더 스레드에서 RenderResource를 통해 GPU 버퍼에 접근
 			if (FKawaiiFluidRenderResource* RR = GetFluidRenderResource())

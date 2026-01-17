@@ -12,11 +12,31 @@
 #include "GPU/GPUFluidSimulatorShaders.h"  // For GPU_MORTON_GRID_AXIS_BITS
 #include "GPU/GPUFluidParticle.h"  // For FGPUSpawnRequest
 #include "UObject/UObjectGlobals.h"  // For FCoreUObjectDelegates
+#include "UObject/ObjectSaveContext.h"  // For FObjectPreSaveContext
+
+#if WITH_EDITOR
+#include "Editor.h"  // For FEditorDelegates
+#endif
 
 UKawaiiFluidSimulationModule::UKawaiiFluidSimulationModule()
 {
 	// Calculate initial bounds (uses GridResolutionPreset default = Medium)
 	RecalculateVolumeBounds();
+}
+
+void UKawaiiFluidSimulationModule::PostInitProperties()
+{
+	Super::PostInitProperties();
+
+#if WITH_EDITOR
+	// CDO가 아닌 경우에만 델리게이트 바인딩
+	// PostLoad는 디스크에서 로드할 때만 호출되므로,
+	// CreateDefaultSubobject로 생성된 경우를 위해 여기서도 바인딩
+	if (!HasAnyFlags(RF_ClassDefaultObject) && !PreBeginPIEHandle.IsValid())
+	{
+		PreBeginPIEHandle = FEditorDelegates::PreBeginPIE.AddUObject(this, &UKawaiiFluidSimulationModule::OnPreBeginPIE);
+	}
+#endif
 }
 
 void UKawaiiFluidSimulationModule::PostLoad()
@@ -32,7 +52,100 @@ void UKawaiiFluidSimulationModule::PostLoad()
 
 	// Bind to objects replaced event (for asset reload detection)
 	BindToObjectsReplaced();
+
+	// Bind to PreBeginPIE for GPU→CPU sync before PIE duplication
+	if (!PreBeginPIEHandle.IsValid())
+	{
+		PreBeginPIEHandle = FEditorDelegates::PreBeginPIE.AddUObject(this, &UKawaiiFluidSimulationModule::OnPreBeginPIE);
+	}
 #endif
+}
+
+void UKawaiiFluidSimulationModule::PostDuplicate(bool bDuplicateForPIE)
+{
+	Super::PostDuplicate(bDuplicateForPIE);
+
+	// PIE로 복제될 때 EditorWorld의 객체를 가리키는 stale pointer 초기화
+	// 이 포인터들은 새 World의 BeginPlay에서 올바른 객체로 다시 설정됨
+	CachedSimulationContext = nullptr;
+	CachedGPUSimulator = nullptr;
+	bGPUSimulationActive = false;
+
+	// ⚠️ Particles 배열은 유지! (PreBeginPIE에서 캐시한 GPU 데이터
+	// UPROPERTY TArray라서 자동으로 딥카피됨
+	const int32 PreservedParticleCount = Particles.Num();
+
+	// SpatialHash는 Initialize에서 다시 생성됨
+	SpatialHash.Reset();
+
+	// OwnedVolumeComponent도 다른 World의 객체이므로 리셋
+	OwnedVolumeComponent = nullptr;
+	PreviousRegisteredVolume.Reset();
+
+	bIsInitialized = false;  // BeginPlay에서 다시 초기화
+
+	UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidSimulationModule::PostDuplicate - Preserved %d particles, cleared stale pointers (PIE=%d)"),
+		PreservedParticleCount, bDuplicateForPIE ? 1 : 0);
+}
+
+//========================================
+// Serialization (PreSave)
+//========================================
+
+void UKawaiiFluidSimulationModule::PreSave(FObjectPreSaveContext SaveContext)
+{
+	Super::PreSave(SaveContext);
+
+	// 저장 전 GPU 데이터를 CPU Particles 배열로 동기화
+	SyncGPUParticlesToCPU();
+}
+
+//========================================
+// GPU ↔ CPU Particle Sync
+//========================================
+
+void UKawaiiFluidSimulationModule::SyncGPUParticlesToCPU()
+{
+	if (!bGPUSimulationActive || !CachedGPUSimulator || !CachedGPUSimulator->IsReady())
+	{
+		return;
+	}
+
+	const int32 GPUCount = CachedGPUSimulator->GetParticleCount();
+	if (GPUCount > 0)
+	{
+		// GetAllGPUParticles 사용 - 새로운 FFluidParticle 생성
+		// (DownloadParticles는 기존 CPU ParticleID 매칭만 함)
+		CachedGPUSimulator->GetAllGPUParticles(Particles);
+	}
+	else
+	{
+		Particles.Empty();
+	}
+}
+
+void UKawaiiFluidSimulationModule::UploadCPUParticlesToGPU()
+{
+	if (Particles.Num() == 0)
+	{
+		return;
+	}
+
+	if (!CachedGPUSimulator || !CachedGPUSimulator->IsReady())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UploadCPUParticlesToGPU: GPUSimulator not ready, %d particles waiting"), Particles.Num());
+		return;
+	}
+
+	const int32 UploadCount = Particles.Num();
+
+	// CPU에서 GPU로 업로드
+	CachedGPUSimulator->UploadParticles(Particles);
+
+	// GPU에 올렸으니 CPU 배열 정리 (중복 업로드 방지 + 메모리 절약)
+	Particles.Empty();
+
+	UE_LOG(LogTemp, Log, TEXT("UploadCPUParticlesToGPU: Uploaded %d particles to GPU"), UploadCount);
 }
 
 void UKawaiiFluidSimulationModule::BeginDestroy()
@@ -43,6 +156,13 @@ void UKawaiiFluidSimulationModule::BeginDestroy()
 
 	// Unbind from objects replaced event
 	UnbindFromObjectsReplaced();
+
+	// Unbind from PreBeginPIE
+	if (PreBeginPIEHandle.IsValid())
+	{
+		FEditorDelegates::PreBeginPIE.Remove(PreBeginPIEHandle);
+		PreBeginPIEHandle.Reset();
+	}
 #endif
 
 	// Unbind from volume destroyed event
@@ -50,6 +170,17 @@ void UKawaiiFluidSimulationModule::BeginDestroy()
 
 	Super::BeginDestroy();
 }
+
+#if WITH_EDITOR
+void UKawaiiFluidSimulationModule::OnPreBeginPIE(bool bIsSimulating)
+{
+	// PIE 시작 전 GPU 파티클을 CPU로 동기화
+	// 이 데이터는 PostDuplicate에서 자동으로 딥카피되어 PIE World로 전달됨
+	SyncGPUParticlesToCPU();
+
+	UE_LOG(LogTemp, Log, TEXT("OnPreBeginPIE: Synced %d particles for PIE transfer"), Particles.Num());
+}
+#endif
 
 #if WITH_EDITOR
 void UKawaiiFluidSimulationModule::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)

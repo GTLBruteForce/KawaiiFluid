@@ -106,7 +106,6 @@ public:
 		FScopeLock Lock(&BufferLock);
 
 		CurrentParticleCount = 0;
-		PersistentParticleCount.store(0);
 		NewParticleCount = 0;
 		NewParticlesToAppend.Empty();
 		CachedGPUParticles.Empty();
@@ -156,9 +155,6 @@ public:
 
 	/** Get persistent pooled buffer for RDG registration (Phase 2: GPU→GPU copy) */
 	TRefCountPtr<FRDGPooledBuffer> GetPersistentParticleBuffer() const { return PersistentParticleBuffer; }
-
-	/** Get particle count that matches PersistentParticleBuffer (synchronized in render thread) */
-	int32 GetPersistentParticleCount() const { return PersistentParticleCount.load(); }
 
 	/** Access previous frame position buffer (for history trails) */
 	TRefCountPtr<FRDGPooledBuffer>& AccessPreviousPositionsBuffer() { return PreviousPositionsBuffer; }
@@ -793,6 +789,12 @@ private:
 	/** Release collision feedback buffers */
 	void ReleaseCollisionFeedbackBuffers();
 
+	/**
+	 * 즉시 PersistentParticleBuffer 생성 (시뮬레이션 없이 렌더링 가능하도록)
+	 * UploadParticles 후 Simulate() 호출 전에도 렌더링할 수 있게 함
+	 */
+	void CreateImmediatePersistentBuffer();
+
 	/** Process collision feedback readback (non-blocking) */
 	void ProcessCollisionFeedbackReadback(FRHICommandListImmediate& RHICmdList);
 
@@ -887,10 +889,6 @@ private:
 	// Persistent GPU buffer - reused across frames (Phase 2)
 	// After simulation, this contains the results to be used next frame
 	TRefCountPtr<FRDGPooledBuffer> PersistentParticleBuffer;
-
-	// Particle count that matches PersistentParticleBuffer (updated in render thread)
-	// This ensures buffer and count are always synchronized
-	std::atomic<int32> PersistentParticleCount{0};
 
 	// Persistent Spatial Hash buffers - reused across frames (GPU clear instead of CPU upload)
 	TRefCountPtr<FRDGPooledBuffer> PersistentCellCountsBuffer;

@@ -235,7 +235,7 @@ void UFluidRendererSubsystem::UpdateShadowInstances(const FVector* ParticlePosit
 	}
 
 	UWorld* World = GetWorld();
-	if (!World)
+	if (!World || World->bIsTearingDown || !World->bActorsInitialized)
 	{
 		return;
 	}
@@ -426,7 +426,7 @@ void UFluidRendererSubsystem::UpdateShadowInstancesWithAnisotropy(
 	}
 
 	UWorld* World = GetWorld();
-	if (!World)
+	if (!World || World->bIsTearingDown || !World->bActorsInitialized)
 	{
 		return;
 	}

@@ -478,14 +478,6 @@ void FGPUFluidSimulator::SimulateSubstep(const FGPUFluidSimulationParams& Params
 
 			// Mark that we have valid GPU results (buffer is ready for rendering)
 			Self->bHasValidGPUResults.store(true);
-
-			// Update PersistentParticleCount AFTER SimulateSubstep_RDG
-			// CurrentParticleCount is updated inside SimulateSubstep_RDG during spawn
-			Self->PersistentParticleCount.store(Self->CurrentParticleCount);
-
-			if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> AFTER EXECUTE: PersistentBuffer Valid=%s, PersistentCount=%d"),
-				Self->PersistentParticleBuffer.IsValid() ? TEXT("YES") : TEXT("NO"),
-				Self->PersistentParticleCount.load());
 		}
 	);
 }
@@ -697,7 +689,30 @@ FRDGBufferRef FGPUFluidSimulator::PrepareParticleBuffer(
 		SpawnManager->ClearActiveRequests();
 	}
 	// =====================================================
-	// PATH 3: Reuse Buffer (No Changes)
+	// PATH 3: CPU Upload (Upload CachedGPUParticles to GPU)
+	// Used for PIE transfer and save/load - particles synced from CPU array
+	// =====================================================
+	else if (CachedGPUParticles.Num() > 0 && bNeedsFullUpload)
+	{
+		const int32 UploadCount = CachedGPUParticles.Num();
+		const int32 BufferCapacity = FMath::Min(UploadCount, MaxParticleCount);
+		FRDGBufferDesc NewBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), BufferCapacity);
+		ParticleBuffer = GraphBuilder.CreateBuffer(NewBufferDesc, TEXT("GPUFluidParticles"));
+
+		// Upload CPU particles to GPU buffer
+		GraphBuilder.QueueBufferUpload(
+			ParticleBuffer,
+			CachedGPUParticles.GetData(),
+			BufferCapacity * sizeof(FGPUFluidParticle));
+
+		CurrentParticleCount = BufferCapacity;
+		PreviousParticleCount = CurrentParticleCount;
+		bNeedsFullUpload = false;
+
+		UE_LOG(LogGPUFluidSimulator, Log, TEXT("PATH 3 (CPU Upload): Uploaded %d particles from CPU to GPU"), BufferCapacity);
+	}
+	// =====================================================
+	// PATH 4: Reuse Buffer (No Changes)
 	// No spawn requests, reuse existing persistent buffer as-is
 	// =====================================================
 	else
@@ -1582,8 +1597,60 @@ void FGPUFluidSimulator::UploadParticles(const TArray<FFluidParticle>& CPUPartic
 		NewParticleCount = 0;
 		NewParticlesToAppend.Empty();
 		CurrentParticleCount = NewCount;
-		bNeedsFullUpload = true;
+
+		// 즉시 PersistentParticleBuffer 생성 (시뮬레이션 없이 렌더링 가능하도록)
+		CreateImmediatePersistentBuffer();
+
+		// 이미 버퍼를 생성했으므로 Simulate()의 PATH 3 스킵
+		bNeedsFullUpload = false;
 	}
+}
+
+void FGPUFluidSimulator::CreateImmediatePersistentBuffer()
+{
+	if (CachedGPUParticles.Num() == 0)
+	{
+		return;
+	}
+
+	const int32 Count = CachedGPUParticles.Num();
+
+	// 렌더 스레드로 복사할 데이터 준비
+	TArray<FGPUFluidParticle> ParticlesCopy = CachedGPUParticles;
+	FGPUFluidSimulator* Self = this;
+
+	ENQUEUE_RENDER_COMMAND(CreateImmediatePersistentBuffer)(
+		[Self, ParticlesCopy = MoveTemp(ParticlesCopy), Count](FRHICommandListImmediate& RHICmdList)
+		{
+			// RDG를 통해 버퍼 생성 및 즉시 추출
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("ImmediateBufferCreate"));
+
+			// 버퍼 생성
+			FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), Count);
+			FRDGBufferRef Buffer = GraphBuilder.CreateBuffer(Desc, TEXT("ImmediatePersistentParticles"));
+
+			// CPU → GPU 업로드
+			GraphBuilder.QueueBufferUpload(
+				Buffer,
+				ParticlesCopy.GetData(),
+				Count * sizeof(FGPUFluidParticle));
+
+			// PersistentParticleBuffer로 추출
+			GraphBuilder.QueueBufferExtraction(
+				Buffer,
+				&Self->PersistentParticleBuffer,
+				ERHIAccess::SRVMask);
+
+			// 즉시 실행
+			GraphBuilder.Execute();
+			
+			UE_LOG(LogGPUFluidSimulator, Log,
+				TEXT("CreateImmediatePersistentBuffer: Created buffer with %d particles"), Count);
+		}
+	);
+
+	// 렌더 스레드 완료까지 대기 (레벨 로드 시 한 번만 호출되므로 성능 영향 적음)
+	FlushRenderingCommands();
 }
 
 void FGPUFluidSimulator::DownloadParticles(TArray<FFluidParticle>& OutCPUParticles)

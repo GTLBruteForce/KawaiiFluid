@@ -62,5 +62,11 @@ public class KawaiiFluidRuntime : ModuleRules
 				"Renderer"
 			}
 		);
+
+		// Editor-only dependencies (FEditorDelegates for PIE sync)
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.Add("UnrealEd");
+		}
 	}
 }

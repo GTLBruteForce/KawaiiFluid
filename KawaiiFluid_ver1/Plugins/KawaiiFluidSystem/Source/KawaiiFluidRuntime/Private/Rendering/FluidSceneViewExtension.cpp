@@ -157,7 +157,7 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 			// GPU 모드: GPUSimulator에서 버퍼 추출
 			//========================================
 			TRefCountPtr<FRDGPooledBuffer> PhysicsPooledBuffer = GPUSimulator->GetPersistentParticleBuffer();
-			const int32 ParticleCount = GPUSimulator->GetPersistentParticleCount();
+			const int32 ParticleCount = GPUSimulator->GetParticleCount();
 
 			if (!PhysicsPooledBuffer.IsValid() || ParticleCount <= 0)
 			{

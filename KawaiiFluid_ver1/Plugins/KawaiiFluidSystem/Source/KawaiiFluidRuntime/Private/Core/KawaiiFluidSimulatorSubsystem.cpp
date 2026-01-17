@@ -190,6 +190,10 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 					{
 						Module->SetGPUSimulator(Context->GetGPUSimulator());
 						Module->SetGPUSimulationActive(true);
+
+						// PIE/로드 후 캐시된 CPU 파티클을 GPU로 업로드
+						Module->UploadCPUParticlesToGPU();
+
 						UE_LOG(LogTemp, Log, TEXT("SimulationModule: GPU simulation initialized at registration"));
 					}
 				}
@@ -598,6 +602,7 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaT
 					{
 						Module->SetGPUSimulator(BatchGPUSimulator);
 						Module->SetGPUSimulationActive(true);
+						// Note: PIE/로드 후 업로드는 RegisterModule에서 처리됨
 					}
 				}
 			}

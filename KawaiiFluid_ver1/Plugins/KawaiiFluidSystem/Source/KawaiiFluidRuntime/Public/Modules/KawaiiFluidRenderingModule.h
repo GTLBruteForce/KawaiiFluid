@@ -44,6 +44,9 @@ class KAWAIIFLUIDRUNTIME_API UKawaiiFluidRenderingModule : public UObject
 public:
 	UKawaiiFluidRenderingModule();
 
+	// UObject interface
+	virtual void PostDuplicate(bool bDuplicateForPIE) override;
+
 	/**
 	 * Initialize RenderingModule
 	 *

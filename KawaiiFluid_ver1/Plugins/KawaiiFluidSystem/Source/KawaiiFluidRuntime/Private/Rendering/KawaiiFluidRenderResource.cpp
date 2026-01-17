@@ -393,7 +393,7 @@ int32 FKawaiiFluidRenderResource::GetUnifiedParticleCount() const
 	if (Simulator)
 	{
 		// GPU 모드: 시뮬레이터에서 최신 파티클 수 가져오기
-		return Simulator->GetPersistentParticleCount();
+		return Simulator->GetParticleCount();
 	}
 	else
 	{
