@@ -384,6 +384,13 @@ void MainPS(
 	float3 ViewPos = ReconstructViewPosition(UV, FluidDepth);
 	float3 ViewDir = normalize(-ViewPos);  // Direction toward camera
 
+	// Grazing angle compensation:
+	// SSFR smoothing leaves residual depth bumps that become exaggerated at grazing angles.
+	// Blend normal toward view direction at extreme grazing angles to reduce artifacts.
+	float RawNoV = saturate(dot(Normal, ViewDir));
+	float GrazingFade = smoothstep(0.0, 0.15, RawNoV);  // 0 at grazing, 1 at normal angles
+	Normal = normalize(lerp(ViewDir, Normal, GrazingFade));
+
 	// A. PBR Setup
 	// ========================================================================
 	// IOR to F0: F0 = ((1 - n) / (1 + n))^2
