@@ -1,0 +1,150 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Compute tight AABB around fluid particles using parallel reduction
+
+#include "/Engine/Public/Platform.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidGPUPhysics.ush"
+
+//=============================================================================
+// Parameters
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+RWBuffer<uint> FluidAABB;  // 6 uints: min.xyz, max.xyz (as sortable uints)
+
+int ParticleCount;
+float ParticleRadius;
+
+//=============================================================================
+// Thread Group Size
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 256
+#endif
+
+//=============================================================================
+// Float-to-Sortable-Uint Conversion
+// Converts IEEE 754 floats to unsigned integers that preserve comparison order
+//=============================================================================
+
+/**
+ * Convert float to uint that maintains comparison order
+ * Positive floats: flip sign bit to shift positive range above negative
+ * Negative floats: flip all bits to reverse negative number ordering
+ * This ensures: float_a < float_b implies sortable_a < sortable_b
+ */
+uint FloatToSortableUint(float f)
+{
+	uint bits = asuint(f);
+	return (bits & 0x80000000) ? ~bits : (bits | 0x80000000);
+}
+
+/**
+ * Convert sortable uint back to float
+ * Reverses the FloatToSortableUint transformation
+ */
+float SortableUintToFloat(uint u)
+{
+	uint bits = (u & 0x80000000) ? (u & 0x7FFFFFFF) : ~u;
+	return asfloat(bits);
+}
+
+//=============================================================================
+// Shared Memory for Reduction
+//=============================================================================
+
+groupshared float3 SharedMin[THREAD_GROUP_SIZE];
+groupshared float3 SharedMax[THREAD_GROUP_SIZE];
+
+//=============================================================================
+// Main Compute Shader
+// Uses parallel reduction to find min/max bounds
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void MainCS(
+	uint3 GroupId : SV_GroupID,
+	uint GroupIndex : SV_GroupIndex,
+	uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint ThreadId = DispatchThreadId.x;
+
+	// Initialize with extreme values
+	float3 LocalMin = float3(1e30f, 1e30f, 1e30f);
+	float3 LocalMax = float3(-1e30f, -1e30f, -1e30f);
+
+	// Each thread processes one particle (simple 1:1 mapping)
+	// No strided access needed - dispatch enough threads to cover all particles
+	if (ThreadId < uint(ParticleCount))
+	{
+		float3 Pos = Particles[ThreadId].Position;
+		LocalMin = Pos;
+		LocalMax = Pos;
+	}
+
+	// Store in shared memory
+	SharedMin[GroupIndex] = LocalMin;
+	SharedMax[GroupIndex] = LocalMax;
+
+	GroupMemoryBarrierWithGroupSync();
+
+	// Parallel reduction in shared memory
+	for (uint Stride = THREAD_GROUP_SIZE / 2; Stride > 0; Stride >>= 1)
+	{
+		if (GroupIndex < Stride)
+		{
+			SharedMin[GroupIndex] = min(SharedMin[GroupIndex], SharedMin[GroupIndex + Stride]);
+			SharedMax[GroupIndex] = max(SharedMax[GroupIndex], SharedMax[GroupIndex + Stride]);
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+
+	// First thread of each group performs atomic update
+	if (GroupIndex == 0)
+	{
+		// Expand by particle radius
+		float3 FinalMin = SharedMin[0] - float3(ParticleRadius, ParticleRadius, ParticleRadius);
+		float3 FinalMax = SharedMax[0] + float3(ParticleRadius, ParticleRadius, ParticleRadius);
+
+		// Convert to sortable uints for atomic operations
+		uint MinX = FloatToSortableUint(FinalMin.x);
+		uint MinY = FloatToSortableUint(FinalMin.y);
+		uint MinZ = FloatToSortableUint(FinalMin.z);
+		uint MaxX = FloatToSortableUint(FinalMax.x);
+		uint MaxY = FloatToSortableUint(FinalMax.y);
+		uint MaxZ = FloatToSortableUint(FinalMax.z);
+
+		// Atomic update global min/max
+		// Buffer is pre-initialized to:
+		// - [0,1,2] = 0xFFFFFFFF (max uint, larger than any valid sortable float)
+		// - [3,4,5] = 0x00000000 (min uint, smaller than any valid sortable float)
+		// InterlockedMin for min values (smaller sortable uint = smaller float)
+		// InterlockedMax for max values (larger sortable uint = larger float)
+		uint OriginalValue;
+		InterlockedMin(FluidAABB[0], MinX, OriginalValue);
+		InterlockedMin(FluidAABB[1], MinY, OriginalValue);
+		InterlockedMin(FluidAABB[2], MinZ, OriginalValue);
+		InterlockedMax(FluidAABB[3], MaxX, OriginalValue);
+		InterlockedMax(FluidAABB[4], MaxY, OriginalValue);
+		InterlockedMax(FluidAABB[5], MaxZ, OriginalValue);
+	}
+}
+
+//=============================================================================
+// Initialization Compute Shader
+// Initializes AABB buffer with extreme values before reduction
+//=============================================================================
+
+[numthreads(1, 1, 1)]
+void InitCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	// Initialize min values to max sortable uint (any real value will be smaller)
+	FluidAABB[0] = 0xFFFFFFFF;
+	FluidAABB[1] = 0xFFFFFFFF;
+	FluidAABB[2] = 0xFFFFFFFF;
+
+	// Initialize max values to min sortable uint (any real value will be larger)
+	FluidAABB[3] = 0x00000000;
+	FluidAABB[4] = 0x00000000;
+	FluidAABB[5] = 0x00000000;
+}

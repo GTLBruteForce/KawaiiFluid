@@ -1,0 +1,468 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Common Ray Marching functions and structures for volumetric fluid rendering
+
+#pragma once
+
+#include "/Engine/Public/Platform.ush"
+
+//=============================================================================
+// Constants
+//=============================================================================
+
+#ifndef PI
+#define PI 3.14159265359f
+#endif
+
+#ifndef SMALL_NUMBER
+#define SMALL_NUMBER 0.0001f
+#endif
+
+// Volume resolution constants
+#define MAX_VOLUME_RESOLUTION 512
+#define MIN_VOLUME_RESOLUTION 64
+
+// Occupancy bitmask constants (32³ = 32768 bits = 1024 uint32)
+#define OCCUPANCY_RESOLUTION 32
+#define OCCUPANCY_TOTAL_BITS (OCCUPANCY_RESOLUTION * OCCUPANCY_RESOLUTION * OCCUPANCY_RESOLUTION)
+#define OCCUPANCY_UINT_COUNT (OCCUPANCY_TOTAL_BITS / 32)
+
+// Tile-based culling constants
+#define TILE_SIZE 16
+#define TILES_PER_GROUP 8
+
+// Early termination threshold
+#define DEFAULT_EARLY_TERMINATION_ALPHA 0.99f
+
+//=============================================================================
+// Ray Marching Structures
+//=============================================================================
+
+/**
+ * Ray structure for volume traversal
+ */
+struct FRay
+{
+	float3 Origin;
+	float3 Direction;
+};
+
+/**
+ * Axis-Aligned Bounding Box
+ */
+struct FAABB
+{
+	float3 Min;
+	float3 Max;
+};
+
+/**
+ * Ray-AABB intersection result
+ */
+struct FRayAABBResult
+{
+	bool bHit;
+	float TMin;
+	float TMax;
+};
+
+/**
+ * Ray marching sample result
+ */
+struct FRaySample
+{
+	float Density;
+	float3 Normal;
+	float Transmittance;
+	float Depth;
+};
+
+/**
+ * Accumulated ray marching result
+ */
+struct FRayMarchResult
+{
+	float3 Color;
+	float Alpha;
+	float Depth;
+	float3 Normal;
+	float Thickness;
+};
+
+//=============================================================================
+// Volume Sampling Utilities
+//=============================================================================
+
+/**
+ * Convert world position to volume UV coordinates
+ * @param WorldPos World space position
+ * @param VolumeBoundsMin Volume AABB minimum
+ * @param VolumeBoundsMax Volume AABB maximum
+ * @return Normalized UV coordinates [0,1]³
+ */
+float3 WorldToVolumeUV(float3 WorldPos, float3 VolumeBoundsMin, float3 VolumeBoundsMax)
+{
+	float3 Size = VolumeBoundsMax - VolumeBoundsMin;
+	return saturate((WorldPos - VolumeBoundsMin) / max(Size, SMALL_NUMBER));
+}
+
+/**
+ * Convert volume UV to world position
+ * @param UV Normalized UV coordinates [0,1]³
+ * @param VolumeBoundsMin Volume AABB minimum
+ * @param VolumeBoundsMax Volume AABB maximum
+ * @return World space position
+ */
+float3 VolumeUVToWorld(float3 UV, float3 VolumeBoundsMin, float3 VolumeBoundsMax)
+{
+	float3 Size = VolumeBoundsMax - VolumeBoundsMin;
+	return VolumeBoundsMin + UV * Size;
+}
+
+/**
+ * Convert volume UV to voxel index
+ * @param UV Normalized UV coordinates [0,1]³
+ * @param Resolution Volume resolution (e.g., 256)
+ * @return Integer voxel index
+ */
+int3 VolumeUVToVoxel(float3 UV, int Resolution)
+{
+	return clamp(int3(UV * Resolution), int3(0, 0, 0), int3(Resolution - 1, Resolution - 1, Resolution - 1));
+}
+
+/**
+ * Convert voxel index to volume UV (center of voxel)
+ * @param Voxel Integer voxel index
+ * @param Resolution Volume resolution
+ * @return Normalized UV coordinates at voxel center
+ */
+float3 VoxelToVolumeUV(int3 Voxel, int Resolution)
+{
+	return (float3(Voxel) + 0.5f) / float(Resolution);
+}
+
+//=============================================================================
+// Ray-AABB Intersection (Slab Method)
+//=============================================================================
+
+/**
+ * Ray-AABB intersection using slab method
+ * @param Ray Ray to test
+ * @param BoxMin AABB minimum
+ * @param BoxMax AABB maximum
+ * @return Intersection result with entry/exit distances
+ */
+FRayAABBResult RayAABBIntersect(FRay Ray, float3 BoxMin, float3 BoxMax)
+{
+	FRayAABBResult Result;
+	Result.bHit = false;
+	Result.TMin = 0.0f;
+	Result.TMax = 0.0f;
+
+	float3 InvDir = 1.0f / Ray.Direction;
+
+	float3 T0 = (BoxMin - Ray.Origin) * InvDir;
+	float3 T1 = (BoxMax - Ray.Origin) * InvDir;
+
+	float3 TMin = min(T0, T1);
+	float3 TMax = max(T0, T1);
+
+	Result.TMin = max(max(TMin.x, TMin.y), TMin.z);
+	Result.TMax = min(min(TMax.x, TMax.y), TMax.z);
+
+	// Clamp TMin to 0 if ray starts inside box
+	Result.TMin = max(Result.TMin, 0.0f);
+
+	Result.bHit = (Result.TMax >= Result.TMin) && (Result.TMax > 0.0f);
+
+	return Result;
+}
+
+//=============================================================================
+// Occupancy Bitmask Utilities
+//=============================================================================
+
+/**
+ * Convert 3D voxel coordinate to linear occupancy bit index
+ * @param Coord 3D coordinate in occupancy space [0, OCCUPANCY_RESOLUTION)
+ * @return Linear bit index
+ */
+uint OccupancyCoordToBitIndex(int3 Coord)
+{
+	return uint(Coord.z * OCCUPANCY_RESOLUTION * OCCUPANCY_RESOLUTION +
+	            Coord.y * OCCUPANCY_RESOLUTION +
+	            Coord.x);
+}
+
+/**
+ * Get occupancy uint index and bit offset from bit index
+ * @param BitIndex Linear bit index
+ * @param OutUintIndex Output: which uint32 contains this bit
+ * @param OutBitOffset Output: bit position within the uint32
+ */
+void OccupancyBitIndexToUintAndOffset(uint BitIndex, out uint OutUintIndex, out uint OutBitOffset)
+{
+	OutUintIndex = BitIndex / 32;
+	OutBitOffset = BitIndex % 32;
+}
+
+/**
+ * Test if a voxel is occupied in the occupancy bitmask
+ * @param OccupancyMask Buffer containing occupancy bits
+ * @param Coord 3D coordinate in occupancy space
+ * @return True if the voxel is occupied
+ */
+bool IsVoxelOccupied(Buffer<uint> OccupancyMask, int3 Coord)
+{
+	if (any(Coord < 0) || any(Coord >= OCCUPANCY_RESOLUTION))
+	{
+		return false;
+	}
+
+	uint BitIndex = OccupancyCoordToBitIndex(Coord);
+	uint UintIndex, BitOffset;
+	OccupancyBitIndexToUintAndOffset(BitIndex, UintIndex, BitOffset);
+
+	return (OccupancyMask[UintIndex] & (1u << BitOffset)) != 0;
+}
+
+/**
+ * Convert volume UV to occupancy grid coordinate
+ * @param UV Volume UV [0,1]³
+ * @return Occupancy grid coordinate [0, OCCUPANCY_RESOLUTION)
+ */
+int3 VolumeUVToOccupancyCoord(float3 UV)
+{
+	return clamp(int3(UV * OCCUPANCY_RESOLUTION), int3(0, 0, 0),
+	             int3(OCCUPANCY_RESOLUTION - 1, OCCUPANCY_RESOLUTION - 1, OCCUPANCY_RESOLUTION - 1));
+}
+
+//=============================================================================
+// MinMax Mipmap Utilities
+//=============================================================================
+
+/**
+ * Sample MinMax mipmap at given level
+ * Returns float2 where x = min density, y = max density
+ * @param MinMaxVolume 3D texture containing min/max values
+ * @param MinMaxSampler Texture sampler
+ * @param UV Volume UV coordinates
+ * @return float2(minDensity, maxDensity)
+ */
+float2 SampleMinMaxMip(Texture3D<float2> MinMaxVolume, SamplerState MinMaxSampler, float3 UV, float MipLevel)
+{
+	return MinMaxVolume.SampleLevel(MinMaxSampler, UV, MipLevel);
+}
+
+/**
+ * Check if a region has any density above threshold using MinMax mipmap
+ * @param MinMaxVolume MinMax mipmap texture
+ * @param MinMaxSampler Texture sampler
+ * @param UV Center UV of region to check
+ * @param MipLevel Mip level to sample (higher = coarser check)
+ * @param DensityThreshold Threshold for "has density"
+ * @return True if region potentially has density above threshold
+ */
+bool HasDensityInRegion(Texture3D<float2> MinMaxVolume, SamplerState MinMaxSampler,
+                        float3 UV, float MipLevel, float DensityThreshold)
+{
+	float2 MinMax = SampleMinMaxMip(MinMaxVolume, MinMaxSampler, UV, MipLevel);
+	return MinMax.y >= DensityThreshold;
+}
+
+//=============================================================================
+// Adaptive Step Size
+//=============================================================================
+
+/**
+ * Calculate adaptive step size based on local density
+ * Larger steps in empty regions, smaller steps near surfaces
+ * @param LocalDensity Current density value
+ * @param BaseStepSize Base step size
+ * @param AdaptiveMultiplier Maximum step multiplier in empty regions
+ * @param DensityThreshold Density threshold for surface
+ * @return Adapted step size
+ */
+float CalculateAdaptiveStepSize(float LocalDensity, float BaseStepSize,
+                                 float AdaptiveMultiplier, float DensityThreshold)
+{
+	// In empty regions (density < threshold), use larger steps
+	// Near surface (density >= threshold), use base step size
+	float EmptyFactor = 1.0f - saturate(LocalDensity / DensityThreshold);
+	float StepMultiplier = lerp(1.0f, AdaptiveMultiplier, EmptyFactor * EmptyFactor);
+	return BaseStepSize * StepMultiplier;
+}
+
+//=============================================================================
+// Normal Calculation from Density Gradient
+//=============================================================================
+
+/**
+ * Calculate normal from density gradient using central differences
+ * @param DensityVolume 3D density texture
+ * @param DensitySampler Texture sampler
+ * @param UV Current UV position
+ * @param VoxelSize Size of one voxel in UV space (1.0 / Resolution)
+ * @return Normalized surface normal (pointing toward lower density)
+ */
+float3 CalculateNormalFromGradient(Texture3D<float> DensityVolume, SamplerState DensitySampler,
+                                    float3 UV, float VoxelSize)
+{
+	float3 Offset = float3(VoxelSize, 0.0f, 0.0f);
+
+	float Dx = DensityVolume.SampleLevel(DensitySampler, UV + Offset.xyz, 0).r -
+	           DensityVolume.SampleLevel(DensitySampler, UV - Offset.xyz, 0).r;
+
+	float Dy = DensityVolume.SampleLevel(DensitySampler, UV + Offset.yxz, 0).r -
+	           DensityVolume.SampleLevel(DensitySampler, UV - Offset.yxz, 0).r;
+
+	float Dz = DensityVolume.SampleLevel(DensitySampler, UV + Offset.zyx, 0).r -
+	           DensityVolume.SampleLevel(DensitySampler, UV - Offset.zyx, 0).r;
+
+	float3 Gradient = float3(Dx, Dy, Dz);
+	float GradientLength = length(Gradient);
+
+	// Return normalized gradient (pointing toward increasing density)
+	// Negate for outward-facing normal
+	return (GradientLength > SMALL_NUMBER) ? -Gradient / GradientLength : float3(0.0f, 1.0f, 0.0f);
+}
+
+//=============================================================================
+// Beer's Law Transmittance
+//=============================================================================
+
+/**
+ * Calculate transmittance using Beer-Lambert law
+ * T = exp(-sigma * distance)
+ * @param Sigma Absorption coefficient (per unit distance)
+ * @param Distance Distance traveled through medium
+ * @return Transmittance [0, 1]
+ */
+float BeerLambertTransmittance(float Sigma, float Distance)
+{
+	return exp(-Sigma * Distance);
+}
+
+/**
+ * Calculate per-channel transmittance for colored absorption
+ * @param SigmaRGB Per-channel absorption coefficients
+ * @param Distance Distance traveled through medium
+ * @return Per-channel transmittance [0, 1]³
+ */
+float3 BeerLambertTransmittanceRGB(float3 SigmaRGB, float Distance)
+{
+	return exp(-SigmaRGB * Distance);
+}
+
+//=============================================================================
+// Front-to-Back Compositing
+//=============================================================================
+
+/**
+ * Composite a sample using front-to-back alpha blending
+ * @param AccumulatedColor Current accumulated color
+ * @param AccumulatedAlpha Current accumulated alpha
+ * @param SampleColor Color of current sample (pre-multiplied alpha)
+ * @param SampleAlpha Alpha of current sample
+ */
+void FrontToBackComposite(inout float3 AccumulatedColor, inout float AccumulatedAlpha,
+                          float3 SampleColor, float SampleAlpha)
+{
+	// Front-to-back compositing formula:
+	// C_out = C_in + (1 - A_in) * C_sample
+	// A_out = A_in + (1 - A_in) * A_sample
+	float Weight = 1.0f - AccumulatedAlpha;
+	AccumulatedColor += Weight * SampleColor;
+	AccumulatedAlpha += Weight * SampleAlpha;
+}
+
+/**
+ * Check if alpha has reached early termination threshold
+ * @param Alpha Current accumulated alpha
+ * @param Threshold Termination threshold (default 0.99)
+ * @return True if ray should terminate
+ */
+bool ShouldTerminateEarly(float Alpha, float Threshold)
+{
+	return Alpha >= Threshold;
+}
+
+//=============================================================================
+// Tile Utilities
+//=============================================================================
+
+/**
+ * Calculate screen tile index from pixel coordinates
+ * @param PixelCoord Pixel coordinates
+ * @param TileSize Size of tiles in pixels
+ * @return Tile index (x, y)
+ */
+int2 PixelToTileIndex(int2 PixelCoord, int TileSize)
+{
+	return PixelCoord / TileSize;
+}
+
+/**
+ * Calculate linear tile index
+ * @param TileCoord 2D tile coordinate
+ * @param TilesX Number of tiles in X dimension
+ * @return Linear tile index
+ */
+uint TileCoordToLinearIndex(int2 TileCoord, int TilesX)
+{
+	return uint(TileCoord.y * TilesX + TileCoord.x);
+}
+
+//=============================================================================
+// Float-to-Sortable-Uint Conversion (for Atomic Operations)
+//=============================================================================
+
+/**
+ * Convert float to uint that maintains comparison order for atomics
+ * Positive floats: flip sign bit to shift positive range above negative
+ * Negative floats: flip all bits to reverse negative number ordering
+ * This ensures: float_a < float_b implies sortable_a < sortable_b
+ */
+uint FloatToSortableUint(float f)
+{
+	uint bits = asuint(f);
+	return (bits & 0x80000000) ? ~bits : (bits | 0x80000000);
+}
+
+/**
+ * Convert sortable uint back to float
+ * Reverses the FloatToSortableUint transformation
+ */
+float SortableUintToFloat(uint u)
+{
+	// If high bit is set, it was a positive float - clear high bit
+	// If high bit is clear, it was a negative float - flip all bits back
+	uint bits = (u & 0x80000000) ? (u & 0x7FFFFFFF) : ~u;
+	return asfloat(bits);
+}
+
+//=============================================================================
+// Z-Order to Volume Synchronization
+//=============================================================================
+
+/**
+ * Get cell size for synchronized Z-Order and Volume grids
+ * CellSize = SmoothingRadius (ensures consistent spatial partitioning)
+ * @param SmoothingRadius Fluid smoothing radius
+ * @return Cell size for both grids
+ */
+float GetSynchronizedCellSize(float SmoothingRadius)
+{
+	return SmoothingRadius;
+}
+
+/**
+ * Get volume voxel size from cell size
+ * VoxelSize = CellSize / VoxelsPerCell (typically 1 for direct mapping)
+ * @param CellSize Z-Order cell size
+ * @param VoxelsPerCell Number of voxels per Z-Order cell
+ * @return Voxel size
+ */
+float GetVoxelSize(float CellSize, int VoxelsPerCell)
+{
+	return CellSize / float(VoxelsPerCell);
+}

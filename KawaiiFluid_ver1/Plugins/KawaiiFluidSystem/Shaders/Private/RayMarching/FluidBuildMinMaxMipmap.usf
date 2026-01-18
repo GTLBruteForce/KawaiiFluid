@@ -1,0 +1,107 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Build MinMax Mipmap Chain from Density Volume
+// Used for hierarchical empty space skipping during ray marching
+
+#include "/Engine/Public/Platform.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/RayMarching/FluidRayMarchingCommon.ush"
+
+//=============================================================================
+// Shared Parameters
+//=============================================================================
+
+int InputResolution;
+int OutputResolution;
+
+//=============================================================================
+// Thread Group Size
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 8
+#endif
+
+//=============================================================================
+// Level 0: Density -> MinMax (downsample by 2x)
+// Takes density volume and creates initial MinMax level
+//=============================================================================
+
+Texture3D<float> DensityVolume;
+SamplerState DensitySampler;
+RWTexture3D<float2> MinMaxMipLevel0;
+
+[numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE)]
+void BuildLevel0CS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	if (any(DispatchThreadId >= uint3(OutputResolution, OutputResolution, OutputResolution)))
+	{
+		return;
+	}
+
+	// Each output voxel covers 2x2x2 input voxels
+	int3 InputStart = int3(DispatchThreadId) * 2;
+
+	float MinDensity = 1e10f;
+	float MaxDensity = -1e10f;
+
+	// Sample 2x2x2 region
+	for (int z = 0; z < 2; ++z)
+	{
+		for (int y = 0; y < 2; ++y)
+		{
+			for (int x = 0; x < 2; ++x)
+			{
+				int3 SampleCoord = InputStart + int3(x, y, z);
+				float Density = DensityVolume[SampleCoord];
+				MinDensity = min(MinDensity, Density);
+				MaxDensity = max(MaxDensity, Density);
+			}
+		}
+	}
+
+	MinMaxMipLevel0[DispatchThreadId] = float2(MinDensity, MaxDensity);
+}
+
+//=============================================================================
+// Mip Chain: MinMax -> MinMax (downsample by 2x)
+// Builds subsequent mip levels from previous level
+//=============================================================================
+
+Texture3D<float2> InputMipLevel;
+SamplerState InputSampler;
+RWTexture3D<float2> OutputMipLevel;
+
+[numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE)]
+void BuildMipChainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	if (any(DispatchThreadId >= uint3(OutputResolution, OutputResolution, OutputResolution)))
+	{
+		return;
+	}
+
+	// Each output voxel covers 2x2x2 input voxels
+	int3 InputStart = int3(DispatchThreadId) * 2;
+
+	float MinDensity = 1e10f;
+	float MaxDensity = -1e10f;
+
+	// Sample 2x2x2 region
+	for (int z = 0; z < 2; ++z)
+	{
+		for (int y = 0; y < 2; ++y)
+		{
+			for (int x = 0; x < 2; ++x)
+			{
+				int3 SampleCoord = InputStart + int3(x, y, z);
+
+				// Clamp to valid range
+				SampleCoord = min(SampleCoord, int3(InputResolution - 1, InputResolution - 1, InputResolution - 1));
+
+				float2 MinMax = InputMipLevel[SampleCoord];
+				MinDensity = min(MinDensity, MinMax.x);
+				MaxDensity = max(MaxDensity, MinMax.y);
+			}
+		}
+	}
+
+	OutputMipLevel[DispatchThreadId] = float2(MinDensity, MaxDensity);
+}

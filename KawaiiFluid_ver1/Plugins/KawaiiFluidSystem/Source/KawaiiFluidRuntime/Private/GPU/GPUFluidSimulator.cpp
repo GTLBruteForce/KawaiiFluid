@@ -237,6 +237,10 @@ void FGPUFluidSimulator::ReleaseRHI()
 	PersistentCellCountsBuffer.SafeRelease();
 	PersistentParticleIndicesBuffer.SafeRelease();
 
+	// Release persistent Z-Order buffers (for Ray Marching)
+	PersistentCellStartBuffer.SafeRelease();
+	PersistentCellEndBuffer.SafeRelease();
+
 	// Collision cleanup is handled by CollisionManager::Release()
 }
 
@@ -507,6 +511,9 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		return;
 	}
 
+	// Cache CellSize for Ray Marching volume building
+	CachedCellSize = Params.CellSize;
+
 	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluidSimulation (Particles: %d, Spawning: %d)", CurrentParticleCount, SpawnCount);
 
 	// =====================================================
@@ -770,6 +777,7 @@ FGPUFluidSimulator::FSimulationSpatialData FGPUFluidSimulator::BuildSpatialStruc
 			GraphBuilder, InOutParticleBuffer,
 			CellStartUAVLocal, SpatialData.CellStartSRV,
 			CellEndUAVLocal, SpatialData.CellEndSRV,
+			SpatialData.CellStartBuffer, SpatialData.CellEndBuffer,
 			Params);
 
 		// Replace particle buffer with sorted version
@@ -1179,10 +1187,37 @@ void FGPUFluidSimulator::ExtractPersistentBuffers(
 	// Only extract legacy hash table buffers when Z-Order sorting is NOT enabled
 	// When Z-Order is enabled, CellCountsBuffer/ParticleIndicesBuffer are dummy buffers that weren't produced
 	const bool bUseZOrderSorting = ZOrderSortManager.IsValid() && ZOrderSortManager->IsZOrderSortingEnabled();
+
+	// DEBUG LOG
+	static int32 ExtractLogCounter = 0;
+	if (++ExtractLogCounter % 60 == 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[ExtractBuffers] bUseZOrderSorting=%d, CellStartBuffer=%s, CellEndBuffer=%s"),
+			bUseZOrderSorting ? 1 : 0,
+			SpatialData.CellStartBuffer ? TEXT("Valid") : TEXT("NULL"),
+			SpatialData.CellEndBuffer ? TEXT("Valid") : TEXT("NULL"));
+	}
+
 	if (!bUseZOrderSorting)
 	{
 		if (SpatialData.CellCountsBuffer) GraphBuilder.QueueBufferExtraction(SpatialData.CellCountsBuffer, &PersistentCellCountsBuffer, ERHIAccess::UAVCompute);
 		if (SpatialData.ParticleIndicesBuffer) GraphBuilder.QueueBufferExtraction(SpatialData.ParticleIndicesBuffer, &PersistentParticleIndicesBuffer, ERHIAccess::UAVCompute);
+	}
+	else
+	{
+		// Extract Z-Order CellStart/CellEnd buffers ONLY when Ray Marching pipeline needs them
+		// This avoids unnecessary GPU memory copies for SSFR pipeline
+		if (bExtractZOrderBuffersForRayMarching)
+		{
+			if (SpatialData.CellStartBuffer)
+			{
+				GraphBuilder.QueueBufferExtraction(SpatialData.CellStartBuffer, &PersistentCellStartBuffer, ERHIAccess::SRVCompute);
+			}
+			if (SpatialData.CellEndBuffer)
+			{
+				GraphBuilder.QueueBufferExtraction(SpatialData.CellEndBuffer, &PersistentCellEndBuffer, ERHIAccess::SRVCompute);
+			}
+		}
 	}
 }
 
@@ -1430,6 +1465,7 @@ FRDGBufferRef FGPUFluidSimulator::ExecuteZOrderSortingPipeline(
 	FRDGBuilder& GraphBuilder, FRDGBufferRef InParticleBuffer,
 	FRDGBufferUAVRef& OutCellStartUAV, FRDGBufferSRVRef& OutCellStartSRV,
 	FRDGBufferUAVRef& OutCellEndUAV, FRDGBufferSRVRef& OutCellEndSRV,
+	FRDGBufferRef& OutCellStartBuffer, FRDGBufferRef& OutCellEndBuffer,
 	const FGPUFluidSimulationParams& Params)
 {
 	// Check both manager validity AND enabled flag
@@ -1438,7 +1474,9 @@ FRDGBufferRef FGPUFluidSimulator::ExecuteZOrderSortingPipeline(
 		return InParticleBuffer;
 	}
 	return ZOrderSortManager->ExecuteZOrderSortingPipeline(GraphBuilder, InParticleBuffer,
-		OutCellStartUAV, OutCellStartSRV, OutCellEndUAV, OutCellEndSRV, CurrentParticleCount, Params);
+		OutCellStartUAV, OutCellStartSRV, OutCellEndUAV, OutCellEndSRV,
+		OutCellStartBuffer, OutCellEndBuffer,
+		CurrentParticleCount, Params);
 }
 
 //=============================================================================

@@ -301,3 +301,37 @@ void FKawaiiFluidRenderResource::SetRenderParticleBuffer(TRefCountPtr<FRDGPooled
 {
 	PooledRenderParticleBuffer = InBuffer;
 }
+
+//========================================
+// Z-Order 버퍼 접근 (Ray Marching 볼륨 빌딩용)
+//========================================
+
+TRefCountPtr<FRDGPooledBuffer> FKawaiiFluidRenderResource::GetPooledCellStartBuffer() const
+{
+	FGPUFluidSimulator* Simulator = CachedGPUSimulator.load();
+	if (Simulator)
+	{
+		return Simulator->GetPersistentCellStartBuffer();
+	}
+	return nullptr;
+}
+
+TRefCountPtr<FRDGPooledBuffer> FKawaiiFluidRenderResource::GetPooledCellEndBuffer() const
+{
+	FGPUFluidSimulator* Simulator = CachedGPUSimulator.load();
+	if (Simulator)
+	{
+		return Simulator->GetPersistentCellEndBuffer();
+	}
+	return nullptr;
+}
+
+bool FKawaiiFluidRenderResource::HasValidZOrderBuffers() const
+{
+	FGPUFluidSimulator* Simulator = CachedGPUSimulator.load();
+	if (Simulator)
+	{
+		return Simulator->HasValidZOrderBuffers();
+	}
+	return false;
+}

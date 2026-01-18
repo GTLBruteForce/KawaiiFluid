@@ -164,6 +164,28 @@ public:
 	/** Get persistent pooled buffer for RDG registration (Phase 2: GPU→GPU copy) */
 	TRefCountPtr<FRDGPooledBuffer> GetPersistentParticleBuffer() const { return PersistentParticleBuffer; }
 
+	/** Get persistent Z-Order CellStart buffer (for Ray Marching volume building) */
+	TRefCountPtr<FRDGPooledBuffer> GetPersistentCellStartBuffer() const { return PersistentCellStartBuffer; }
+
+	/** Get persistent Z-Order CellEnd buffer (for Ray Marching volume building) */
+	TRefCountPtr<FRDGPooledBuffer> GetPersistentCellEndBuffer() const { return PersistentCellEndBuffer; }
+
+	/** Check if Z-Order buffers are valid for Ray Marching */
+	bool HasValidZOrderBuffers() const
+	{
+		return PersistentCellStartBuffer.IsValid() && PersistentCellEndBuffer.IsValid();
+	}
+
+	/**
+	 * Enable/disable Z-Order buffer extraction for Ray Marching
+	 * Only Ray Marching pipeline should enable this to avoid unnecessary GPU memory copies
+	 * @param bEnable true to extract CellStart/CellEnd buffers after simulation
+	 */
+	void SetExtractZOrderBuffersForRayMarching(bool bEnable) { bExtractZOrderBuffersForRayMarching = bEnable; }
+
+	/** Check if Z-Order buffer extraction is enabled */
+	bool IsExtractZOrderBuffersEnabled() const { return bExtractZOrderBuffersForRayMarching; }
+
 	/** Access previous frame position buffer (for history trails) */
 	TRefCountPtr<FRDGPooledBuffer>& AccessPreviousPositionsBuffer() { return PreviousPositionsBuffer; }
 
@@ -228,6 +250,9 @@ public:
 		OutMin = SimulationBoundsMin;
 		OutMax = SimulationBoundsMax;
 	}
+
+	/** Get cached CellSize from last simulation (for Ray Marching volume building) */
+	float GetCellSize() const { return CachedCellSize; }
 
 	/**
 	 * Set grid resolution preset for Z-Order sorting shader permutation
@@ -848,6 +873,8 @@ private:
 		FRDGBufferSRVRef& OutCellStartSRV,
 		FRDGBufferUAVRef& OutCellEndUAV,
 		FRDGBufferSRVRef& OutCellEndSRV,
+		FRDGBufferRef& OutCellStartBuffer,
+		FRDGBufferRef& OutCellEndBuffer,
 		const FGPUFluidSimulationParams& Params);
 
 private:
@@ -902,6 +929,15 @@ private:
 	TRefCountPtr<FRDGPooledBuffer> PersistentCellCountsBuffer;
 	TRefCountPtr<FRDGPooledBuffer> PersistentParticleIndicesBuffer;
 
+	// Persistent Z-Order buffers - for Ray Marching volume building
+	// Extracted after simulation when Z-Order sorting is enabled AND bExtractZOrderBuffersForRayMarching is true
+	TRefCountPtr<FRDGPooledBuffer> PersistentCellStartBuffer;
+	TRefCountPtr<FRDGPooledBuffer> PersistentCellEndBuffer;
+
+	// Flag to control Z-Order buffer extraction (only Ray Marching pipeline should enable this)
+	// Default false to avoid unnecessary GPU memory copies for SSFR pipeline
+	bool bExtractZOrderBuffersForRayMarching = false;
+
 	// Neighbor caching buffers - reuse neighbor list across solver iterations
 	// NeighborList: [ParticleCount * MAX_NEIGHBORS_PER_PARTICLE] - cached neighbor indices
 	// NeighborCounts: [ParticleCount] - number of neighbors per particle
@@ -912,6 +948,9 @@ private:
 	// Simulation bounds (local copy for GetSimulationBounds API)
 	FVector3f SimulationBoundsMin = FVector3f(-1280.0f, -1280.0f, -1280.0f);
 	FVector3f SimulationBoundsMax = FVector3f(1280.0f, 1280.0f, 1280.0f);
+
+	// Cached CellSize from last simulation (for Ray Marching volume building)
+	float CachedCellSize = 0.0f;
 
 	// Flag: need to upload all particles from CPU (initial or after resize)
 	bool bNeedsFullUpload = true;

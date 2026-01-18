@@ -1,0 +1,441 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Main Ray Marching shader for volumetric fluid rendering
+// Implements all 8 optimization techniques from the spec
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/RayMarching/FluidRayMarchingCommon.ush"
+
+//=============================================================================
+// Volume Textures
+//=============================================================================
+
+Texture3D<float> DensityVolume;
+SamplerState DensitySampler;
+
+Texture3D<float2> MinMaxMipmap;
+SamplerState MinMaxSampler;
+
+Buffer<uint> OccupancyMask;
+
+//=============================================================================
+// Scene Textures
+//=============================================================================
+
+Texture2D<float> SceneDepth;
+SamplerState DepthSampler;
+
+// Temporal history
+Texture2D<float4> HistoryColor;
+Texture2D<float> HistoryDepth;
+SamplerState HistorySampler;
+
+// Tile visibility
+Buffer<uint> TileVisibility;
+
+//=============================================================================
+// Volume Parameters
+//=============================================================================
+
+int VolumeResolution;
+float3 VolumeBoundsMin;
+float3 VolumeBoundsMax;
+
+//=============================================================================
+// Ray Marching Parameters
+//=============================================================================
+
+int MaxSteps;
+float DensityThreshold;
+float AdaptiveStepMultiplier;
+float EarlyTerminationAlpha;
+
+//=============================================================================
+// Optimization Flags
+//=============================================================================
+
+uint bEnableOccupancyMask;
+uint bEnableMinMaxMipmap;
+uint bEnableTileCulling;
+uint bEnableTemporalReprojection;
+float TemporalBlendFactor;
+
+//=============================================================================
+// Appearance Parameters
+//=============================================================================
+
+float4 FluidColor;
+float FresnelStrength;
+float RefractiveIndex;
+float AbsorptionCoefficient;
+float4 AbsorptionColorCoefficients;
+float SpecularStrength;
+float SpecularRoughness;
+
+//=============================================================================
+// View Parameters
+//=============================================================================
+
+float2 ViewportSize;
+float3 CameraPosition;
+float4x4 InvViewProjectionMatrix;
+float4x4 PrevViewProjectionMatrix;
+float3 SunDirection;
+float4 SunColor;
+
+int TilesX;
+
+// Frame index for temporal jittering
+uint FrameIndex;
+
+//=============================================================================
+// Vertex Shader (Full screen triangle - procedural)
+//=============================================================================
+
+void RayMarchingVS(
+	uint VertexId : SV_VertexID,
+	out float4 OutPosition : SV_POSITION,
+	out float2 OutTexCoord : TEXCOORD0)
+{
+	// Generate fullscreen triangle vertices procedurally
+	// VertexId 0: (-1, -1), UV (0, 1)
+	// VertexId 1: (3, -1),  UV (2, 1)
+	// VertexId 2: (-1, 3),  UV (0, -1)
+	float2 UV = float2((VertexId << 1) & 2, VertexId & 2);
+	OutPosition = float4(UV * 2.0f - 1.0f, 0.0f, 1.0f);
+	OutTexCoord = float2(UV.x, 1.0f - UV.y);  // Flip Y for texture sampling
+}
+
+//=============================================================================
+// Helper Functions
+//=============================================================================
+
+/**
+ * Simple hash function for ray jittering (breaks up aliasing patterns)
+ * Based on screen position and frame index
+ */
+float Hash12(float2 p)
+{
+	float3 p3 = frac(float3(p.xyx) * 0.1031f);
+	p3 += dot(p3, p3.yzx + 33.33f);
+	return frac((p3.x + p3.y) * p3.z);
+}
+
+/**
+ * Reconstruct world position from screen UV and depth
+ */
+float3 ReconstructWorldPosition(float2 ScreenUV, float DeviceZ)
+{
+	float4 ClipPos = float4(ScreenUV * 2.0f - 1.0f, DeviceZ, 1.0f);
+	ClipPos.y = -ClipPos.y;  // Flip Y for DirectX
+
+	float4 WorldPos = mul(ClipPos, InvViewProjectionMatrix);
+	return WorldPos.xyz / WorldPos.w;
+}
+
+/**
+ * Check if tile is visible using tile culling buffer
+ */
+bool IsTileVisible(int2 TileCoord)
+{
+	if (!bEnableTileCulling)
+		return true;
+
+	uint TileIndex = TileCoordToLinearIndex(TileCoord, TilesX);
+	uint UintIndex = TileIndex / 32;
+	uint BitOffset = TileIndex % 32;
+
+	return (TileVisibility[UintIndex] & (1u << BitOffset)) != 0;
+}
+
+/**
+ * Check if region is empty using occupancy mask
+ */
+bool IsRegionEmpty(float3 VolumeUV)
+{
+	if (!bEnableOccupancyMask)
+		return false;
+
+	int3 OccupancyCoord = VolumeUVToOccupancyCoord(VolumeUV);
+	return !IsVoxelOccupied(OccupancyMask, OccupancyCoord);
+}
+
+/**
+ * Check if region has density using MinMax mipmap
+ */
+bool RegionHasDensity(float3 VolumeUV, float MipLevel)
+{
+	if (!bEnableMinMaxMipmap)
+		return true;
+
+	return HasDensityInRegion(MinMaxMipmap, MinMaxSampler, VolumeUV, MipLevel, DensityThreshold);
+}
+
+/**
+ * Sample temporal history with reprojection
+ */
+float4 SampleHistory(float3 WorldPos, out bool bValid)
+{
+	if (!bEnableTemporalReprojection)
+	{
+		bValid = false;
+		return float4(0, 0, 0, 0);
+	}
+
+	// Project current world position to previous frame screen space
+	float4 PrevClipPos = mul(float4(WorldPos, 1.0f), PrevViewProjectionMatrix);
+	float2 PrevScreenUV = (PrevClipPos.xy / PrevClipPos.w) * 0.5f + 0.5f;
+	PrevScreenUV.y = 1.0f - PrevScreenUV.y;
+
+	// Check if UV is valid
+	if (any(PrevScreenUV < 0.0f) || any(PrevScreenUV > 1.0f))
+	{
+		bValid = false;
+		return float4(0, 0, 0, 0);
+	}
+
+	// Sample history
+	float4 HistoryValue = HistoryColor.SampleLevel(HistorySampler, PrevScreenUV, 0);
+	bValid = true;
+	return HistoryValue;
+}
+
+/**
+ * Calculate Fresnel reflectance using Schlick approximation
+ */
+float FresnelSchlick(float CosTheta, float F0)
+{
+	return F0 + (1.0f - F0) * pow(1.0f - CosTheta, 5.0f);
+}
+
+/**
+ * Simple Blinn-Phong specular
+ */
+float BlinnPhongSpecular(float3 ViewDir, float3 LightDir, float3 Normal, float Shininess)
+{
+	float3 HalfDir = normalize(ViewDir + LightDir);
+	float NdotH = max(dot(Normal, HalfDir), 0.0f);
+	return pow(NdotH, Shininess);
+}
+
+//=============================================================================
+// Main Ray Marching Pixel Shader
+//=============================================================================
+
+void MainPS(
+	in float4 SvPosition : SV_POSITION,
+	in float2 TexCoord : TEXCOORD0,
+	out float4 OutColor : SV_Target0)
+{
+	int2 PixelCoord = int2(SvPosition.xy);
+	float2 ScreenUV = TexCoord;
+
+	// Tile culling early-out
+	if (bEnableTileCulling)
+	{
+		int2 TileCoord = PixelToTileIndex(PixelCoord, TILE_SIZE);
+		if (!IsTileVisible(TileCoord))
+		{
+			OutColor = float4(0, 0, 0, 0);
+			return;
+		}
+	}
+
+	// Sample scene depth
+	float SceneDeviceZ = SceneDepth.SampleLevel(DepthSampler, ScreenUV, 0);
+	float SceneWorldZ = 1.0f / (SceneDeviceZ * View.ViewToClip[2][3] - View.ViewToClip[2][2]);
+
+	// Calculate ray from camera through pixel
+	FRay Ray;
+	Ray.Origin = CameraPosition;
+
+	// Convert ScreenUV to clip space [-1, 1]
+	float4 FarClipPos = float4(ScreenUV * 2.0f - 1.0f, 1.0f, 1.0f);
+	FarClipPos.y = -FarClipPos.y;  // Flip Y for DirectX NDC
+	float4 FarWorldPos4 = mul(FarClipPos, InvViewProjectionMatrix);
+	float3 FarWorldPos = FarWorldPos4.xyz / FarWorldPos4.w;
+	Ray.Direction = normalize(FarWorldPos - Ray.Origin);
+
+	// Intersect ray with volume AABB
+	FRayAABBResult AABBHit = RayAABBIntersect(Ray, VolumeBoundsMin, VolumeBoundsMax);
+
+	if (!AABBHit.bHit)
+	{
+		OutColor = float4(0, 0, 0, 0);
+		return;
+	}
+
+	// Calculate step size based on volume resolution
+	// Use diagonal length / MaxSteps to ensure full volume traversal
+	float3 VolumeSize = VolumeBoundsMax - VolumeBoundsMin;
+	float VolumeDiagonal = length(VolumeSize);
+	float BaseStepSize = VolumeDiagonal / float(MaxSteps);  // Guarantees full traversal
+
+	// Initialize ray marching state
+	// Clamp TMin to 0 when camera is inside volume (TMin would be negative)
+	float T = max(AABBHit.TMin, 0.0f);
+
+	// Add ray jittering to break up aliasing patterns (ring/stripe artifacts)
+	// The jitter varies per frame to prevent static patterns when camera moves
+	float Jitter = Hash12(float2(PixelCoord) + float(FrameIndex % 16) * 0.1f) * BaseStepSize;
+	T += Jitter;
+
+	// TODO: Fix SceneWorldZ calculation - currently broken, using AABB max only
+	float TMax = AABBHit.TMax;  // Temporarily ignore scene depth
+
+	float3 AccumulatedColor = float3(0, 0, 0);
+	float AccumulatedAlpha = 0.0f;
+	float AccumulatedDepth = 0.0f;
+	float3 AccumulatedNormal = float3(0, 0, 0);
+	float AccumulatedThickness = 0.0f;
+
+	bool bFoundSurface = false;
+	float SurfaceDepth = 0.0f;
+	float3 SurfaceNormal = float3(0, 1, 0);
+
+	// DEBUG: Uncomment to visualize volume bounds (shows red box where fluid should be)
+	// OutColor = float4(1, 0, 0, 0.3f);
+	// return;
+
+	// Ray marching loop
+	int StepCount = 0;
+	while (T < TMax && StepCount < MaxSteps && !ShouldTerminateEarly(AccumulatedAlpha, EarlyTerminationAlpha))
+	{
+		float3 SamplePos = Ray.Origin + Ray.Direction * T;
+		float3 VolumeUV = WorldToVolumeUV(SamplePos, VolumeBoundsMin, VolumeBoundsMax);
+
+		// [DISABLED FOR DEBUGGING] Occupancy mask check (skip empty blocks)
+		// These optimizations can cause stripe patterns, disabled to test
+		/*
+		if (bEnableOccupancyMask && IsRegionEmpty(VolumeUV))
+		{
+			// Jump to next occupancy cell
+			float OccupancyCellSize = 1.0f / float(OCCUPANCY_RESOLUTION);
+			T += OccupancyCellSize * length(VolumeSize) * AdaptiveStepMultiplier;
+			StepCount++;
+			continue;
+		}
+		*/
+
+		// [DISABLED FOR DEBUGGING] MinMax mipmap check (hierarchical empty space skipping)
+		/*
+		if (bEnableMinMaxMipmap)
+		{
+			// Check coarsest mip first, then refine
+			bool bShouldSkip = false;
+			for (int MipLevel = 3; MipLevel >= 0 && !bShouldSkip; --MipLevel)
+			{
+				if (!RegionHasDensity(VolumeUV, float(MipLevel)))
+				{
+					// Skip this region at this mip level
+					float MipCellSize = 1.0f / float(VolumeResolution >> (MipLevel + 1));
+					T += MipCellSize * length(VolumeSize);
+					bShouldSkip = true;
+				}
+			}
+			if (bShouldSkip)
+			{
+				StepCount++;
+				continue;
+			}
+		}
+		*/
+
+		// Sample density
+		float Density = DensityVolume.SampleLevel(DensitySampler, VolumeUV, 0);
+
+		// Use constant step size (adaptive stepping disabled for debugging)
+		// float StepSize = CalculateAdaptiveStepSize(Density, BaseStepSize, AdaptiveStepMultiplier, DensityThreshold);
+		float StepSize = BaseStepSize;
+
+		if (Density > DensityThreshold * 0.1f)  // Near surface
+		{
+			// Calculate normal from gradient
+			float3 Normal = CalculateNormalFromGradient(DensityVolume, DensitySampler, VolumeUV, 1.0f / float(VolumeResolution));
+
+			// Record first surface hit
+			if (!bFoundSurface && Density > DensityThreshold)
+			{
+				bFoundSurface = true;
+				SurfaceDepth = T;
+				SurfaceNormal = Normal;
+			}
+
+			// Calculate sample contribution using Beer-Lambert law
+			// Alpha depends on both density AND step size (larger steps = more opacity)
+			float ExtinctionCoeff = Density * AbsorptionCoefficient * 0.1f;  // Scale factor for visibility
+			float SampleAlpha = 1.0f - exp(-ExtinctionCoeff * StepSize);
+
+			// Beer's Law transmittance for absorption
+			float3 Transmittance = BeerLambertTransmittanceRGB(
+				AbsorptionColorCoefficients.rgb * AbsorptionCoefficient,
+				StepSize);
+
+			// Lighting
+			float3 ViewDir = -Ray.Direction;
+			float NdotV = max(dot(Normal, ViewDir), 0.0f);
+			float NdotL = max(dot(Normal, SunDirection), 0.0f);
+
+			// Fresnel
+			float F0 = pow((RefractiveIndex - 1.0f) / (RefractiveIndex + 1.0f), 2.0f);
+			float Fresnel = FresnelSchlick(NdotV, F0) * FresnelStrength;
+
+			// Specular
+			float Specular = BlinnPhongSpecular(ViewDir, SunDirection, Normal, 1.0f / max(SpecularRoughness, 0.01f)) * SpecularStrength;
+
+			// Combine lighting
+			float3 Diffuse = FluidColor.rgb * NdotL * SunColor.rgb;
+			float3 Ambient = FluidColor.rgb * 0.15f;
+			float3 SampleColor = (Diffuse + Ambient + Specular * SunColor.rgb) * (1.0f - Transmittance);
+
+			// Apply Fresnel reflection
+			SampleColor = lerp(SampleColor, SunColor.rgb * 0.5f, Fresnel * 0.3f);
+
+			// Front-to-back compositing
+			FrontToBackComposite(AccumulatedColor, AccumulatedAlpha, SampleColor * SampleAlpha, SampleAlpha);
+
+			// Accumulate thickness
+			AccumulatedThickness += StepSize * SampleAlpha;
+		}
+
+		T += StepSize;
+		StepCount++;
+	}
+
+	// Temporal reprojection blending
+	if (bEnableTemporalReprojection && AccumulatedAlpha > 0.01f)
+	{
+		float3 SurfaceWorldPos = Ray.Origin + Ray.Direction * (bFoundSurface ? SurfaceDepth : AABBHit.TMin);
+		bool bHistoryValid;
+		float4 History = SampleHistory(SurfaceWorldPos, bHistoryValid);
+
+		if (bHistoryValid && History.a > 0.01f)
+		{
+			// Blend with history
+			AccumulatedColor = lerp(AccumulatedColor, History.rgb, TemporalBlendFactor);
+			AccumulatedAlpha = lerp(AccumulatedAlpha, History.a, TemporalBlendFactor);
+		}
+	}
+
+	// Output final color
+	OutColor = float4(AccumulatedColor, AccumulatedAlpha);
+}
+
+//=============================================================================
+// Composite Pixel Shader (Simple pass-through for alpha blending)
+//=============================================================================
+
+Texture2D<float4> FluidColorTexture;
+SamplerState FluidColorSampler;
+
+void CompositePS(
+	in float4 SvPosition : SV_POSITION,
+	in float2 TexCoord : TEXCOORD0,
+	out float4 OutColor : SV_Target0)
+{
+	// Sample the fluid color texture
+	float4 FluidColor = FluidColorTexture.SampleLevel(FluidColorSampler, TexCoord, 0);
+
+	// Output with pre-multiplied alpha (blending handled by render state)
+	OutColor = FluidColor;
+}

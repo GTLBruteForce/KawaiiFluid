@@ -1,0 +1,35 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Clear 3D volume texture to a specified value
+
+#include "/Engine/Public/Platform.ush"
+
+//=============================================================================
+// Parameters
+//=============================================================================
+
+RWTexture3D<float> Volume;
+int VolumeResolution;
+float ClearValue;
+
+//=============================================================================
+// Thread Group Size
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 8
+#endif
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	if (any(DispatchThreadId >= uint3(VolumeResolution, VolumeResolution, VolumeResolution)))
+	{
+		return;
+	}
+
+	Volume[DispatchThreadId] = ClearValue;
+}

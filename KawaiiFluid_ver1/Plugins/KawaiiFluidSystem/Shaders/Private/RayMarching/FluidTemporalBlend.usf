@@ -1,0 +1,88 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Temporal blending for ray marching
+// Blends current frame with history for temporal stability
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+
+//=============================================================================
+// Parameters
+//=============================================================================
+
+Texture2D<float4> CurrentColor;
+Texture2D<float> CurrentDepth;
+SamplerState CurrentSampler;
+
+Texture2D<float4> HistoryColor;
+Texture2D<float> HistoryDepth;
+SamplerState HistorySampler;
+
+Texture2D<float2> MotionVectors;
+SamplerState MotionSampler;
+
+float TemporalBlendFactor;
+float DepthRejectionThreshold;
+float2 ViewportSize;
+
+//=============================================================================
+// Vertex Shader
+//=============================================================================
+
+void MainVS(
+	in float4 InPosition : ATTRIBUTE0,
+	in float2 InTexCoord : ATTRIBUTE1,
+	out float4 OutPosition : SV_POSITION,
+	out float2 OutTexCoord : TEXCOORD0)
+{
+	OutPosition = InPosition;
+	OutTexCoord = InTexCoord;
+}
+
+//=============================================================================
+// Pixel Shader
+//=============================================================================
+
+void MainPS(
+	in float4 SvPosition : SV_POSITION,
+	in float2 TexCoord : TEXCOORD0,
+	out float4 OutColor : SV_Target0)
+{
+	// Sample current frame
+	float4 Current = CurrentColor.SampleLevel(CurrentSampler, TexCoord, 0);
+	float CurrentZ = CurrentDepth.SampleLevel(CurrentSampler, TexCoord, 0);
+
+	// Sample motion vectors
+	float2 Motion = MotionVectors.SampleLevel(MotionSampler, TexCoord, 0);
+
+	// Reproject to previous frame
+	float2 HistoryUV = TexCoord - Motion;
+
+	// Check if UV is valid
+	if (any(HistoryUV < 0.0f) || any(HistoryUV > 1.0f))
+	{
+		// No valid history, use current frame
+		OutColor = Current;
+		return;
+	}
+
+	// Sample history
+	float4 History = HistoryColor.SampleLevel(HistorySampler, HistoryUV, 0);
+	float HistoryZ = HistoryDepth.SampleLevel(HistorySampler, HistoryUV, 0);
+
+	// Depth rejection
+	float DepthDiff = abs(CurrentZ - HistoryZ);
+	float DepthWeight = saturate(1.0f - DepthDiff / DepthRejectionThreshold);
+
+	// Calculate blend factor
+	float BlendFactor = TemporalBlendFactor * DepthWeight;
+
+	// Neighborhood clamping (simplified)
+	// In full implementation, sample 3x3 neighborhood and clamp history to min/max
+	float3 ClampedHistory = History.rgb;
+
+	// Blend
+	float3 BlendedColor = lerp(Current.rgb, ClampedHistory, BlendFactor);
+	float BlendedAlpha = lerp(Current.a, History.a, BlendFactor);
+
+	OutColor = float4(BlendedColor, BlendedAlpha);
+}

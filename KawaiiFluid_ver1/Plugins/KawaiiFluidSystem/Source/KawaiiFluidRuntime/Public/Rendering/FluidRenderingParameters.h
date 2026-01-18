@@ -16,7 +16,10 @@ UENUM(BlueprintType)
 enum class EMetaballPipelineType : uint8
 {
 	/** Screen Space pipeline: Depth -> Smoothing -> Normal -> Thickness */
-	ScreenSpace UMETA(DisplayName = "Screen Space")
+	ScreenSpace UMETA(DisplayName = "Screen Space"),
+
+	/** Ray Marching pipeline: Volumetric rendering with 3D density volume */
+	RayMarching UMETA(DisplayName = "Ray Marching")
 };
 
 /**
@@ -445,6 +448,265 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 			ClampMax = "1.0"))
 	float SubsurfaceOpacity = 0.5f;
 
+	//========================================
+	// Ray Marching Parameters
+	//========================================
+
+	/**
+	 * Ray Marching volume resolution.
+	 * Higher = more detail, more memory usage.
+	 * 128: ~8MB, 256: ~64MB (with optimizations ~57MB total)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching",
+			ClampMin = "64", ClampMax = "512"))
+	int32 VolumeResolution = 256;
+
+	/**
+	 * Maximum ray march steps.
+	 * Higher = more accurate but more expensive.
+	 * 64~128 recommended with optimizations.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching",
+			ClampMin = "16", ClampMax = "512"))
+	int32 RayMarchMaxSteps = 128;
+
+	/**
+	 * Density threshold for surface detection.
+	 * When accumulated density exceeds this, consider surface found.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching",
+			ClampMin = "0.01", ClampMax = "2.0"))
+	float DensityThreshold = 0.5f;
+
+	/**
+	 * Enable Occupancy Bitmask optimization.
+	 * Uses 32³ bit mask (4KB) for O(1) empty block detection.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching"))
+	bool bEnableOccupancyMask = true;
+
+	/**
+	 * Enable Min-Max Mipmap optimization.
+	 * Uses hierarchical volume for empty space skipping.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching"))
+	bool bEnableMinMaxMipmap = true;
+
+	/**
+	 * Enable Tile-based Culling optimization.
+	 * Skips tiles with no fluid intersection.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching"))
+	bool bEnableTileCulling = true;
+
+	/**
+	 * Enable Temporal Reprojection optimization.
+	 * Reuses ~90% of previous frame data.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching"))
+	bool bEnableTemporalReprojection = true;
+
+	/**
+	 * Temporal blend factor (0 = current frame only, 1 = history only).
+	 * 0.9 recommended for fluid motion.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bEnableTemporalReprojection",
+			ClampMin = "0.0", ClampMax = "0.99"))
+	float TemporalBlendFactor = 0.9f;
+
+	/**
+	 * Adaptive step size multiplier.
+	 * Step size increases in empty regions for faster traversal.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching",
+			ClampMin = "1.0", ClampMax = "8.0"))
+	float AdaptiveStepMultiplier = 4.0f;
+
+	/**
+	 * Early termination alpha threshold.
+	 * Stop ray marching when accumulated alpha exceeds this value.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching",
+			ClampMin = "0.9", ClampMax = "1.0"))
+	float EarlyTerminationAlpha = 0.99f;
+
+	//========================================
+	// SDF (Signed Distance Field) Parameters
+	//========================================
+
+	/**
+	 * Use SDF (Signed Distance Field) mode instead of density volume.
+	 * SDF uses Sphere Tracing for efficient empty space skipping.
+	 * Better quality with translucency support.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching"))
+	bool bUseSDF = true;
+
+	/**
+	 * SDF SmoothMin parameter (K).
+	 * Controls the smoothness of fluid surface blending.
+	 * Higher = smoother surface, lower = more defined particles.
+	 * Recommended: 0.5x ~ 1.5x of ParticleRadius
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF",
+			ClampMin = "0.5", ClampMax = "100.0"))
+	float SDFSmoothK = 5.0f;
+
+	/**
+	 * SDF Surface offset.
+	 * Negative = larger fluid volume, positive = smaller.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF",
+			ClampMin = "-50.0", ClampMax = "50.0"))
+	float SDFSurfaceOffset = 0.0f;
+
+	/**
+	 * SDF surface hit epsilon (in voxels).
+	 * Smaller = more precise surface detection.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF",
+			ClampMin = "0.1", ClampMax = "5.0"))
+	float SDFSurfaceEpsilon = 1.0f;
+
+	/**
+	 * SDF Sphere Tracing relaxation factor.
+	 * 1.0 = standard Sphere Tracing, >1.0 = over-relaxation (faster but less stable).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF",
+			ClampMin = "1.0", ClampMax = "2.0"))
+	float SDFRelaxationFactor = 1.2f;
+
+	/**
+	 * SDF translucency maximum depth.
+	 * How far light travels through the fluid for translucency calculation.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF",
+			ClampMin = "10.0", ClampMax = "500.0"))
+	float SDFTranslucencyDepth = 100.0f;
+
+	/**
+	 * SDF translucency density.
+	 * Controls internal light absorption for translucency.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF",
+			ClampMin = "0.001", ClampMax = "0.1"))
+	float SDFTranslucencyDensity = 0.02f;
+
+	/**
+	 * SDF subsurface scattering strength.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF",
+			ClampMin = "0.0", ClampMax = "2.0"))
+	float SDFSubsurfaceScatterStrength = 0.5f;
+
+	/**
+	 * SDF subsurface scattering color.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF"))
+	FLinearColor SDFSubsurfaceColor = FLinearColor(0.8f, 0.6f, 0.4f, 1.0f);
+
+	/**
+	 * SDF reflection strength.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF",
+			ClampMin = "0.0", ClampMax = "1.0"))
+	float SDFReflectionStrength = 0.3f;
+
+	/**
+	 * Enable SDF Hybrid Mode.
+	 * Uses SDF Volume for fast approach + Z-Order neighbor search for precise near-surface evaluation.
+	 * Provides better quality normals with minimal performance overhead.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF"))
+	bool bEnableSDFHybridMode = true;
+
+	/**
+	 * Hybrid Mode threshold distance (in cm).
+	 * Switch from SDF Volume to Z-Order when distance to surface is less than this value.
+	 * Lower = less Z-Order usage (faster), Higher = more precise normals.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF && bEnableSDFHybridMode",
+			ClampMin = "5.0", ClampMax = "100.0"))
+	float SDFHybridThreshold = 30.0f;
+
+	//========================================
+	// SDF Optimization Options
+	//========================================
+
+	/**
+	 * Use Tight AABB (computed from actual fluid particles) instead of simulation bounds.
+	 * Dramatically reduces SDF volume build time by focusing only on fluid region.
+	 * NOTE: Currently disabled - requires async GPU readback implementation.
+	 * See: Docs/SDF_Optimization_TODO.md
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF"))
+	bool bUseTightAABB = false;
+
+	/**
+	 * AABB padding multiplier (multiplied by particle radius).
+	 * Higher values provide more safety margin for fast-moving fluids.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF && bUseTightAABB",
+			ClampMin = "1.0", ClampMax = "5.0"))
+	float AABBPaddingMultiplier = 2.0f;
+
+	/**
+	 * Debug visualization for Tight AABB.
+	 * Shows: R = bUseTightAABB, G = bounds valid, B = bounds size.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF && bUseTightAABB"))
+	bool bDebugVisualizeTightAABB = false;
+
+	/**
+	 * Use Sparse Voxel structure (only compute SDF where particles exist).
+	 * Additional optimization on top of Tight AABB.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF"))
+	bool bUseSparseVoxel = false;
+
+	/**
+	 * Use Temporal Coherence (reuse previous frame's SDF, only update changed regions).
+	 * Best for slow-moving or static fluids.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF"))
+	bool bUseTemporalCoherence = false;
+
+	/**
+	 * Temporal dirty threshold (cm/frame).
+	 * Particles moving faster than this threshold are marked dirty and recomputed.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|RayMarching|SDF|Optimization",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching && bUseSDF && bUseTemporalCoherence",
+			ClampMin = "0.0", ClampMax = "50.0"))
+	float TemporalDirtyThreshold = 5.0f;
+
 	FFluidRenderingParameters() = default;
 };
 
@@ -511,6 +773,27 @@ FORCEINLINE uint32 GetTypeHash(const FFluidRenderingParameters& Params)
 	Hash = HashCombine(Hash, GetTypeHash(Params.SSRThickness));
 	Hash = HashCombine(Hash, GetTypeHash(Params.SSRIntensity));
 	Hash = HashCombine(Hash, GetTypeHash(Params.SSREdgeFade));
+	// Ray Marching parameters
+	Hash = HashCombine(Hash, GetTypeHash(Params.VolumeResolution));
+	Hash = HashCombine(Hash, GetTypeHash(Params.RayMarchMaxSteps));
+	Hash = HashCombine(Hash, GetTypeHash(Params.DensityThreshold));
+	Hash = HashCombine(Hash, GetTypeHash(Params.bEnableOccupancyMask));
+	Hash = HashCombine(Hash, GetTypeHash(Params.bEnableMinMaxMipmap));
+	Hash = HashCombine(Hash, GetTypeHash(Params.bEnableTileCulling));
+	Hash = HashCombine(Hash, GetTypeHash(Params.bEnableTemporalReprojection));
+	Hash = HashCombine(Hash, GetTypeHash(Params.TemporalBlendFactor));
+	Hash = HashCombine(Hash, GetTypeHash(Params.AdaptiveStepMultiplier));
+	Hash = HashCombine(Hash, GetTypeHash(Params.EarlyTerminationAlpha));
+	// SDF Optimization parameters
+	Hash = HashCombine(Hash, GetTypeHash(Params.bUseTightAABB));
+	Hash = HashCombine(Hash, GetTypeHash(Params.AABBPaddingMultiplier));
+	Hash = HashCombine(Hash, GetTypeHash(Params.bDebugVisualizeTightAABB));
+	Hash = HashCombine(Hash, GetTypeHash(Params.bUseSparseVoxel));
+	Hash = HashCombine(Hash, GetTypeHash(Params.bUseTemporalCoherence));
+	Hash = HashCombine(Hash, GetTypeHash(Params.TemporalDirtyThreshold));
+	// SDF Hybrid Mode parameters
+	Hash = HashCombine(Hash, GetTypeHash(Params.bEnableSDFHybridMode));
+	Hash = HashCombine(Hash, GetTypeHash(Params.SDFHybridThreshold));
 	return Hash;
 }
 
@@ -579,5 +862,26 @@ FORCEINLINE bool operator==(const FFluidRenderingParameters& A, const FFluidRend
 		FMath::IsNearlyEqual(A.SSRStepSize, B.SSRStepSize, 0.01f) &&
 		FMath::IsNearlyEqual(A.SSRThickness, B.SSRThickness, 0.01f) &&
 		FMath::IsNearlyEqual(A.SSRIntensity, B.SSRIntensity, 0.01f) &&
-		FMath::IsNearlyEqual(A.SSREdgeFade, B.SSREdgeFade, 0.01f);
+		FMath::IsNearlyEqual(A.SSREdgeFade, B.SSREdgeFade, 0.01f) &&
+		// Ray Marching parameters
+		A.VolumeResolution == B.VolumeResolution &&
+		A.RayMarchMaxSteps == B.RayMarchMaxSteps &&
+		FMath::IsNearlyEqual(A.DensityThreshold, B.DensityThreshold, 0.01f) &&
+		A.bEnableOccupancyMask == B.bEnableOccupancyMask &&
+		A.bEnableMinMaxMipmap == B.bEnableMinMaxMipmap &&
+		A.bEnableTileCulling == B.bEnableTileCulling &&
+		A.bEnableTemporalReprojection == B.bEnableTemporalReprojection &&
+		FMath::IsNearlyEqual(A.TemporalBlendFactor, B.TemporalBlendFactor, 0.01f) &&
+		FMath::IsNearlyEqual(A.AdaptiveStepMultiplier, B.AdaptiveStepMultiplier, 0.01f) &&
+		FMath::IsNearlyEqual(A.EarlyTerminationAlpha, B.EarlyTerminationAlpha, 0.001f) &&
+		// SDF Optimization parameters
+		A.bUseTightAABB == B.bUseTightAABB &&
+		FMath::IsNearlyEqual(A.AABBPaddingMultiplier, B.AABBPaddingMultiplier, 0.01f) &&
+		A.bDebugVisualizeTightAABB == B.bDebugVisualizeTightAABB &&
+		A.bUseSparseVoxel == B.bUseSparseVoxel &&
+		A.bUseTemporalCoherence == B.bUseTemporalCoherence &&
+		FMath::IsNearlyEqual(A.TemporalDirtyThreshold, B.TemporalDirtyThreshold, 0.01f) &&
+		// SDF Hybrid Mode parameters
+		A.bEnableSDFHybridMode == B.bEnableSDFHybridMode &&
+		FMath::IsNearlyEqual(A.SDFHybridThreshold, B.SDFHybridThreshold, 0.1f);
 }

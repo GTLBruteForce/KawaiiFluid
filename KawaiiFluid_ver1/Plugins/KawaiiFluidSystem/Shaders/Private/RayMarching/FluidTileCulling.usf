@@ -1,0 +1,138 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Tile-based culling for ray marching optimization
+// Determines which 16x16 screen tiles intersect with fluid volume
+
+#include "/Engine/Public/Platform.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/RayMarching/FluidRayMarchingCommon.ush"
+
+//=============================================================================
+// Parameters
+//=============================================================================
+
+Buffer<uint> FluidAABB;  // 6 uints: min.xyz, max.xyz (stored as sortable uints)
+Texture2D<float> SceneDepth;
+SamplerState DepthSampler;
+
+RWBuffer<uint> TileVisibility;
+RWBuffer<uint> IndirectArgs;
+
+int TilesX;
+int TilesY;
+float2 ViewportSize;
+float4x4 ViewProjectionMatrix;
+float3 VolumeBoundsMin;
+float3 VolumeBoundsMax;
+
+//=============================================================================
+// Thread Group Size
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 16
+#endif
+
+#ifndef TILE_SIZE
+#define TILE_SIZE 16
+#endif
+
+//=============================================================================
+// Helper Functions
+//=============================================================================
+
+/**
+ * Project AABB corner to screen space
+ */
+float4 ProjectToScreen(float3 WorldPos)
+{
+	float4 ClipPos = mul(float4(WorldPos, 1.0f), ViewProjectionMatrix);
+	return ClipPos;
+}
+
+/**
+ * Check if tile overlaps with projected AABB
+ */
+bool TileOverlapsAABB(int2 TileCoord, float2 ScreenMin, float2 ScreenMax)
+{
+	float2 TileMin = float2(TileCoord) * TILE_SIZE;
+	float2 TileMax = TileMin + float2(TILE_SIZE, TILE_SIZE);
+
+	// AABB overlap test
+	return !(TileMax.x < ScreenMin.x || TileMin.x > ScreenMax.x ||
+	         TileMax.y < ScreenMin.y || TileMin.y > ScreenMax.y);
+}
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID, uint GroupIndex : SV_GroupIndex)
+{
+	int2 TileCoord = int2(DispatchThreadId.xy);
+
+	if (TileCoord.x >= TilesX || TileCoord.y >= TilesY)
+	{
+		return;
+	}
+
+	// Project all 8 corners of the AABB to screen space
+	float3 Corners[8];
+	Corners[0] = float3(VolumeBoundsMin.x, VolumeBoundsMin.y, VolumeBoundsMin.z);
+	Corners[1] = float3(VolumeBoundsMax.x, VolumeBoundsMin.y, VolumeBoundsMin.z);
+	Corners[2] = float3(VolumeBoundsMin.x, VolumeBoundsMax.y, VolumeBoundsMin.z);
+	Corners[3] = float3(VolumeBoundsMax.x, VolumeBoundsMax.y, VolumeBoundsMin.z);
+	Corners[4] = float3(VolumeBoundsMin.x, VolumeBoundsMin.y, VolumeBoundsMax.z);
+	Corners[5] = float3(VolumeBoundsMax.x, VolumeBoundsMin.y, VolumeBoundsMax.z);
+	Corners[6] = float3(VolumeBoundsMin.x, VolumeBoundsMax.y, VolumeBoundsMax.z);
+	Corners[7] = float3(VolumeBoundsMax.x, VolumeBoundsMax.y, VolumeBoundsMax.z);
+
+	// Find screen-space bounding box of projected AABB
+	float2 ScreenMin = float2(1e10f, 1e10f);
+	float2 ScreenMax = float2(-1e10f, -1e10f);
+	bool bBehindCamera = true;
+
+	for (int i = 0; i < 8; ++i)
+	{
+		float4 ClipPos = ProjectToScreen(Corners[i]);
+
+		// Skip if behind camera
+		if (ClipPos.w > 0.0f)
+		{
+			bBehindCamera = false;
+			float2 ScreenPos = (ClipPos.xy / ClipPos.w) * 0.5f + 0.5f;
+			ScreenPos.y = 1.0f - ScreenPos.y;  // Flip Y
+			ScreenPos *= ViewportSize;
+
+			ScreenMin = min(ScreenMin, ScreenPos);
+			ScreenMax = max(ScreenMax, ScreenPos);
+		}
+	}
+
+	// If entire AABB is behind camera, mark tile as visible (conservative)
+	bool bTileVisible = bBehindCamera || TileOverlapsAABB(TileCoord, ScreenMin, ScreenMax);
+
+	// Conservative depth check
+	if (bTileVisible && !bBehindCamera)
+	{
+		// Sample depth at tile corners
+		float2 TileCenter = (float2(TileCoord) + 0.5f) * TILE_SIZE;
+		float2 TileUV = TileCenter / ViewportSize;
+		float TileDepth = SceneDepth.SampleLevel(DepthSampler, TileUV, 0);
+
+		// TODO: Compare with fluid depth range for conservative culling
+		// For now, keep tile visible if it overlaps screen-space AABB
+	}
+
+	// Write visibility bit
+	if (bTileVisible)
+	{
+		uint TileIndex = TileCoordToLinearIndex(TileCoord, TilesX);
+		uint UintIndex = TileIndex / 32;
+		uint BitOffset = TileIndex % 32;
+
+		InterlockedOr(TileVisibility[UintIndex], 1u << BitOffset);
+
+		// Count visible tiles for indirect dispatch
+		InterlockedAdd(IndirectArgs[0], 1);
+	}
+}

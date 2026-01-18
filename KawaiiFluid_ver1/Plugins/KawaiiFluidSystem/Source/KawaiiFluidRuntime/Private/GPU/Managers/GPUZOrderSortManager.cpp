@@ -52,6 +52,8 @@ FRDGBufferRef FGPUZOrderSortManager::ExecuteZOrderSortingPipeline(
 	FRDGBufferSRVRef& OutCellStartSRV,
 	FRDGBufferUAVRef& OutCellEndUAV,
 	FRDGBufferSRVRef& OutCellEndSRV,
+	FRDGBufferRef& OutCellStartBuffer,
+	FRDGBufferRef& OutCellEndBuffer,
 	int32 CurrentParticleCount,
 	const FGPUFluidSimulationParams& Params)
 {
@@ -138,6 +140,10 @@ FRDGBufferRef FGPUZOrderSortManager::ExecuteZOrderSortingPipeline(
 
 		OutCellStartSRV = GraphBuilder.CreateSRV(CellStartRDG);
 		OutCellEndSRV = GraphBuilder.CreateSRV(CellEndRDG);
+
+		// Output buffer refs for persistent extraction (Ray Marching)
+		OutCellStartBuffer = CellStartRDG;
+		OutCellEndBuffer = CellEndRDG;
 	}
 
 	ZOrderBufferParticleCapacity = CurrentParticleCount;
@@ -157,6 +163,21 @@ void FGPUZOrderSortManager::AddComputeMortonCodesPass(
 	if (Params.CellSize <= 0.0f)
 	{
 		UE_LOG(LogGPUZOrderSort, Error, TEXT("Morton code ERROR: Invalid CellSize (%.4f)!"), Params.CellSize);
+	}
+
+	// Log bounds info for debugging (compare with RayMarching PrepareRender)
+	static int32 LogFrameCounter = 0;
+	if (++LogFrameCounter % 60 == 0)
+	{
+		FVector3f GridMin = FVector3f(
+			FMath::Floor(SimulationBoundsMin.X / Params.CellSize),
+			FMath::Floor(SimulationBoundsMin.Y / Params.CellSize),
+			FMath::Floor(SimulationBoundsMin.Z / Params.CellSize));
+		UE_LOG(LogGPUZOrderSort, Log, TEXT("[ZOrder] ComputeMortonCodes - Bounds(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f), CellSize=%.2f, GridMin=(%.0f,%.0f,%.0f)"),
+			SimulationBoundsMin.X, SimulationBoundsMin.Y, SimulationBoundsMin.Z,
+			SimulationBoundsMax.X, SimulationBoundsMax.Y, SimulationBoundsMax.Z,
+			Params.CellSize,
+			GridMin.X, GridMin.Y, GridMin.Z);
 	}
 
 	// Get grid parameters from current preset

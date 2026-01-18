@@ -1,0 +1,140 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Build SDF (Signed Distance Field) Volume from Z-Order sorted particles
+
+#include "/Engine/Public/Platform.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidGPUPhysics.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidMortonUtils.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/RayMarching/FluidRayMarchingCommon.ush"
+
+//=============================================================================
+// Parameters
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+StructuredBuffer<uint> CellStart;
+StructuredBuffer<uint> CellEnd;
+
+RWTexture3D<float> SDFVolume;
+
+int VolumeResolution;
+float ParticleRadius;
+float SmoothK;           // SmoothMin 파라미터 (부드러운 표면)
+float SurfaceOffset;     // 표면 오프셋 (유체 부피 조절)
+float3 VolumeBoundsMin;
+float3 VolumeBoundsMax;
+float CellSize;
+float3 MortonBoundsMin;
+
+// Legacy parameters (kept for shader compilation, not used)
+float3 SimulationBoundsMin;
+float3 SimulationBoundsMax;
+Buffer<uint> FluidAABB;
+uint bUseTightAABB;
+
+//=============================================================================
+// Thread Group Size
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 8
+#endif
+
+//=============================================================================
+// SmoothMin - 부드러운 유체 표면 생성
+// Polynomial smooth minimum (k = smoothness factor)
+//=============================================================================
+
+float SmoothMin(float a, float b, float k)
+{
+	float h = max(k - abs(a - b), 0.0f) / k;
+	return min(a, b) - h * h * k * 0.25f;
+}
+
+//=============================================================================
+// Local helper to get Morton cell ID
+// (Same logic as FluidBuildDensityVolume.usf)
+//=============================================================================
+
+uint GetMortonCellIDLocal(int3 CellCoord)
+{
+	int3 GridMin = int3(floor(MortonBoundsMin / CellSize));
+	int3 Offset = CellCoord - GridMin;
+
+	if (any(Offset < 0))
+		return INVALID_INDEX;
+
+	uint3 MortonCoord = uint3(min(Offset, int3(MORTON_MAX_VALUE, MORTON_MAX_VALUE, MORTON_MAX_VALUE)));
+	return Morton3D(MortonCoord.x, MortonCoord.y, MortonCoord.z);
+}
+
+//=============================================================================
+// Main Compute Shader
+// Each thread computes SDF for one voxel
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	// Early out if outside volume
+	if (any(DispatchThreadId >= uint3(VolumeResolution, VolumeResolution, VolumeResolution)))
+	{
+		return;
+	}
+
+	// SDF 빌드는 항상 시뮬레이션 전체 bounds 사용 (Tight AABB는 Ray Marching에서만 사용)
+	// 이유: SDF 텍스처 좌표와 Ray Marching 샘플링 좌표가 일치해야 함
+	float3 VoxelUV = (float3(DispatchThreadId) + 0.5f) / float(VolumeResolution);
+	float3 VoxelWorldPos = VolumeUVToWorld(VoxelUV, VolumeBoundsMin, VolumeBoundsMax);
+
+	// Convert to Z-Order cell coordinate
+	int3 CellCoord = int3(floor(VoxelWorldPos / CellSize));
+
+	// Calculate search radius in cells
+	// Need to search far enough to find nearest particle
+	int SearchRadius = int(ceil(ParticleRadius * 3.0f / CellSize)) + 1;
+
+	// Initialize to large positive distance (outside fluid)
+	float MinDist = 1e10f;
+
+	// Search neighboring cells for particles
+	for (int dz = -SearchRadius; dz <= SearchRadius; ++dz)
+	{
+		for (int dy = -SearchRadius; dy <= SearchRadius; ++dy)
+		{
+			for (int dx = -SearchRadius; dx <= SearchRadius; ++dx)
+			{
+				int3 NeighborCell = CellCoord + int3(dx, dy, dz);
+
+				// Get Morton code for this cell
+				uint CellID = GetMortonCellIDLocal(NeighborCell);
+				if (CellID == INVALID_INDEX)
+					continue;
+
+				// Get particles in this cell
+				uint Start = CellStart[CellID];
+				uint End = CellEnd[CellID];
+
+				if (Start == INVALID_INDEX || End == INVALID_INDEX)
+					continue;
+
+				// Compute distance to each particle
+				for (uint i = Start; i < End; ++i)
+				{
+					FGPUFluidParticle Particle = Particles[i];
+					float3 ToParticle = VoxelWorldPos - Particle.Position;
+					float Dist = length(ToParticle) - ParticleRadius;
+
+					// SmoothMin for smooth fluid surface blending
+					MinDist = SmoothMin(MinDist, Dist, SmoothK);
+				}
+			}
+		}
+	}
+
+	// Apply surface offset (adjusts fluid volume)
+	// Negative offset = larger fluid, Positive offset = smaller fluid
+	float FinalSDF = MinDist - SurfaceOffset;
+
+	// Write SDF to volume
+	SDFVolume[DispatchThreadId] = FinalSDF;
+}

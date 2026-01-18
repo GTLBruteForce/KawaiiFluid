@@ -1,0 +1,113 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Build Density Volume from Z-Order sorted particles
+
+#include "/Engine/Public/Platform.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidGPUPhysics.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidMortonUtils.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/RayMarching/FluidRayMarchingCommon.ush"
+
+//=============================================================================
+// Parameters
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+StructuredBuffer<uint> CellStart;
+StructuredBuffer<uint> CellEnd;
+
+RWTexture3D<float> DensityVolume;
+
+int VolumeResolution;
+float CellSize;
+float SmoothingRadius;
+float Poly6Coeff;
+float3 VolumeBoundsMin;
+float3 VolumeBoundsMax;
+
+//=============================================================================
+// Thread Group Size (set by C++)
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 8
+#endif
+
+//=============================================================================
+// Main Compute Shader
+// Each thread computes density for one voxel
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	// Early out if outside volume
+	if (any(DispatchThreadId >= uint3(VolumeResolution, VolumeResolution, VolumeResolution)))
+	{
+		return;
+	}
+
+	// Calculate voxel center position in world space
+	float3 VoxelUV = (float3(DispatchThreadId) + 0.5f) / float(VolumeResolution);
+	float3 VoxelWorldPos = VolumeUVToWorld(VoxelUV, VolumeBoundsMin, VolumeBoundsMax);
+
+	// Convert to Z-Order cell coordinate (same as simulation)
+	int3 CellCoord = int3(floor(VoxelWorldPos / CellSize));
+
+	// Calculate grid min offset (must match simulation's Morton code computation)
+	int3 GridMin = int3(floor(VolumeBoundsMin / CellSize));
+
+	// Calculate smoothing radius in cells
+	float h = SmoothingRadius;
+	float h2 = h * h;
+	int SearchRadius = int(ceil(h / CellSize));
+
+	// Accumulate density from nearby particles
+	float TotalDensity = 0.0f;
+
+	// Search neighboring cells
+	for (int dz = -SearchRadius; dz <= SearchRadius; ++dz)
+	{
+		for (int dy = -SearchRadius; dy <= SearchRadius; ++dy)
+		{
+			for (int dx = -SearchRadius; dx <= SearchRadius; ++dx)
+			{
+				int3 NeighborCell = CellCoord + int3(dx, dy, dz);
+
+				// Calculate Morton code offset from grid min (same as simulation)
+				int3 Offset = NeighborCell - GridMin;
+
+				// Clamp to valid range
+				if (any(Offset < 0))
+					continue;
+
+				// Calculate Morton code for this cell (matching simulation)
+				uint3 MortonCoord = uint3(min(Offset, int3(MORTON_MAX_VALUE, MORTON_MAX_VALUE, MORTON_MAX_VALUE)));
+				uint CellID = Morton3D(MortonCoord.x, MortonCoord.y, MortonCoord.z);
+
+				// Get particles in this cell
+				uint Start = CellStart[CellID];
+				uint End = CellEnd[CellID];
+
+				if (Start == INVALID_INDEX || End == INVALID_INDEX)
+					continue;
+
+				// Sum density contribution from each particle
+				for (uint i = Start; i < End; ++i)
+				{
+					FGPUFluidParticle Particle = Particles[i];
+					float3 r = VoxelWorldPos - Particle.Position;
+					float r2 = dot(r, r);
+
+					if (r2 < h2)
+					{
+						// Poly6 kernel contribution
+						float W = Poly6KernelWithCoeff(r2, h, Poly6Coeff);
+						TotalDensity += Particle.Mass * W;
+					}
+				}
+			}
+		}
+	}
+
+	// Write density to volume
+	DensityVolume[DispatchThreadId] = TotalDensity;
+}

@@ -471,8 +471,10 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 	// Batching by Preset
 	// - Translucent: GBuffer write already done, transparency compositing here
 	// - ScreenSpace: Full pipeline (depth/normal/thickness generation + shading)
+	// - RayMarching: Volumetric ray marching pipeline
 	TMap<FContextCacheKey, TArray<UKawaiiFluidMetaballRenderer*>> TranslucentBatches;
 	TMap<FContextCacheKey, TArray<UKawaiiFluidMetaballRenderer*>> ScreenSpaceBatches;
+	TMap<FContextCacheKey, TArray<UKawaiiFluidMetaballRenderer*>> RayMarchingBatches;
 
 	const TArray<TObjectPtr<UKawaiiFluidRenderingModule>>& Modules = SubsystemPtr->GetAllRenderingModules();
 	for (UKawaiiFluidRenderingModule* Module : Modules)
@@ -504,6 +506,10 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 				// GBuffer shading is handled in PostRenderBasePassDeferred
 				continue;
 			}
+			else if (Params.PipelineType == EMetaballPipelineType::RayMarching)
+			{
+				RayMarchingBatches.FindOrAdd(BatchKey).Add(MetaballRenderer);
+			}
 			else if (Params.PipelineType == EMetaballPipelineType::ScreenSpace)
 			{
 				ScreenSpaceBatches.FindOrAdd(BatchKey).Add(MetaballRenderer);
@@ -512,7 +518,7 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 	}
 
 	// Early return if nothing to render
-	if (TranslucentBatches.Num() == 0 && ScreenSpaceBatches.Num() == 0)
+	if (TranslucentBatches.Num() == 0 && ScreenSpaceBatches.Num() == 0 && RayMarchingBatches.Num() == 0)
 	{
 		return;
 	}
@@ -659,7 +665,60 @@ void FFluidSceneViewExtension::PrePostProcessPass_RenderThread(
 		}
 	}
 
+	// ============================================
+	// RayMarching Pipeline Rendering (before TSR)
+	// Batched by (Preset + GPUMode) - same context renders only once
+	// ============================================
+	for (auto& Batch : RayMarchingBatches)
+	{
+		const FContextCacheKey& CacheKey = Batch.Key;
+		UKawaiiFluidPresetDataAsset* Preset = CacheKey.Preset;
+		const TArray<UKawaiiFluidMetaballRenderer*>& Renderers = Batch.Value;
+
+		// Get rendering params directly from preset
+		const FFluidRenderingParameters& BatchParams = Preset->RenderingParameters;
+
+		RDG_EVENT_SCOPE(GraphBuilder, "FluidBatch_RayMarching(%d)", Renderers.Num());
+
+		if (Renderers.Num() > 0 && Renderers[0]->GetPipeline())
+		{
+			TSharedPtr<IKawaiiMetaballRenderingPipeline> Pipeline = Renderers[0]->GetPipeline();
+
+			// 1. PrepareRender - build density volumes from Z-Order sorted particles
+			{
+				RDG_EVENT_SCOPE(GraphBuilder, "PrepareRender");
+				Pipeline->PrepareRender(
+					GraphBuilder,
+					View,
+					BatchParams,
+					Renderers,
+					SceneDepthTexture);
+			}
+
+			// 2. ExecuteRender - ray marching and compositing
+			{
+				RDG_EVENT_SCOPE(GraphBuilder, "ExecuteRender");
+				Pipeline->ExecuteRender(
+					GraphBuilder,
+					View,
+					BatchParams,
+					Renderers,
+					SceneDepthTexture,
+					LitSceneColorCopy,
+					Output);
+			}
+
+			UE_LOG(LogTemp, Log,
+			       TEXT("KawaiiFluid: RayMarching Pipeline rendered %d renderers"),
+			       Renderers.Num());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("KawaiiFluid: No Pipeline found for RayMarching batch"));
+		}
+	}
+
 	// UE_LOG(LogTemp, Log,
-	//        TEXT("KawaiiFluid: PrePostProcess rendered - Translucent:%d ScreenSpace:%d"),
-	//        TranslucentBatches.Num(), ScreenSpaceBatches.Num());
+	//        TEXT("KawaiiFluid: PrePostProcess rendered - Translucent:%d ScreenSpace:%d RayMarching:%d"),
+	//        TranslucentBatches.Num(), ScreenSpaceBatches.Num(), RayMarchingBatches.Num());
 }

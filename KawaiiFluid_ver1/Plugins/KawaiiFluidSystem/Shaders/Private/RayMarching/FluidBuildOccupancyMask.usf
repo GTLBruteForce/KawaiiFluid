@@ -1,0 +1,75 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Build Occupancy Bitmask from Density Volume
+// Creates 32³ bit mask for O(1) empty block detection
+
+#include "/Engine/Public/Platform.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/RayMarching/FluidRayMarchingCommon.ush"
+
+//=============================================================================
+// Parameters
+//=============================================================================
+
+Texture3D<float> DensityVolume;
+RWBuffer<uint> OccupancyMask;
+
+int VolumeResolution;
+float DensityThreshold;
+
+//=============================================================================
+// Thread Group Size
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 8
+#endif
+
+//=============================================================================
+// Main Compute Shader
+// Each thread handles one occupancy cell (maps to multiple voxels)
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	// Early out if outside occupancy grid
+	if (any(DispatchThreadId >= uint3(OCCUPANCY_RESOLUTION, OCCUPANCY_RESOLUTION, OCCUPANCY_RESOLUTION)))
+	{
+		return;
+	}
+
+	// Calculate how many voxels each occupancy cell covers
+	int VoxelsPerOccupancyCell = VolumeResolution / OCCUPANCY_RESOLUTION;
+
+	// Calculate voxel range for this occupancy cell
+	int3 VoxelStart = int3(DispatchThreadId) * VoxelsPerOccupancyCell;
+	int3 VoxelEnd = VoxelStart + VoxelsPerOccupancyCell;
+
+	// Check if any voxel in this region has density above threshold
+	bool bHasDensity = false;
+
+	for (int z = VoxelStart.z; z < VoxelEnd.z && !bHasDensity; ++z)
+	{
+		for (int y = VoxelStart.y; y < VoxelEnd.y && !bHasDensity; ++y)
+		{
+			for (int x = VoxelStart.x; x < VoxelEnd.x && !bHasDensity; ++x)
+			{
+				float Density = DensityVolume[int3(x, y, z)];
+				if (Density >= DensityThreshold)
+				{
+					bHasDensity = true;
+				}
+			}
+		}
+	}
+
+	// Set bit in occupancy mask using atomic OR
+	if (bHasDensity)
+	{
+		uint BitIndex = OccupancyCoordToBitIndex(int3(DispatchThreadId));
+		uint UintIndex, BitOffset;
+		OccupancyBitIndexToUintAndOffset(BitIndex, UintIndex, BitOffset);
+
+		uint BitMask = 1u << BitOffset;
+		InterlockedOr(OccupancyMask[UintIndex], BitMask);
+	}
+}

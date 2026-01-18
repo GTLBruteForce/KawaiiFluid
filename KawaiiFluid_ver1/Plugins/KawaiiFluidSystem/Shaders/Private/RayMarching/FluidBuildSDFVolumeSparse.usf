@@ -1,0 +1,155 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Sparse Voxel Pass 2: Build SDF for active voxels only
+
+#include "/Engine/Public/Platform.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidGPUPhysics.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidMortonUtils.ush"
+
+//=============================================================================
+// Constants
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 8
+#endif
+
+#ifndef MORTON_GRID_AXIS_BITS
+#define MORTON_GRID_AXIS_BITS 10
+#endif
+
+#define MORTON_MAX_VALUE ((1u << MORTON_GRID_AXIS_BITS) - 1u)
+
+//=============================================================================
+// Parameters (must match FBuildSDFVolumeSparseCS::FParameters)
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+StructuredBuffer<uint> CellStart;
+StructuredBuffer<uint> CellEnd;
+Buffer<uint> ActiveVoxelMask;
+RWTexture3D<float> SDFVolume;
+
+int VolumeResolution;
+float ParticleRadius;
+float SmoothK;
+float SurfaceOffset;
+float3 VolumeBoundsMin;
+float3 VolumeBoundsMax;
+float CellSize;
+float3 MortonBoundsMin;
+
+//=============================================================================
+// Helper Functions
+//=============================================================================
+
+// Convert voxel coordinate to world position
+float3 VoxelToWorld(int3 VoxelCoord)
+{
+	float3 VolumeSize = VolumeBoundsMax - VolumeBoundsMin;
+	float3 VoxelSize = VolumeSize / float(VolumeResolution);
+	return VolumeBoundsMin + (float3(VoxelCoord) + 0.5f) * VoxelSize;
+}
+
+// Get Morton cell ID from cell coordinate (using volume bounds as reference)
+uint GetMortonCellIDFromCellCoord(int3 cellCoord)
+{
+	int3 gridMin = int3(floor(MortonBoundsMin / CellSize));
+	int3 offset = cellCoord - gridMin;
+	uint3 uoffset = uint3(max(offset, int3(0, 0, 0)));
+	uoffset = min(uoffset, uint3(MORTON_MAX_VALUE, MORTON_MAX_VALUE, MORTON_MAX_VALUE));
+	return Morton3D(uoffset.x, uoffset.y, uoffset.z);
+}
+
+// SmoothMin function for smooth surface blending
+float SmoothMin(float a, float b, float k)
+{
+	float h = saturate(0.5f + 0.5f * (b - a) / k);
+	return lerp(b, a, h) - k * h * (1.0f - h);
+}
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	int3 VoxelCoord = int3(DispatchThreadId);
+
+	// Bounds check
+	if (any(VoxelCoord >= int3(VolumeResolution, VolumeResolution, VolumeResolution)))
+		return;
+
+	// Check if this voxel is active
+	uint VoxelIndex = uint(VoxelCoord.z * VolumeResolution * VolumeResolution +
+						   VoxelCoord.y * VolumeResolution +
+						   VoxelCoord.x);
+	uint BitIndex = VoxelIndex % 32;
+	uint UintIndex = VoxelIndex / 32;
+
+	if ((ActiveVoxelMask[UintIndex] & (1u << BitIndex)) == 0)
+	{
+		// Inactive voxel: Write moderate positive value for proper Ray Marching traversal
+		// Using ParticleRadius * 3.0f (same as SearchRadius) allows gradual approach to active regions
+		// Bug fix: 1e10f caused Ray Marching to skip inactive regions entirely
+		SDFVolume[VoxelCoord] = ParticleRadius * 3.0f;
+		return;
+	}
+
+	// Active voxel: Compute SDF using Z-Order neighbor search
+	float3 WorldPos = VoxelToWorld(VoxelCoord);
+
+	// Get cell coordinate for this position
+	int3 CellCoord = int3(floor(WorldPos / CellSize));
+
+	// Search radius in cells
+	float LocalSearchRadius = ParticleRadius * 3.0f;  // Influence extends beyond particle radius
+	int SearchCells = int(ceil(LocalSearchRadius / CellSize));
+
+	float MinSDF = 1e30f;
+
+	// Search neighboring cells using Z-Order
+	for (int dz = -SearchCells; dz <= SearchCells; ++dz)
+	{
+		for (int dy = -SearchCells; dy <= SearchCells; ++dy)
+		{
+			for (int dx = -SearchCells; dx <= SearchCells; ++dx)
+			{
+				int3 NeighborCell = CellCoord + int3(dx, dy, dz);
+				uint CellID = GetMortonCellIDFromCellCoord(NeighborCell);
+
+				uint Start = CellStart[CellID];
+				uint End = CellEnd[CellID];
+
+				// Skip invalid cells
+				if (Start == INVALID_INDEX || End == INVALID_INDEX || Start > End)
+					continue;
+
+				// Iterate particles in this cell
+				for (uint i = Start; i < End; ++i)
+				{
+					float3 ParticlePos = Particles[i].Position;
+					float Distance = length(WorldPos - ParticlePos) - ParticleRadius;
+
+					// Smooth blending for fluid-like surface
+					MinSDF = SmoothMin(MinSDF, Distance, SmoothK);
+				}
+			}
+		}
+	}
+
+	// Apply surface offset
+	MinSDF += SurfaceOffset;
+
+	// Bug fix: If no particles found (MinSDF still very large), use default value
+	// This can happen due to bounds mismatch between Volume and Morton grids
+	// Without this fix, active voxels with no particles found would have 1e30f,
+	// causing Ray Marching to skip them entirely
+	if (MinSDF > 1e20f)
+	{
+		MinSDF = ParticleRadius * 3.0f;
+	}
+
+	// Write SDF value
+	SDFVolume[VoxelCoord] = MinSDF;
+}

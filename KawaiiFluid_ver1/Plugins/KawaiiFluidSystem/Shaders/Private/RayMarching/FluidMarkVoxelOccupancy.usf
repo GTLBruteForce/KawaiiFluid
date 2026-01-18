@@ -1,0 +1,87 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Sparse Voxel Pass 1: Mark voxels within particle influence range
+
+#include "/Engine/Public/Platform.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidGPUPhysics.ush"
+
+//=============================================================================
+// Constants
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 256
+#endif
+
+//=============================================================================
+// Parameters (must match FMarkVoxelOccupancyCS::FParameters)
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+RWBuffer<uint> ActiveVoxelMask;
+
+int ParticleCount;
+int VolumeResolution;
+float SearchRadius;
+float3 VolumeBoundsMin;
+float3 VolumeBoundsMax;
+
+//=============================================================================
+// Helper Functions
+//=============================================================================
+
+// Convert world position to voxel coordinate
+int3 WorldToVoxel(float3 WorldPos)
+{
+	float3 LocalPos = WorldPos - VolumeBoundsMin;
+	float3 VolumeSize = VolumeBoundsMax - VolumeBoundsMin;
+	float3 NormalizedPos = LocalPos / max(VolumeSize, 0.001f);
+	return int3(floor(NormalizedPos * float(VolumeResolution)));
+}
+
+// Convert voxel coordinate to linear index
+uint VoxelToLinearIndex(int3 VoxelCoord)
+{
+	return uint(VoxelCoord.z * VolumeResolution * VolumeResolution +
+				VoxelCoord.y * VolumeResolution +
+				VoxelCoord.x);
+}
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint PIdx = DispatchThreadId.x;
+	if (PIdx >= uint(ParticleCount))
+		return;
+
+	float3 ParticlePos = Particles[PIdx].Position;
+
+	// Calculate voxel range affected by this particle
+	int3 VoxelMin = WorldToVoxel(ParticlePos - float3(SearchRadius, SearchRadius, SearchRadius));
+	int3 VoxelMax = WorldToVoxel(ParticlePos + float3(SearchRadius, SearchRadius, SearchRadius));
+
+	// Clamp to volume bounds
+	VoxelMin = max(VoxelMin, int3(0, 0, 0));
+	VoxelMax = min(VoxelMax, int3(VolumeResolution - 1, VolumeResolution - 1, VolumeResolution - 1));
+
+	// Mark all voxels in the range
+	for (int z = VoxelMin.z; z <= VoxelMax.z; ++z)
+	{
+		for (int y = VoxelMin.y; y <= VoxelMax.y; ++y)
+		{
+			for (int x = VoxelMin.x; x <= VoxelMax.x; ++x)
+			{
+				uint VoxelIndex = VoxelToLinearIndex(int3(x, y, z));
+				uint BitIndex = VoxelIndex % 32;
+				uint UintIndex = VoxelIndex / 32;
+
+				// Atomic OR to set the bit
+				uint OriginalValue;
+				InterlockedOr(ActiveVoxelMask[UintIndex], 1u << BitIndex, OriginalValue);
+			}
+		}
+	}
+}

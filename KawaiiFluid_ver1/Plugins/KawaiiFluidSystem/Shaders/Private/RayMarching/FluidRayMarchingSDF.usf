@@ -1,0 +1,837 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// SDF-based Sphere Tracing Ray Marching shader for volumetric fluid rendering
+// Uses Signed Distance Field for efficient empty space skipping
+// Hybrid Mode: SDF Volume (fast) + Z-Order (precise near surface)
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/RayMarching/FluidRayMarchingCommon.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidGPUPhysics.ush"
+#include "/Plugin/KawaiiFluidSystem/Private/FluidMortonUtils.ush"
+
+//=============================================================================
+// SDF Volume Texture
+//=============================================================================
+
+Texture3D<float> SDFVolume;
+SamplerState SDFSampler;
+
+//=============================================================================
+// Scene Textures
+//=============================================================================
+
+Texture2D<float> SceneDepth;
+SamplerState DepthSampler;
+
+// Temporal history
+Texture2D<float4> HistoryColor;
+Texture2D<float> HistoryDepth;
+SamplerState HistorySampler;
+
+// Tile visibility
+Buffer<uint> TileVisibility;
+
+//=============================================================================
+// Z-Order Particle Data (for Hybrid Mode)
+//=============================================================================
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+StructuredBuffer<uint> CellStart;
+StructuredBuffer<uint> CellEnd;
+
+int ParticleCount;
+float ParticleRadius;
+float SDFSmoothness;
+float CellSize;
+float3 MortonBoundsMin;
+uint bEnableHybridMode;
+float HybridThreshold;
+
+//=============================================================================
+// Volume Parameters
+//=============================================================================
+
+int VolumeResolution;
+float3 VolumeBoundsMin;
+float3 VolumeBoundsMax;
+
+// Legacy parameters (kept for shader compilation, not used)
+float3 SimulationBoundsMin;
+float3 SimulationBoundsMax;
+Buffer<uint> FluidAABB;
+uint bUseTightAABB;
+uint bDebugVisualizeTightAABB;
+
+//=============================================================================
+// Volume Bounds - Always use Simulation Volume
+//=============================================================================
+
+float3 GetEffectiveVolumeBoundsMin()
+{
+	return VolumeBoundsMin;
+}
+
+float3 GetEffectiveVolumeBoundsMax()
+{
+	return VolumeBoundsMax;
+}
+
+//=============================================================================
+// Sphere Tracing Parameters
+//=============================================================================
+
+int MaxSteps;
+float SurfaceEpsilon;      // Surface hit threshold (0.5~2.0 voxels)
+float MinStepSize;         // Minimum step size to prevent infinite loops
+float MaxStepSize;         // Maximum step size for performance
+float RelaxationFactor;    // Over-relaxation factor for Sphere Tracing (1.0~1.6)
+
+//=============================================================================
+// Translucency Parameters
+//=============================================================================
+
+float TranslucencyDepth;           // 반투명 최대 깊이
+float TranslucencyDensity;         // 내부 밀도 계수
+float SubsurfaceScatterStrength;   // SSS 강도
+float3 SubsurfaceColor;            // SSS 색상
+
+//=============================================================================
+// Optimization Flags
+//=============================================================================
+
+uint bEnableTileCulling;
+uint bEnableTemporalReprojection;
+float TemporalBlendFactor;
+
+//=============================================================================
+// Appearance Parameters
+//=============================================================================
+
+float4 FluidColor;
+float FresnelStrength;
+float RefractiveIndex;
+float AbsorptionCoefficient;
+float4 AbsorptionColorCoefficients;
+float SpecularStrength;
+float SpecularRoughness;
+float ReflectionStrength;
+
+//=============================================================================
+// View Parameters
+//=============================================================================
+
+float2 ViewportSize;
+float3 CameraPosition;
+float4x4 InvViewProjectionMatrix;
+float4x4 PrevViewProjectionMatrix;
+float3 SunDirection;
+float4 SunColor;
+
+int TilesX;
+
+// Frame index for temporal jittering
+uint FrameIndex;
+
+//=============================================================================
+// Vertex Shader (Full screen triangle - procedural)
+//=============================================================================
+
+void RayMarchingVS(
+	uint VertexId : SV_VertexID,
+	out float4 OutPosition : SV_POSITION,
+	out float2 OutTexCoord : TEXCOORD0)
+{
+	// Generate fullscreen triangle vertices procedurally
+	float2 UV = float2((VertexId << 1) & 2, VertexId & 2);
+	OutPosition = float4(UV * 2.0f - 1.0f, 0.0f, 1.0f);
+	OutTexCoord = float2(UV.x, 1.0f - UV.y);
+}
+
+//=============================================================================
+// Helper Functions
+//=============================================================================
+
+/**
+ * Simple hash function for ray jittering
+ */
+float Hash12(float2 p)
+{
+	float3 p3 = frac(float3(p.xyx) * 0.1031f);
+	p3 += dot(p3, p3.yzx + 33.33f);
+	return frac((p3.x + p3.y) * p3.z);
+}
+
+/**
+ * Sample SDF and convert to world space distance
+ */
+float SampleSDF(float3 VolumeUV)
+{
+	// Clamp UV to valid range
+	VolumeUV = saturate(VolumeUV);
+	return SDFVolume.SampleLevel(SDFSampler, VolumeUV, 0);
+}
+
+/**
+ * Calculate gradient (normal) at a point using central differences
+ * Uses 2x voxel size for smoother normals at low resolution
+ */
+float3 CalculateSDFGradient(float3 VolumeUV, float VoxelSize)
+{
+	// Use larger epsilon for smoother normals (reduces voxel stepping artifacts)
+	float e = VoxelSize * 2.0f;
+
+	float dx = SampleSDF(VolumeUV + float3(e, 0, 0)) - SampleSDF(VolumeUV - float3(e, 0, 0));
+	float dy = SampleSDF(VolumeUV + float3(0, e, 0)) - SampleSDF(VolumeUV - float3(0, e, 0));
+	float dz = SampleSDF(VolumeUV + float3(0, 0, e)) - SampleSDF(VolumeUV - float3(0, 0, e));
+
+	float3 Gradient = float3(dx, dy, dz);
+	float GradLen = length(Gradient);
+
+	// Avoid division by zero for flat areas
+	return GradLen > 0.0001f ? Gradient / GradLen : float3(0, 1, 0);
+}
+
+//=============================================================================
+// Z-Order Hybrid Mode Functions
+//=============================================================================
+
+/**
+ * Get Morton cell ID from cell coordinate (local version for this shader)
+ */
+uint GetMortonCellIDLocal(int3 CellCoord)
+{
+	int3 GridMin = int3(floor(MortonBoundsMin / CellSize));
+	int3 Offset = CellCoord - GridMin;
+
+	if (any(Offset < 0))
+		return INVALID_INDEX;
+
+	uint3 MortonCoord = uint3(min(Offset, int3(MORTON_MAX_VALUE, MORTON_MAX_VALUE, MORTON_MAX_VALUE)));
+	return Morton3D(MortonCoord.x, MortonCoord.y, MortonCoord.z);
+}
+
+/**
+ * Smooth minimum for metaball blending
+ */
+float SmoothMinHybrid(float a, float b, float k)
+{
+	float h = max(k - abs(a - b), 0.0f) / k;
+	return min(a, b) - h * h * k * 0.25f;
+}
+
+/**
+ * Evaluate SDF using Z-Order neighbor search (O(k) instead of O(N))
+ * Used near surface for precise evaluation
+ */
+float EvaluateSDFWithZOrder(float3 WorldPos)
+{
+	if (ParticleCount <= 0)
+		return 1e10f;
+
+	int3 CenterCell = int3(floor(WorldPos / CellSize));
+
+	// Dynamic search range based on particle radius and smoothness
+	float MaxInteractionDist = ParticleRadius + (SDFSmoothness * 2.0f);
+	int Range = (int)ceil(MaxInteractionDist / CellSize);
+	Range = clamp(Range, 1, 3);  // Limit to 3 cells for performance
+
+	float MinDist = 1e10f;
+	bool bFoundAny = false;
+
+	// Search neighboring cells
+	for (int dz = -Range; dz <= Range; ++dz)
+	{
+		for (int dy = -Range; dy <= Range; ++dy)
+		{
+			for (int dx = -Range; dx <= Range; ++dx)
+			{
+				int3 NeighborCell = CenterCell + int3(dx, dy, dz);
+				uint CellID = GetMortonCellIDLocal(NeighborCell);
+
+				if (CellID == INVALID_INDEX)
+					continue;
+
+				uint Start = CellStart[CellID];
+				uint End = CellEnd[CellID];
+
+				if (Start == INVALID_INDEX || End == INVALID_INDEX)
+					continue;
+
+				// Iterate particles in this cell
+				for (uint i = Start; i < End; ++i)
+				{
+					FGPUFluidParticle Particle = Particles[i];
+					float d = length(WorldPos - Particle.Position) - ParticleRadius;
+
+					if (!bFoundAny)
+					{
+						MinDist = d;
+						bFoundAny = true;
+					}
+					else
+					{
+						MinDist = SmoothMinHybrid(MinDist, d, SDFSmoothness);
+					}
+				}
+			}
+		}
+	}
+
+	return bFoundAny ? MinDist : 1e10f;
+}
+
+/**
+ * Calculate normal using analytic gradient (smin blend weights)
+ * More efficient than 5-tap finite differences (1 loop vs 5 loops)
+ */
+float3 CalculateNormalAnalyticZOrder(float3 WorldPos, float CenterSDF)
+{
+	if (ParticleCount <= 0)
+		return float3(0, 1, 0);
+
+	float3 Gradient = float3(0, 0, 0);
+	float TotalWeight = 0.0f;
+
+	int3 CenterCell = int3(floor(WorldPos / CellSize));
+
+	// Dynamic search range
+	float MaxInteractionDist = ParticleRadius + (SDFSmoothness * 2.0f);
+	int Range = (int)ceil(MaxInteractionDist / CellSize);
+	Range = clamp(Range, 1, 3);
+
+	// Search neighboring cells
+	for (int dz = -Range; dz <= Range; ++dz)
+	{
+		for (int dy = -Range; dy <= Range; ++dy)
+		{
+			for (int dx = -Range; dx <= Range; ++dx)
+			{
+				int3 NeighborCell = CenterCell + int3(dx, dy, dz);
+				uint CellID = GetMortonCellIDLocal(NeighborCell);
+
+				if (CellID == INVALID_INDEX)
+					continue;
+
+				uint Start = CellStart[CellID];
+				uint End = CellEnd[CellID];
+
+				if (Start == INVALID_INDEX || End == INVALID_INDEX)
+					continue;
+
+				for (uint i = Start; i < End; ++i)
+				{
+					FGPUFluidParticle Particle = Particles[i];
+					float3 r = WorldPos - Particle.Position;
+					float Dist = length(r);
+
+					if (Dist < 0.0001f)
+						continue;
+
+					float d = Dist - ParticleRadius;
+
+					// smin blend weight
+					float h = max(SDFSmoothness - abs(CenterSDF - d), 0.0f) / SDFSmoothness;
+					float Weight = h * h;
+
+					// Weighted average gradient
+					Gradient += Weight * (r / Dist);
+					TotalWeight += Weight;
+				}
+			}
+		}
+	}
+
+	if (TotalWeight < 0.0001f)
+		return float3(0, 1, 0);
+
+	return normalize(Gradient);
+}
+
+/**
+ * Check if tile is visible using tile culling buffer
+ */
+bool IsTileVisible(int2 TileCoord)
+{
+	if (!bEnableTileCulling)
+		return true;
+
+	uint TileIndex = TileCoordToLinearIndex(TileCoord, TilesX);
+	uint UintIndex = TileIndex / 32;
+	uint BitOffset = TileIndex % 32;
+
+	return (TileVisibility[UintIndex] & (1u << BitOffset)) != 0;
+}
+
+/**
+ * Sample temporal history with reprojection
+ */
+float4 SampleHistory(float3 WorldPos, out bool bValid)
+{
+	if (!bEnableTemporalReprojection)
+	{
+		bValid = false;
+		return float4(0, 0, 0, 0);
+	}
+
+	float4 PrevClipPos = mul(float4(WorldPos, 1.0f), PrevViewProjectionMatrix);
+	float2 PrevScreenUV = (PrevClipPos.xy / PrevClipPos.w) * 0.5f + 0.5f;
+	PrevScreenUV.y = 1.0f - PrevScreenUV.y;
+
+	if (any(PrevScreenUV < 0.0f) || any(PrevScreenUV > 1.0f))
+	{
+		bValid = false;
+		return float4(0, 0, 0, 0);
+	}
+
+	float4 HistoryValue = HistoryColor.SampleLevel(HistorySampler, PrevScreenUV, 0);
+	bValid = true;
+	return HistoryValue;
+}
+
+/**
+ * Fresnel reflectance using Schlick approximation
+ */
+float FresnelSchlick(float CosTheta, float F0)
+{
+	return F0 + (1.0f - F0) * pow(1.0f - CosTheta, 5.0f);
+}
+
+/**
+ * Refraction direction using Snell's law
+ */
+float3 Refract(float3 I, float3 N, float eta)
+{
+	float NdotI = dot(N, I);
+	float k = 1.0f - eta * eta * (1.0f - NdotI * NdotI);
+	if (k < 0.0f)
+		return reflect(I, N);  // Total internal reflection
+	return eta * I - (eta * NdotI + sqrt(k)) * N;
+}
+
+/**
+ * Simple Blinn-Phong specular
+ */
+float BlinnPhongSpecular(float3 ViewDir, float3 LightDir, float3 Normal, float Shininess)
+{
+	float3 HalfDir = normalize(ViewDir + LightDir);
+	float NdotH = max(dot(Normal, HalfDir), 0.0f);
+	return pow(NdotH, Shininess);
+}
+
+//=============================================================================
+// Sphere Tracing Core
+//=============================================================================
+
+/**
+ * Sphere Trace through SDF volume
+ * Returns: hit distance (positive) or -1 if no hit
+ *
+ * Hybrid Mode:
+ * - Phase 1: Use SDF Volume for fast approach (O(1) texture sampling)
+ * - Phase 2: Near surface, use Z-Order for precise evaluation (O(k) neighbor search)
+ */
+float SphereTrace(FRay Ray, float TMin, float TMax, float2 ScreenUV, float3 AABBMin, float3 AABBMax, out float3 HitNormal, out int OutSteps, out float OutHitSDF)
+{
+	// SDF 텍스처는 시뮬레이션 전체 bounds로 빌드됨
+	// SDF 샘플링은 반드시 VolumeBoundsMin/Max 사용 (좌표 일치)
+	// AABBMin/Max는 early-out 용도로만 사용 (AABB 교차 테스트)
+	float3 VolumeSize = VolumeBoundsMax - VolumeBoundsMin;
+	float VoxelSize = 1.0f / float(VolumeResolution);
+
+	float T = TMin;
+	OutSteps = 0;
+	OutHitSDF = 1e10f;
+
+	// Add per-pixel jitter to break up concentric circle patterns
+	// 버그 수정: Ray.Origin은 카메라 위치로 모든 픽셀에서 동일하므로
+	// ScreenUV를 사용하여 픽셀별로 다른 jitter 값을 생성
+	float Jitter = Hash12(ScreenUV * 1000.0f + float(FrameIndex % 16)) * MinStepSize;
+	T += Jitter;
+
+	float PrevDist = 1e10f;
+	float PrevT = T;
+
+	// HybridThreshold is now a shader parameter (passed from C++)
+	// Controls when to switch from SDF Volume to Z-Order neighbor search
+
+	for (int i = 0; i < MaxSteps && T < TMax; ++i)
+	{
+		OutSteps = i + 1;
+
+		float3 SamplePos = Ray.Origin + Ray.Direction * T;
+		// SDF 샘플링: 시뮬레이션 전체 bounds 사용 (SDF 텍스처와 좌표 일치)
+		float3 VolumeUV = WorldToVolumeUV(SamplePos, VolumeBoundsMin, VolumeBoundsMax);
+
+		// Check if outside volume
+		if (any(VolumeUV < 0.0f) || any(VolumeUV > 1.0f))
+		{
+			T += MinStepSize;
+			continue;
+		}
+
+		//========================================
+		// SDF Volume Sampling (O(1) - fast)
+		// 성능 최적화: 매 스텝에서는 SDF Volume만 사용
+		// Z-Order는 표면 히트 후 Normal 계산에만 사용 (1회)
+		//========================================
+		float SDF = SampleSDF(VolumeUV);
+
+		// Surface hit check
+		if (SDF < SurfaceEpsilon)
+		{
+			// Refine hit position using bisection (SDF Volume only - fast)
+			float T0 = PrevT;
+			float T1 = T;
+			for (int j = 0; j < 4; ++j)
+			{
+				float TMid = (T0 + T1) * 0.5f;
+				float3 MidPos = Ray.Origin + Ray.Direction * TMid;
+				float3 MidUV = WorldToVolumeUV(MidPos, VolumeBoundsMin, VolumeBoundsMax);
+				float MidSDF = SampleSDF(MidUV);
+
+				if (MidSDF < SurfaceEpsilon)
+					T1 = TMid;
+				else
+					T0 = TMid;
+			}
+
+			T = (T0 + T1) * 0.5f;
+			float3 FinalPos = Ray.Origin + Ray.Direction * T;
+			float3 FinalUV = WorldToVolumeUV(FinalPos, VolumeBoundsMin, VolumeBoundsMax);
+
+			//========================================
+			// Normal Calculation
+			// Hybrid Mode: Z-Order analytic gradient (더 정밀한 Normal)
+			// Non-Hybrid: SDF Volume finite difference
+			//========================================
+			float FinalSDF;
+			if (bEnableHybridMode && ParticleCount > 0)
+			{
+				// Z-Order analytic gradient normal (1회만 호출 - O(k))
+				// 매 스텝이 아닌 표면 히트 시에만 호출하여 성능 확보
+				FinalSDF = EvaluateSDFWithZOrder(FinalPos);
+				if (FinalSDF < 1e9f)
+				{
+					HitNormal = CalculateNormalAnalyticZOrder(FinalPos, FinalSDF);
+				}
+				else
+				{
+					// Fallback: SDF Volume gradient
+					FinalSDF = SampleSDF(FinalUV);
+					HitNormal = CalculateSDFGradient(FinalUV, VoxelSize);
+				}
+			}
+			else
+			{
+				// Finite difference normal from SDF Volume
+				FinalSDF = SampleSDF(FinalUV);
+				HitNormal = CalculateSDFGradient(FinalUV, VoxelSize);
+			}
+
+			OutHitSDF = FinalSDF;
+			return T;
+		}
+
+		// Relaxed Sphere Tracing step
+		// Clamp step size to prevent going too fast or too slow
+		float StepSize = clamp(SDF * RelaxationFactor, MinStepSize, MaxStepSize);
+
+		PrevT = T;
+		PrevDist = SDF;
+		T += StepSize;
+	}
+
+	return -1.0f;  // No hit
+}
+
+/**
+ * Calculate thickness for translucency
+ * Traces back from surface to find exit point
+ */
+float CalculateThickness(float3 SurfacePos, float3 Normal, float3 RayDir)
+{
+	// Refract ray into fluid
+	float eta = 1.0f / RefractiveIndex;
+	float3 RefractedDir = Refract(RayDir, Normal, eta);
+
+	// Trace through fluid to find exit
+	FRay InternalRay;
+	InternalRay.Origin = SurfacePos - Normal * SurfaceEpsilon * 2.0f;  // Step inside
+	InternalRay.Direction = RefractedDir;
+
+	// SDF 샘플링은 시뮬레이션 전체 bounds 사용
+	float3 VolumeSize = VolumeBoundsMax - VolumeBoundsMin;
+	float MaxThickness = TranslucencyDepth;
+
+	float T = 0.0f;
+	float Thickness = 0.0f;
+	float VoxelSize = 1.0f / float(VolumeResolution);
+
+	// Simple fixed-step through interior
+	int InternalSteps = 32;
+	float InternalStepSize = MaxThickness / float(InternalSteps);
+
+	for (int i = 0; i < InternalSteps; ++i)
+	{
+		float3 SamplePos = InternalRay.Origin + InternalRay.Direction * T;
+		float3 VolumeUV = WorldToVolumeUV(SamplePos, VolumeBoundsMin, VolumeBoundsMax);
+
+		if (any(VolumeUV < 0.0f) || any(VolumeUV > 1.0f))
+			break;
+
+		float SDF = SampleSDF(VolumeUV);
+
+		if (SDF > SurfaceEpsilon)
+		{
+			// Exited fluid
+			break;
+		}
+
+		Thickness += InternalStepSize;
+		T += InternalStepSize;
+	}
+
+	return min(Thickness, MaxThickness);
+}
+
+//=============================================================================
+// Main SDF Sphere Tracing Pixel Shader
+//=============================================================================
+
+void MainPS(
+	in float4 SvPosition : SV_POSITION,
+	in float2 TexCoord : TEXCOORD0,
+	out float4 OutColor : SV_Target0)
+{
+	int2 PixelCoord = int2(SvPosition.xy);
+	float2 ScreenUV = TexCoord;
+
+	// Tile culling early-out
+	if (bEnableTileCulling)
+	{
+		int2 TileCoord = PixelToTileIndex(PixelCoord, TILE_SIZE);
+		if (!IsTileVisible(TileCoord))
+		{
+			OutColor = float4(0, 0, 0, 0);
+			return;
+		}
+	}
+
+	// Convert ScreenUV (render target 0~1) to SceneDepth texture coordinates
+	// This is necessary because render target size may differ from scene buffer size
+	// View.ViewRectMin = View's top-left corner in buffer pixels
+	// View.ViewSizeAndInvSize.xy = View size in pixels
+	// View.BufferSizeAndInvSize.zw = 1.0 / buffer size (for normalization)
+	float2 SceneUV = (View.ViewRectMin.xy + ScreenUV * View.ViewSizeAndInvSize.xy) * View.BufferSizeAndInvSize.zw;
+
+	// Sample scene depth and convert to world distance
+	float SceneDeviceZ = SceneDepth.SampleLevel(DepthSampler, SceneUV, 0);
+
+	// Convert DeviceZ to world position for distance calculation
+	float4 SceneClipPos = float4(ScreenUV * 2.0f - 1.0f, SceneDeviceZ, 1.0f);
+	SceneClipPos.y = -SceneClipPos.y;
+	float4 SceneWorldPos4 = mul(SceneClipPos, InvViewProjectionMatrix);
+	float3 SceneWorldPos = SceneWorldPos4.xyz / SceneWorldPos4.w;
+	float SceneDistance = length(SceneWorldPos - CameraPosition);
+
+	// Calculate ray from camera through pixel
+	FRay Ray;
+	Ray.Origin = CameraPosition;
+
+	float4 FarClipPos = float4(ScreenUV * 2.0f - 1.0f, 1.0f, 1.0f);
+	FarClipPos.y = -FarClipPos.y;
+	float4 FarWorldPos4 = mul(FarClipPos, InvViewProjectionMatrix);
+	float3 FarWorldPos = FarWorldPos4.xyz / FarWorldPos4.w;
+	Ray.Direction = normalize(FarWorldPos - Ray.Origin);
+
+	// Get effective volume bounds (Tight AABB or fallback)
+	float3 EffectiveBoundsMin = GetEffectiveVolumeBoundsMin();
+	float3 EffectiveBoundsMax = GetEffectiveVolumeBoundsMax();
+
+	// DEBUG: Draw AABB wireframe
+	if (bDebugVisualizeTightAABB)
+	{
+		// Ray-AABB intersection
+		FRayAABBResult DebugAABBHit = RayAABBIntersect(Ray, EffectiveBoundsMin, EffectiveBoundsMax);
+		if (DebugAABBHit.bHit && DebugAABBHit.TMin > 0.0f)
+		{
+			float3 HitPoint = Ray.Origin + Ray.Direction * DebugAABBHit.TMin;
+
+			// Check if hit point is near an edge (within 2 cm of two or more faces)
+			float EdgeThreshold = 2.0f;
+			float3 DistToMin = abs(HitPoint - EffectiveBoundsMin);
+			float3 DistToMax = abs(HitPoint - EffectiveBoundsMax);
+
+			int NearFaceCount = 0;
+			if (DistToMin.x < EdgeThreshold || DistToMax.x < EdgeThreshold) NearFaceCount++;
+			if (DistToMin.y < EdgeThreshold || DistToMax.y < EdgeThreshold) NearFaceCount++;
+			if (DistToMin.z < EdgeThreshold || DistToMax.z < EdgeThreshold) NearFaceCount++;
+
+			// Draw edge as bright green line
+			if (NearFaceCount >= 2)
+			{
+				OutColor = float4(0.0f, 1.0f, 0.0f, 1.0f);
+				return;
+			}
+		}
+	}
+
+	// Validate bounds - if invalid, fall back to simulation bounds
+	float3 BoundsSize = EffectiveBoundsMax - EffectiveBoundsMin;
+	if (any(BoundsSize <= 0.0f) || any(isnan(EffectiveBoundsMin)) || any(isnan(EffectiveBoundsMax)))
+	{
+		// Invalid bounds - fall back to original volume bounds
+		EffectiveBoundsMin = VolumeBoundsMin;
+		EffectiveBoundsMax = VolumeBoundsMax;
+	}
+
+	// Intersect ray with volume AABB
+	FRayAABBResult AABBHit = RayAABBIntersect(Ray, EffectiveBoundsMin, EffectiveBoundsMax);
+
+	if (!AABBHit.bHit)
+	{
+		OutColor = float4(0, 0, 0, 0);
+		return;
+	}
+
+	float TMin = max(AABBHit.TMin, 0.0f);
+	// Limit TMax by scene depth to stop tracing at scene geometry
+	float TMax = min(AABBHit.TMax, SceneDistance);
+
+	// Early out if scene geometry is in front of volume
+	if (TMax <= TMin)
+	{
+		OutColor = float4(0, 0, 0, 0);
+		return;
+	}
+
+	// Sphere Tracing
+	float3 HitNormal;
+	int StepCount;
+	float HitSDF;
+	float HitT = SphereTrace(Ray, TMin, TMax, ScreenUV, EffectiveBoundsMin, EffectiveBoundsMax, HitNormal, StepCount, HitSDF);
+
+	if (HitT < 0.0f)
+	{
+		OutColor = float4(0, 0, 0, 0);
+		return;
+	}
+
+	// Occlusion test: discard if fluid is behind scene geometry
+	// Add small bias (2.0 units) for depth precision tolerance
+	if (HitT > SceneDistance + 2.0f)
+	{
+		OutColor = float4(0, 0, 0, 0);
+		return;
+	}
+
+	// Hit point
+	float3 HitPos = Ray.Origin + Ray.Direction * HitT;
+
+	// View direction
+	float3 ViewDir = -Ray.Direction;
+	float NdotV = max(dot(HitNormal, ViewDir), 0.0f);
+
+	// Simple view-based lighting (no directional light dependency)
+	// Use view direction as primary light source for consistent shading
+	float3 LightDir = ViewDir;  // Light from camera
+	float3 LightColor = float3(1.0f, 1.0f, 1.0f);
+	float NdotL = max(dot(HitNormal, LightDir), 0.0f);
+
+	// Fresnel
+	float F0 = pow((RefractiveIndex - 1.0f) / (RefractiveIndex + 1.0f), 2.0f);
+	float Fresnel = FresnelSchlick(NdotV, F0) * FresnelStrength;
+
+	// Specular (Blinn-Phong)
+	float Shininess = 1.0f / max(SpecularRoughness, 0.01f);
+	float Specular = BlinnPhongSpecular(ViewDir, LightDir, HitNormal, Shininess) * SpecularStrength;
+
+	// Calculate thickness for translucency (Revision 268 style - simple approximation)
+	// 이전 방식: SDF 값 기반 간단한 근사, 최소값 ParticleRadius 보장
+	float EstimatedThickness = ParticleRadius * 4.0f * (1.0f - saturate(abs(HitSDF) / ParticleRadius));
+	float Thickness = max(EstimatedThickness, ParticleRadius);
+
+	// Beer-Lambert absorption based on thickness
+	float3 Transmittance = exp(-AbsorptionColorCoefficients.rgb * AbsorptionCoefficient * Thickness);
+
+	// Base fluid color with absorption
+	float3 AbsorbedColor = FluidColor.rgb * Transmittance;
+
+	// Diffuse lighting
+	float3 Diffuse = AbsorbedColor * NdotL * LightColor;
+
+	// Ambient (prevents completely dark areas)
+	float3 Ambient = AbsorbedColor * 0.15f;
+
+	// Subsurface scattering
+	float SSS = exp(-Thickness * TranslucencyDensity) * SubsurfaceScatterStrength;
+	float3 SSSColor = SubsurfaceColor * SSS * NdotL;
+
+	// Combine
+	float3 FinalColor = Diffuse + Ambient + SSSColor;
+	FinalColor += Specular * LightColor;
+
+	// Reflection (simple sky approximation)
+	float3 ReflectDir = reflect(-ViewDir, HitNormal);
+	float3 ReflectionColor = lerp(float3(0.6f, 0.8f, 1.0f), LightColor, max(dot(ReflectDir, LightDir), 0.0f));
+	FinalColor = lerp(FinalColor, ReflectionColor * ReflectionStrength, Fresnel);
+
+	// DEBUG: Uncomment to visualize values
+	// OutColor = float4(LightDir * 0.5f + 0.5f, 1); return;  // LightDir visualization
+	// OutColor = float4(HitNormal * 0.5f + 0.5f, 1); return;  // Normal visualization
+	// OutColor = float4(Thickness / 100.0f, 0, 0, 1); return;  // Red = Thickness
+	// OutColor = float4(ThicknessAlpha, ThicknessAlpha, ThicknessAlpha, 1); return;  // Gray = ThicknessAlpha
+	// OutColor = float4(float(StepCount) / float(MaxSteps), 0, 0, 1); return;  // Red = StepCount ratio
+	// OutColor = float4(HitSDF / ParticleRadius, 0, 0, 1); return;  // Red = HitSDF ratio
+	// OutColor = float4(ParticleRadius / 10.0f, 0, 0, 1); return;  // Red = ParticleRadius (expected ~0.5 for 5cm)
+
+	// Alpha calculation
+	// 문제: Thickness가 작으면 Alpha가 너무 낮아짐
+	// 해결: 기본 Alpha를 높이고, Thickness 영향을 줄임
+	float ThicknessAlpha = saturate(Thickness / TranslucencyDepth);
+
+	// 기존: lerp(0.7, 0.95, ThicknessAlpha) - Thickness=0이면 Alpha=0.7
+	// 수정: 기본 0.85, Thickness가 크면 0.98까지
+	float BaseAlpha = 0.85f;
+	float MaxAlpha = 0.98f;
+	float Alpha = lerp(BaseAlpha, MaxAlpha, ThicknessAlpha);
+
+	// Fresnel로 가장자리만 살짝 투명하게 (기존 0.3 -> 0.15로 줄임)
+	Alpha *= (1.0f - Fresnel * 0.15f);
+
+	// DEBUG: Force full opacity to test if transparency is the issue
+	// Alpha = 1.0f;
+
+	// Temporal reprojection
+	if (bEnableTemporalReprojection)
+	{
+		bool bHistoryValid;
+		float4 History = SampleHistory(HitPos, bHistoryValid);
+
+		if (bHistoryValid && History.a > 0.01f)
+		{
+			FinalColor = lerp(FinalColor, History.rgb, TemporalBlendFactor);
+			Alpha = lerp(Alpha, History.a, TemporalBlendFactor);
+		}
+	}
+
+	// Premultiplied Alpha (required for BlendState: BF_One, BF_InverseSourceAlpha)
+	// Final = SrcColor * 1.0 + DstColor * (1 - SrcAlpha)
+	// So we need to multiply color by alpha in shader
+	OutColor = float4(FinalColor * Alpha, Alpha);
+}
+
+//=============================================================================
+// Composite Pixel Shader (Simple pass-through for alpha blending)
+//=============================================================================
+
+Texture2D<float4> FluidColorTexture;
+SamplerState FluidColorSampler;
+
+void CompositePS(
+	in float4 SvPosition : SV_POSITION,
+	in float2 TexCoord : TEXCOORD0,
+	out float4 OutColor : SV_Target0)
+{
+	OutColor = FluidColorTexture.SampleLevel(FluidColorSampler, TexCoord, 0);
+}

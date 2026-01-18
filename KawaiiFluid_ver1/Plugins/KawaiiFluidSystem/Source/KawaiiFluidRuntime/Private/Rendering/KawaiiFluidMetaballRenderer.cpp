@@ -13,6 +13,7 @@
 // Pipeline architecture (Pipeline handles ShadingMode internally)
 #include "Rendering/Pipeline/IKawaiiMetaballRenderingPipeline.h"
 #include "Rendering/Pipeline/KawaiiMetaballScreenSpacePipeline.h"
+#include "Rendering/Pipeline/KawaiiRayMarchingPipeline.h"
 
 UKawaiiFluidMetaballRenderer::UKawaiiFluidMetaballRenderer()
 {
@@ -211,6 +212,22 @@ void UKawaiiFluidMetaballRenderer::SetSimulationContext(UKawaiiFluidSimulationCo
 {
 	CachedSimulationContext = InContext;
 
+	// When SimulationContext is set, update GPUSimulator's Z-Order extraction flag
+	// This handles the case where Pipeline was set before SimulationContext
+	if (InContext)
+	{
+		if (FKawaiiFluidRenderResource* RenderResource = GetFluidRenderResource())
+		{
+			if (FGPUFluidSimulator* GPUSimulator = RenderResource->GetGPUSimulator())
+			{
+				const FFluidRenderingParameters& Params = GetLocalParameters();
+				const bool bNeedZOrderBuffers = (Params.PipelineType == EMetaballPipelineType::RayMarching);
+				GPUSimulator->SetExtractZOrderBuffersForRayMarching(bNeedZOrderBuffers);
+				UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: SetSimulationContext - SetExtractZOrderBuffersForRayMarching(%d)"), bNeedZOrderBuffers ? 1 : 0);
+			}
+		}
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: %s SimulationContext"),
 		InContext ? TEXT("Set") : TEXT("Cleared"));
 }
@@ -238,12 +255,29 @@ void UKawaiiFluidMetaballRenderer::UpdatePipeline()
 			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created ScreenSpace Pipeline"));
 			break;
 
+		case EMetaballPipelineType::RayMarching:
+			Pipeline = MakeShared<FKawaiiRayMarchingPipeline>();
+			UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Created RayMarching Pipeline"));
+			break;
 		}
 
 		CachedPipelineType = Params.PipelineType;
+
+		// Update GPUSimulator flag for Z-Order buffer extraction
+		// Only Ray Marching pipeline needs CellStart/CellEnd buffers extracted
+		if (FKawaiiFluidRenderResource* RenderResource = GetFluidRenderResource())
+		{
+			if (FGPUFluidSimulator* GPUSimulator = RenderResource->GetGPUSimulator())
+			{
+				const bool bNeedZOrderBuffers = (Params.PipelineType == EMetaballPipelineType::RayMarching);
+				GPUSimulator->SetExtractZOrderBuffersForRayMarching(bNeedZOrderBuffers);
+				UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: SetExtractZOrderBuffersForRayMarching(%d)"), bNeedZOrderBuffers ? 1 : 0);
+			}
+		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Pipeline=ScreenSpace, Shading=%s"),
+	const TCHAR* PipelineName = (Params.PipelineType == EMetaballPipelineType::RayMarching) ? TEXT("RayMarching") : TEXT("ScreenSpace");
+	UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: Pipeline=%s, Shading=%s"), PipelineName,
 		Params.ShadingMode == EMetaballShadingMode::PostProcess ? TEXT("PostProcess") :
 		Params.ShadingMode == EMetaballShadingMode::GBuffer ? TEXT("GBuffer") :
 		Params.ShadingMode == EMetaballShadingMode::Opaque ? TEXT("Opaque") : TEXT("Translucent"));
@@ -258,6 +292,8 @@ void UKawaiiFluidMetaballRenderer::SetPreset(UKawaiiFluidPresetDataAsset* InPres
 		// Update Pipeline based on Preset's PipelineType
 		UpdatePipeline();
 
-		UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: SetPreset - PipelineType=ScreenSpace"));
+		const TCHAR* PipelineName = (CachedPreset->RenderingParameters.PipelineType == EMetaballPipelineType::RayMarching)
+			? TEXT("RayMarching") : TEXT("ScreenSpace");
+		UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: SetPreset - PipelineType=%s"), PipelineName);
 	}
 }

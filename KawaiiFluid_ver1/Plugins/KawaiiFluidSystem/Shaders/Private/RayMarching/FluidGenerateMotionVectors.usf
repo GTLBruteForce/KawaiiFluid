@@ -1,0 +1,47 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Generate motion vectors for temporal reprojection
+
+#include "/Engine/Public/Platform.ush"
+
+//=============================================================================
+// Parameters
+//=============================================================================
+
+Texture3D<float3> VelocityVolume;
+SamplerState VelocitySampler;
+
+RWTexture2D<float2> MotionVectors;
+
+float2 ViewportSize;
+float4x4 ViewProjectionMatrix;
+float4x4 PrevViewProjectionMatrix;
+float DeltaTime;
+
+//=============================================================================
+// Thread Group Size
+//=============================================================================
+
+#ifndef THREAD_GROUP_SIZE
+#define THREAD_GROUP_SIZE 16
+#endif
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	if (any(DispatchThreadId.xy >= uint2(ViewportSize)))
+	{
+		return;
+	}
+
+	// For now, output zero motion vectors
+	// Full implementation would:
+	// 1. Reconstruct world position from depth
+	// 2. Sample velocity from volume at that position
+	// 3. Calculate motion vector from current to previous frame position
+
+	MotionVectors[DispatchThreadId.xy] = float2(0.0f, 0.0f);
+}

@@ -194,6 +194,28 @@ public:
 	/** Velocity 버퍼 포인터 반환 (QueueBufferExtraction용) */
 	TRefCountPtr<FRDGPooledBuffer>* GetPooledVelocityBufferPtr() { return &PooledVelocityBuffer; }
 
+	//========================================
+	// Z-Order 버퍼 접근 (Ray Marching 볼륨 빌딩용)
+	//========================================
+
+	/**
+	 * Z-Order CellStart 버퍼 반환 (GPU 시뮬레이터에서 직접 가져옴)
+	 * Ray Marching 볼륨 빌딩에서 셀 시작 인덱스로 사용
+	 */
+	TRefCountPtr<FRDGPooledBuffer> GetPooledCellStartBuffer() const;
+
+	/**
+	 * Z-Order CellEnd 버퍼 반환 (GPU 시뮬레이터에서 직접 가져옴)
+	 * Ray Marching 볼륨 빌딩에서 셀 끝 인덱스로 사용
+	 */
+	TRefCountPtr<FRDGPooledBuffer> GetPooledCellEndBuffer() const;
+
+	/**
+	 * Z-Order 버퍼가 유효한지 확인
+	 * GPU 시뮬레이터가 있고 Z-Order 버퍼가 유효해야 true
+	 */
+	bool HasValidZOrderBuffers() const;
+
 private:
 	//========================================
 	// GPU 리소스
