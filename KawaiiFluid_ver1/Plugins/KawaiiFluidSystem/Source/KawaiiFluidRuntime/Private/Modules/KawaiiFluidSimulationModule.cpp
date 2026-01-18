@@ -1459,12 +1459,10 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticles(int32 Count)
 	// GPU 모드
 	if (bGPUSimulationActive && CachedGPUSimulator)
 	{
-		// Readback 데이터 가져오기
+		// Readback 데이터 가져오기 (브러시 삭제와 동일한 방식)
 		TArray<FGPUFluidParticle> ReadbackParticles;
 		if (!CachedGPUSimulator->GetReadbackGPUParticles(ReadbackParticles))
 		{
-			// Readback 데이터 없음 - 다음 프레임에 재시도
-			UE_LOG(LogTemp, Warning, TEXT("RemoveOldestParticles: GPU Readback not available yet"));
 			return 0;
 		}
 
@@ -1476,8 +1474,7 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticles(int32 Count)
 		// 제거할 개수 결정
 		const int32 RemoveCount = FMath::Min(Count, ReadbackParticles.Num());
 
-		// 가장 작은 ParticleID N개 찾기 (Partial Sort - O(n) vs Full Sort O(n log n))
-		// Z-Order 정렬이 활성화되면 배열이 공간 기준으로 재정렬되므로 ID 기반 검색 필수
+		// ID 배열 수집
 		TArray<int32> AllParticleIDs;
 		AllParticleIDs.Reserve(ReadbackParticles.Num());
 		for (const FGPUFluidParticle& Particle : ReadbackParticles)
@@ -1485,14 +1482,14 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticles(int32 Count)
 			AllParticleIDs.Add(Particle.ParticleID);
 		}
 
-		// Nth element로 RemoveCount번째로 작은 ID 찾기
+		// nth_element로 가장 작은 ID N개 찾기 (O(n))
 		if (RemoveCount < AllParticleIDs.Num())
 		{
 			std::nth_element(AllParticleIDs.GetData(), AllParticleIDs.GetData() + RemoveCount,
 				AllParticleIDs.GetData() + AllParticleIDs.Num());
 		}
 
-		// 삭제할 ID 목록 (가장 오래된 N개 - 앞쪽 RemoveCount개가 가장 작은 ID들)
+		// 앞쪽 RemoveCount개가 가장 작은 ID들
 		TArray<int32> IDsToRemove;
 		IDsToRemove.Reserve(RemoveCount);
 		for (int32 i = 0; i < RemoveCount; i++)
@@ -1500,10 +1497,10 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticles(int32 Count)
 			IDsToRemove.Add(AllParticleIDs[i]);
 		}
 
-		// Despawn 요청 (AllParticleIDs를 AllIDs로 재사용)
+		// Despawn 요청
 		CachedGPUSimulator->AddDespawnByIDRequests(IDsToRemove, AllParticleIDs);
 
-		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticles: Removing %d particles (IDs: %d ~ %d from readback), ReadbackCount=%d"),
+		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticles: Removing %d particles (IDs: %d ~ %d), ReadbackCount=%d"),
 			RemoveCount, IDsToRemove[0], IDsToRemove.Last(), ReadbackParticles.Num());
 
 		return RemoveCount;
