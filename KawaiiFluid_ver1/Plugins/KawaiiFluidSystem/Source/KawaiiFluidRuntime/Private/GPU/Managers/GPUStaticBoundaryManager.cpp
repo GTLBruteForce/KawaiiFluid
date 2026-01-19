@@ -80,7 +80,8 @@ void FGPUStaticBoundaryManager::GenerateBoundaryParticles(
 	BoundaryParticles.Reset();
 
 	// Calculate spacing and Psi
-	const float Spacing = SmoothingRadius * SpacingMultiplier;
+	// ParticleSpacing is now in cm (same as FluidInteractionComponent)
+	const float Spacing = ParticleSpacing;
 	const float Psi = CalculatePsi(Spacing, RestDensity);
 
 	// Reserve estimated capacity

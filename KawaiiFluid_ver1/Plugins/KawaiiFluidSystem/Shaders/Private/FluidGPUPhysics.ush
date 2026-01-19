@@ -47,6 +47,8 @@ bool HasValidSource(int sourceID)
 #define GPU_PARTICLE_FLAG_IS_CORE       (1 << 2)
 #define GPU_PARTICLE_FLAG_JUST_DETACHED (1 << 3)
 #define GPU_PARTICLE_FLAG_NEAR_GROUND   (1 << 4)
+#define GPU_PARTICLE_FLAG_HAS_COLLIDED  (1 << 5)
+#define GPU_PARTICLE_FLAG_IS_SLEEPING   (1 << 6)
 
 //=============================================================================
 // Constants

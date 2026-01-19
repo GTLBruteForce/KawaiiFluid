@@ -58,6 +58,7 @@ namespace EGPUParticleFlags
 	constexpr uint32 JustDetached = 1 << 3;      // Particle just detached this frame
 	constexpr uint32 NearGround = 1 << 4;        // Particle is near the ground
 	constexpr uint32 HasCollided = 1 << 5;       // Particle collided this frame
+	constexpr uint32 IsSleeping = 1 << 6;        // Particle is in sleep state (low velocity)
 }
 
 /**
@@ -145,6 +146,12 @@ struct FGPUFluidSimulationParams
 	float BoundaryDetachSpeedThreshold;     // cm/s, relative speed where detachment begins
 	float BoundaryMaxDetachSpeed;           // cm/s, relative speed for full detachment
 
+	// Particle Sleeping (NVIDIA Flex stabilization technique)
+	int32 bEnableParticleSleeping;          // Enable particle sleeping for stability
+	float SleepVelocityThreshold;           // cm/s, velocity below which particles may sleep
+	int32 SleepFrameThreshold;              // Number of consecutive low-velocity frames before sleeping
+	float WakeVelocityThreshold;            // cm/s, velocity above which sleeping particles wake up (external force)
+
 	FGPUFluidSimulationParams()
 		: RestDensity(1000.0f)
 		, SmoothingRadius(20.0f)
@@ -186,6 +193,10 @@ struct FGPUFluidSimulationParams
 		, BoundaryVelocityTransferStrength(0.8f)
 		, BoundaryDetachSpeedThreshold(500.0f)
 		, BoundaryMaxDetachSpeed(1500.0f)
+		, bEnableParticleSleeping(0)
+		, SleepVelocityThreshold(5.0f)
+		, SleepFrameThreshold(30)
+		, WakeVelocityThreshold(20.0f)
 	{
 	}
 

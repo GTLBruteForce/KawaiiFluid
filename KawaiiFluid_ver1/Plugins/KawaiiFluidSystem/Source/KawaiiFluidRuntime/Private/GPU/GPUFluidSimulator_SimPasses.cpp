@@ -447,6 +447,45 @@ void FGPUFluidSimulator::AddApplyViscosityPass(
 }
 
 //=============================================================================
+// Particle Sleeping Pass (NVIDIA Flex Stabilization)
+//=============================================================================
+
+void FGPUFluidSimulator::AddParticleSleepingPass(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferUAVRef InParticlesUAV,
+	FRDGBufferUAVRef InSleepCountersUAV,
+	FRDGBufferSRVRef InNeighborListSRV,
+	FRDGBufferSRVRef InNeighborCountsSRV,
+	const FGPUFluidSimulationParams& Params)
+{
+	if (CurrentParticleCount <= 0) return;
+	if (!Params.bEnableParticleSleeping) return;
+
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	TShaderMapRef<FParticleSleepingCS> ComputeShader(ShaderMap);
+
+	FParticleSleepingCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FParticleSleepingCS::FParameters>();
+	PassParameters->Particles = InParticlesUAV;
+	PassParameters->SleepCounters = InSleepCountersUAV;
+	PassParameters->NeighborList = InNeighborListSRV;
+	PassParameters->NeighborCounts = InNeighborCountsSRV;
+	PassParameters->ParticleCount = CurrentParticleCount;
+	PassParameters->SleepVelocityThreshold = Params.SleepVelocityThreshold;
+	PassParameters->SleepFrameThreshold = Params.SleepFrameThreshold;
+	PassParameters->WakeVelocityThreshold = Params.WakeVelocityThreshold;
+
+	const int32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FParticleSleepingCS::ThreadGroupSize);
+
+	FComputeShaderUtils::AddPass(
+		GraphBuilder,
+		RDG_EVENT_NAME("FluidParticleSleeping"),
+		ComputeShader,
+		PassParameters,
+		FIntVector(NumGroups, 1, 1)
+	);
+}
+
+//=============================================================================
 // Apply Cohesion Pass (Akinci 2013 Surface Tension)
 //=============================================================================
 

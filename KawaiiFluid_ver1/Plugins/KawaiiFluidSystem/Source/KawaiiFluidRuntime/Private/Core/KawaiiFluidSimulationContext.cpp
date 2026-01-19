@@ -427,6 +427,12 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	GPUParams.BoundaryDetachSpeedThreshold = Preset->BoundaryDetachSpeedThreshold;
 	GPUParams.BoundaryMaxDetachSpeed = Preset->BoundaryMaxDetachSpeed;
 
+	// Particle Sleeping (NVIDIA Flex stabilization)
+	GPUParams.bEnableParticleSleeping = Preset->bEnableParticleSleeping ? 1 : 0;
+	GPUParams.SleepVelocityThreshold = Preset->SleepVelocityThreshold;
+	GPUParams.SleepFrameThreshold = Preset->SleepFrameThreshold;
+	GPUParams.WakeVelocityThreshold = Preset->WakeVelocityThreshold;
+
 	// Gravity from preset
 	GPUParams.Gravity = FVector3f(Preset->Gravity);
 
@@ -835,6 +841,8 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 					// Generate if dirty or if we should have particles but don't
 					if (bStaticBoundaryParticlesDirty || !bHasStaticBoundary)
 					{
+						// Set particle spacing before generation
+						GPUSimulator->SetStaticBoundaryParticleSpacing(Params.StaticBoundaryParticleSpacing);
 						GPUSimulator->GenerateStaticBoundaryParticles(Preset->SmoothingRadius, Preset->RestDensity);
 						bStaticBoundaryParticlesDirty = false;
 					}

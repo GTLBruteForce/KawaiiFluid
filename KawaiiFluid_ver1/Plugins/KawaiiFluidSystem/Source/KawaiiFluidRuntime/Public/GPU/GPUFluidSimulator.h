@@ -454,6 +454,11 @@ public:
 	bool IsStaticBoundaryEnabled() const { return StaticBoundaryManager.IsValid() && StaticBoundaryManager->IsEnabled(); }
 
 	/**
+	 * Set static boundary particle spacing in cm
+	 */
+	void SetStaticBoundaryParticleSpacing(float Spacing) { if (StaticBoundaryManager.IsValid()) StaticBoundaryManager->SetParticleSpacing(Spacing); }
+
+	/**
 	 * Check if static boundary GPU processing is enabled (BoundarySkinningManager flag)
 	 */
 	bool IsGPUStaticBoundaryEnabled() const { return BoundarySkinningManager.IsValid() && BoundarySkinningManager->IsStaticBoundaryEnabled(); }
@@ -794,6 +799,15 @@ private:
 		const FGPUFluidSimulationParams& Params,
 		const FSimulationSpatialData& SpatialData);
 
+	/** Add particle sleeping pass (NVIDIA Flex stabilization technique) */
+	void AddParticleSleepingPass(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferUAVRef ParticlesUAV,
+		FRDGBufferUAVRef SleepCountersUAV,
+		FRDGBufferSRVRef NeighborListSRV,
+		FRDGBufferSRVRef NeighborCountsSRV,
+		const FGPUFluidSimulationParams& Params);
+
 	/** Add apply cohesion pass (surface tension / cohesion forces) */
 	void AddApplyCohesionPass(
 		FRDGBuilder& GraphBuilder,
@@ -954,6 +968,10 @@ private:
 	TRefCountPtr<FRDGPooledBuffer> NeighborListBuffer;
 	TRefCountPtr<FRDGPooledBuffer> NeighborCountsBuffer;
 	int32 NeighborBufferParticleCapacity = 0;
+
+	// Particle Sleeping (NVIDIA Flex stabilization)
+	TRefCountPtr<FRDGPooledBuffer> SleepCountersBuffer;
+	int32 SleepCountersCapacity = 0;
 
 	// Simulation bounds (local copy for GetSimulationBounds API)
 	FVector3f SimulationBoundsMin = FVector3f(-1280.0f, -1280.0f, -1280.0f);

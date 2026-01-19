@@ -565,6 +565,7 @@ FKawaiiFluidSimulationParams UKawaiiFluidSimulationModule::BuildSimulationParams
 
 		// Static boundary particles (Akinci 2012) - density contribution from walls/floors
 		Params.bEnableStaticBoundaryParticles = OwnerComp->bEnableStaticBoundaryParticles;
+		Params.StaticBoundaryParticleSpacing = OwnerComp->StaticBoundaryParticleSpacing;
 	}
 
 	// Containment bounds for GPU collision (supports OBB with rotation)

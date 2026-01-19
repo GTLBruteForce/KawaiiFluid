@@ -1058,6 +1058,33 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 	AddApplyViscosityPass(GraphBuilder, ParticlesUAV, SpatialData.CellCountsSRV, SpatialData.ParticleIndicesSRV, SpatialData.NeighborListSRV, SpatialData.NeighborCountsSRV, Params, SpatialData);
 	AddApplyCohesionPass(GraphBuilder, ParticlesUAV, SpatialData.CellCountsSRV, SpatialData.ParticleIndicesSRV, SpatialData.NeighborListSRV, SpatialData.NeighborCountsSRV, Params);
 
+	// Particle Sleeping Pass (NVIDIA Flex stabilization)
+	if (Params.bEnableParticleSleeping && SpatialData.NeighborListSRV && SpatialData.NeighborCountsSRV)
+	{
+		// Ensure SleepCounters buffer exists and has correct size
+		if (!SleepCountersBuffer.IsValid() || SleepCountersCapacity < CurrentParticleCount)
+		{
+			const int32 NewCapacity = FMath::Max(CurrentParticleCount, 1024);
+			FRDGBufferDesc SleepCountersDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), NewCapacity);
+			FRDGBufferRef SleepCountersRDG = GraphBuilder.CreateBuffer(SleepCountersDesc, TEXT("GPUFluidSleepCounters"));
+
+			// Initialize to zero (no sleep counters)
+			TArray<uint32> ZeroCounters;
+			ZeroCounters.SetNumZeroed(NewCapacity);
+			GraphBuilder.QueueBufferUpload(SleepCountersRDG, ZeroCounters.GetData(), NewCapacity * sizeof(uint32));
+
+			// Extract to persistent buffer
+			SleepCountersBuffer = GraphBuilder.ConvertToExternalBuffer(SleepCountersRDG);
+			SleepCountersCapacity = NewCapacity;
+		}
+
+		// Register persistent buffer for this frame
+		FRDGBufferRef SleepCountersRDG = GraphBuilder.RegisterExternalBuffer(SleepCountersBuffer, TEXT("GPUFluidSleepCounters"));
+		FRDGBufferUAVRef SleepCountersUAV = GraphBuilder.CreateUAV(SleepCountersRDG, PF_R32_UINT);
+
+		AddParticleSleepingPass(GraphBuilder, ParticlesUAV, SleepCountersUAV, SpatialData.NeighborListSRV, SpatialData.NeighborCountsSRV, Params);
+	}
+
 	if (Params.StackPressureScale > 0.0f && AdhesionManager.IsValid() && AdhesionManager->IsAdhesionEnabled())
 	{
 		TRefCountPtr<FRDGPooledBuffer> PersistentAttachmentBuffer = AdhesionManager->GetPersistentAttachmentBuffer();

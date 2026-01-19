@@ -87,9 +87,9 @@ public:
 	void SetEnabled(bool bEnabled) { bIsEnabled = bEnabled; }
 	bool IsEnabled() const { return bIsEnabled; }
 
-	/** Set spacing multiplier (default 0.5 = SmoothingRadius/2) */
-	void SetSpacingMultiplier(float Multiplier) { SpacingMultiplier = FMath::Clamp(Multiplier, 0.25f, 1.0f); }
-	float GetSpacingMultiplier() const { return SpacingMultiplier; }
+	/** Set particle spacing in cm (default 5.0 cm, same as FluidInteractionComponent) */
+	void SetParticleSpacing(float Spacing) { ParticleSpacing = FMath::Max(Spacing, 1.0f); }
+	float GetParticleSpacing() const { return ParticleSpacing; }
 
 private:
 	//=========================================================================
@@ -139,7 +139,7 @@ private:
 
 	bool bIsInitialized = false;
 	bool bIsEnabled = true;
-	float SpacingMultiplier = 0.5f;  // Default: SmoothingRadius / 2
+	float ParticleSpacing = 5.0f;  // Default: 5.0 cm (same as FluidInteractionComponent)
 
 	//=========================================================================
 	// Generated Data

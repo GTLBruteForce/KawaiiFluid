@@ -286,6 +286,43 @@ public:
 	float BoundaryMaxDetachSpeed = 1500.0f;
 
 	//========================================
+	// Particle Sleeping (Stabilization)
+	//========================================
+
+	/**
+	 * Enable particle sleeping for stability
+	 * Sleeping particles are excluded from constraint solving, reducing micro-jitter
+	 * Reference: NVIDIA Flex stabilization technique
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Sleeping")
+	bool bEnableParticleSleeping = false;
+
+	/**
+	 * Velocity threshold for sleep (cm/s)
+	 * Particles moving slower than this may enter sleep state
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Sleeping",
+		meta = (EditCondition = "bEnableParticleSleeping", ClampMin = "0.1", ClampMax = "100.0"))
+	float SleepVelocityThreshold = 5.0f;
+
+	/**
+	 * Number of consecutive low-velocity frames before sleeping
+	 * Higher values = more stable but slower sleep response
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Sleeping",
+		meta = (EditCondition = "bEnableParticleSleeping", ClampMin = "1", ClampMax = "120"))
+	int32 SleepFrameThreshold = 30;
+
+	/**
+	 * Velocity threshold for wake-up (cm/s)
+	 * Sleeping particles wake up when nearby particles or external forces exceed this
+	 * Should be higher than SleepVelocityThreshold to prevent oscillation
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Sleeping",
+		meta = (EditCondition = "bEnableParticleSleeping", ClampMin = "1.0", ClampMax = "200.0"))
+	float WakeVelocityThreshold = 20.0f;
+
+	//========================================
 	// Stack Pressure Parameters
 	//========================================
 

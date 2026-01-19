@@ -263,6 +263,9 @@ struct KAWAIIFLUIDRUNTIME_API FKawaiiFluidSimulationParams
 	 * This helps prevent density deficit near boundaries which causes wall climbing artifacts */
 	bool bEnableStaticBoundaryParticles = true;
 
+	/** Static boundary particle spacing in cm */
+	float StaticBoundaryParticleSpacing = 5.0f;
+
 	//========================================
 	// Collision Event Settings
 	//========================================

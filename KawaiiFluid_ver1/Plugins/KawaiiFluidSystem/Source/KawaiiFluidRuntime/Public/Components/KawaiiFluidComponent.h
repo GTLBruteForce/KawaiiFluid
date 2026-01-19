@@ -545,6 +545,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Boundary")
 	bool bEnableStaticBoundaryParticles = true;
 
+	/**
+	 * Static boundary particle spacing (cm)
+	 * Lower values = denser boundary particles = better density coverage but more particles
+	 * Higher values = sparser boundary particles = fewer particles but may have gaps
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Boundary",
+		meta = (EditCondition = "bEnableStaticBoundaryParticles", ClampMin = "1.0", ClampMax = "50.0",
+		        ToolTip = "경계 입자 간격 (cm).\n작을수록 정밀하지만 입자 수 증가.\nParticleRadius의 0.5~1.0배 권장."))
+	float StaticBoundaryParticleSpacing = 5.0f;
+
 	/** Show static boundary particles (walls, floors) generated for density contribution (Akinci 2012) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug|Boundary")
 	bool bShowStaticBoundaryParticles = false;

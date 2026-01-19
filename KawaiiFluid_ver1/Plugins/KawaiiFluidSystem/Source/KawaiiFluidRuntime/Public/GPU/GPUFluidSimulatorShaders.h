@@ -371,6 +371,46 @@ public:
 };
 
 //=============================================================================
+// Particle Sleeping Compute Shader
+// NVIDIA Flex stabilization technique: sleep low-velocity particles
+// Reduces micro-jitter and improves performance
+//=============================================================================
+
+class FParticleSleepingCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FParticleSleepingCS);
+	SHADER_USE_PARAMETER_STRUCT(FParticleSleepingCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, SleepCounters)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, NeighborList)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, NeighborCounts)
+		SHADER_PARAMETER(int32, ParticleCount)
+		SHADER_PARAMETER(float, SleepVelocityThreshold)
+		SHADER_PARAMETER(int32, SleepFrameThreshold)
+		SHADER_PARAMETER(float, WakeVelocityThreshold)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("MAX_NEIGHBORS_PER_PARTICLE"), GPU_MAX_NEIGHBORS_PER_PARTICLE);
+	}
+};
+
+//=============================================================================
 // Apply Cohesion Compute Shader (OPTIMIZED: Uses cached neighbor list)
 // Pass 5.5: Apply surface tension / cohesion forces (Akinci 2013)
 //=============================================================================

@@ -1,0 +1,148 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Particle Sleeping - NVIDIA Flex stabilization technique
+//
+// Sleeping particles are excluded from constraint solving to:
+// 1. Reduce micro-jitter in stationary fluid
+// 2. Improve performance by skipping inactive particles
+//
+// Sleep condition: velocity < threshold for N consecutive frames
+// Wake-up condition: neighbor velocity > wake threshold OR collision detected
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+RWStructuredBuffer<FGPUFluidParticle> Particles;
+RWBuffer<uint> SleepCounters;  // Per-particle sleep frame counter
+
+int ParticleCount;
+float SleepVelocityThreshold;    // cm/s, velocity below which particles may sleep
+int SleepFrameThreshold;         // Frames of low velocity before sleeping
+float WakeVelocityThreshold;     // cm/s, velocity for wake-up
+
+// Neighbor data for wake-up propagation
+StructuredBuffer<uint> NeighborList;
+StructuredBuffer<uint> NeighborCounts;
+
+#define THREAD_GROUP_SIZE 256
+#define MAX_NEIGHBORS_PER_PARTICLE 64
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void UpdateParticleSleepingCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)ParticleCount)
+	{
+		return;
+	}
+
+	FGPUFluidParticle particle = Particles[idx];
+
+	// Skip attached particles - they follow bone movement, not physics
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+	{
+		// Clear sleeping flag for attached particles
+		particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_SLEEPING);
+		SleepCounters[idx] = 0;
+		Particles[idx] = particle;
+		return;
+	}
+
+	float speed = length(particle.Velocity);
+	bool wasSleeping = HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_SLEEPING);
+	uint sleepCounter = SleepCounters[idx];
+
+	//=========================================================================
+	// Wake-up check (for sleeping particles)
+	//=========================================================================
+	if (wasSleeping)
+	{
+		bool shouldWake = false;
+
+		// 1. Direct velocity check (external force applied)
+		if (speed > WakeVelocityThreshold)
+		{
+			shouldWake = true;
+		}
+
+		// 2. Collision wake-up
+		if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_HAS_COLLIDED))
+		{
+			shouldWake = true;
+		}
+
+		// 3. Neighbor wake-up (propagation)
+		// If any neighbor is awake and moving fast, wake up this particle
+		if (!shouldWake)
+		{
+			uint neighborCount = NeighborCounts[idx];
+			uint baseIdx = idx * MAX_NEIGHBORS_PER_PARTICLE;
+
+			for (uint n = 0; n < neighborCount && n < MAX_NEIGHBORS_PER_PARTICLE; ++n)
+			{
+				uint neighborIdx = NeighborList[baseIdx + n];
+				if (neighborIdx < (uint)ParticleCount && neighborIdx != idx)
+				{
+					FGPUFluidParticle neighbor = Particles[neighborIdx];
+
+					// Wake up if neighbor is awake and moving
+					bool neighborSleeping = HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_SLEEPING);
+					float neighborSpeed = length(neighbor.Velocity);
+
+					if (!neighborSleeping && neighborSpeed > WakeVelocityThreshold)
+					{
+						shouldWake = true;
+						break;
+					}
+				}
+			}
+		}
+
+		if (shouldWake)
+		{
+			// Wake up!
+			particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_SLEEPING);
+			SleepCounters[idx] = 0;
+		}
+		// else: remain sleeping
+	}
+	//=========================================================================
+	// Sleep check (for awake particles)
+	//=========================================================================
+	else
+	{
+		if (speed < SleepVelocityThreshold)
+		{
+			// Increment sleep counter
+			sleepCounter++;
+
+			if (sleepCounter >= (uint)SleepFrameThreshold)
+			{
+				// Enter sleep state
+				particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_SLEEPING);
+				// Clamp velocity to zero to prevent drift
+				particle.Velocity = float3(0.0f, 0.0f, 0.0f);
+			}
+
+			SleepCounters[idx] = sleepCounter;
+		}
+		else
+		{
+			// Reset sleep counter - particle is moving
+			SleepCounters[idx] = 0;
+		}
+	}
+
+	// Clear collision flag (processed)
+	particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_HAS_COLLIDED);
+
+	Particles[idx] = particle;
+}
