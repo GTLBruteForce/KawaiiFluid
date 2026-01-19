@@ -411,34 +411,52 @@ public:
 };
 
 //=============================================================================
-// Apply Cohesion Compute Shader (OPTIMIZED: Uses cached neighbor list)
-// Pass 5.5: Apply surface tension / cohesion forces (Akinci 2013)
+// Combined Viscosity and Cohesion Compute Shader
+// Merges ApplyViscosity and ApplyCohesion into single pass for performance
 //=============================================================================
 
-class FApplyCohesionCS : public FGlobalShader
+class FApplyViscosityAndCohesionCS : public FGlobalShader
 {
 public:
-	DECLARE_GLOBAL_SHADER(FApplyCohesionCS);
-	SHADER_USE_PARAMETER_STRUCT(FApplyCohesionCS, FGlobalShader);
+	DECLARE_GLOBAL_SHADER(FApplyViscosityAndCohesionCS);
+	SHADER_USE_PARAMETER_STRUCT(FApplyViscosityAndCohesionCS, FGlobalShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, CellCounts)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleIndices)
-		// Neighbor caching buffers (reuse from DensityPressure pass)
+		// Neighbor caching buffers
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, NeighborList)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, NeighborCounts)
 		SHADER_PARAMETER(int32, ParticleCount)
 		SHADER_PARAMETER(float, SmoothingRadius)
-		SHADER_PARAMETER(float, CohesionStrength)
 		SHADER_PARAMETER(float, CellSize)
-		// Akinci 2013 surface tension parameters
 		SHADER_PARAMETER(float, DeltaTime)
-		SHADER_PARAMETER(float, RestDensity)
-		SHADER_PARAMETER(float, Poly6Coeff)           // For normal calculation
-		SHADER_PARAMETER(float, MaxSurfaceTensionForce)  // Force clamping
-		// Flag to use cached neighbors (1 = use cache, 0 = use hash)
 		SHADER_PARAMETER(int32, bUseNeighborCache)
+		// Viscosity parameters
+		SHADER_PARAMETER(float, ViscosityCoefficient)
+		SHADER_PARAMETER(float, Poly6Coeff)
+		SHADER_PARAMETER(float, ViscLaplacianCoeff)
+		// Cohesion parameters
+		SHADER_PARAMETER(float, CohesionStrength)
+		SHADER_PARAMETER(float, RestDensity)
+		SHADER_PARAMETER(float, MaxSurfaceTensionForce)
+		// Boundary particles
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUBoundaryParticle>, BoundaryParticles)
+		SHADER_PARAMETER(int32, BoundaryParticleCount)
+		SHADER_PARAMETER(int32, bUseBoundaryViscosity)
+		SHADER_PARAMETER(float, AdhesionStrength)
+		SHADER_PARAMETER(float, AdhesionRadius)
+		// Z-Order sorted boundary particles
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUBoundaryParticle>, SortedBoundaryParticles)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BoundaryCellStart)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, BoundaryCellEnd)
+		SHADER_PARAMETER(int32, bUseBoundaryZOrder)
+		SHADER_PARAMETER(FVector3f, MortonBoundsMin)
+		// Boundary velocity transfer
+		SHADER_PARAMETER(float, BoundaryVelocityTransferStrength)
+		SHADER_PARAMETER(float, BoundaryDetachSpeedThreshold)
+		SHADER_PARAMETER(float, BoundaryMaxDetachSpeed)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;

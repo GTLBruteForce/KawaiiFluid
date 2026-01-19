@@ -486,31 +486,32 @@ void FGPUFluidSimulator::AddParticleSleepingPass(
 }
 
 //=============================================================================
-// Apply Cohesion Pass (Akinci 2013 Surface Tension)
+// Combined Viscosity and Cohesion Pass (Optimized)
 //=============================================================================
 
-void FGPUFluidSimulator::AddApplyCohesionPass(
+void FGPUFluidSimulator::AddApplyViscosityAndCohesionPass(
 	FRDGBuilder& GraphBuilder,
 	FRDGBufferUAVRef InParticlesUAV,
 	FRDGBufferSRVRef InCellCountsSRV,
 	FRDGBufferSRVRef InParticleIndicesSRV,
 	FRDGBufferSRVRef InNeighborListSRV,
 	FRDGBufferSRVRef InNeighborCountsSRV,
-	const FGPUFluidSimulationParams& Params)
+	const FGPUFluidSimulationParams& Params,
+	const FSimulationSpatialData& SpatialData)
 {
 	// Skip if no particles
 	if (CurrentParticleCount <= 0) return;
 
-	// Skip if cohesion is disabled
-	if (Params.CohesionStrength <= 0.0f)
+	// Skip if both viscosity and cohesion are disabled
+	if (Params.ViscosityCoefficient <= 0.0f && Params.CohesionStrength <= 0.0f)
 	{
 		return;
 	}
 
 	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-	TShaderMapRef<FApplyCohesionCS> ComputeShader(ShaderMap);
+	TShaderMapRef<FApplyViscosityAndCohesionCS> ComputeShader(ShaderMap);
 
-	FApplyCohesionCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FApplyCohesionCS::FParameters>();
+	FApplyViscosityAndCohesionCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FApplyViscosityAndCohesionCS::FParameters>();
 	PassParameters->Particles = InParticlesUAV;
 	PassParameters->CellCounts = InCellCountsSRV;
 	PassParameters->ParticleIndices = InParticleIndicesSRV;
@@ -518,24 +519,125 @@ void FGPUFluidSimulator::AddApplyCohesionPass(
 	PassParameters->NeighborCounts = InNeighborCountsSRV;
 	PassParameters->ParticleCount = CurrentParticleCount;
 	PassParameters->SmoothingRadius = Params.SmoothingRadius;
-	PassParameters->CohesionStrength = Params.CohesionStrength;
 	PassParameters->CellSize = Params.CellSize;
-	PassParameters->bUseNeighborCache = (InNeighborListSRV != nullptr && InNeighborCountsSRV != nullptr) ? 1 : 0;
-	// Akinci 2013 surface tension parameters
 	PassParameters->DeltaTime = Params.DeltaTime;
-	PassParameters->RestDensity = Params.RestDensity;
+	PassParameters->bUseNeighborCache = (InNeighborListSRV != nullptr && InNeighborCountsSRV != nullptr) ? 1 : 0;
+
+	// Viscosity parameters
+	PassParameters->ViscosityCoefficient = Params.ViscosityCoefficient;
 	PassParameters->Poly6Coeff = Params.Poly6Coeff;
-	// MaxSurfaceTensionForce: limit force to prevent instability
-	// Scale based on particle mass and smoothing radius
-	// Typical value: CohesionStrength * RestDensity * h^3 * 1000 (empirical)
 	const float h_m = Params.SmoothingRadius * 0.01f;  // cm to m
+	PassParameters->ViscLaplacianCoeff = 45.0f / (UE_PI * FMath::Pow(h_m, 6.0f));
+
+	// Cohesion parameters
+	PassParameters->CohesionStrength = Params.CohesionStrength;
+	PassParameters->RestDensity = Params.RestDensity;
 	PassParameters->MaxSurfaceTensionForce = Params.CohesionStrength * Params.RestDensity * h_m * h_m * h_m * 1000.0f;
 
-	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FApplyCohesionCS::ThreadGroupSize);
+	// Boundary Particles for viscosity contribution
+	// Priority: 1) Skinned boundary (same-frame), 2) Static boundary (persistent GPU)
+	const bool bHasSkinnedBoundary = SpatialData.bSkinnedBoundaryPerformed && SpatialData.SkinnedBoundarySRV != nullptr;
+	const bool bHasStaticBoundary = SpatialData.bStaticBoundaryAvailable && SpatialData.StaticBoundarySRV != nullptr;
+
+	if (bHasSkinnedBoundary)
+	{
+		// Use Skinned boundary (SkeletalMesh - same-frame buffer)
+		PassParameters->BoundaryParticles = SpatialData.SkinnedBoundarySRV;
+		PassParameters->BoundaryParticleCount = SpatialData.SkinnedBoundaryParticleCount;
+		PassParameters->bUseBoundaryViscosity = 1;
+	}
+	else if (bHasStaticBoundary)
+	{
+		// Use Static boundary (StaticMesh - persistent GPU buffer)
+		PassParameters->BoundaryParticles = SpatialData.StaticBoundarySRV;
+		PassParameters->BoundaryParticleCount = SpatialData.StaticBoundaryParticleCount;
+		PassParameters->bUseBoundaryViscosity = 1;
+	}
+	else
+	{
+		// Create dummy buffer for RDG validation
+		FRDGBufferRef DummyBuffer = GraphBuilder.CreateBuffer(
+			FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUBoundaryParticle), 1),
+			TEXT("GPUFluidBoundaryParticles_ViscCoh_Dummy")
+		);
+		FGPUBoundaryParticle ZeroBoundary = {};
+		GraphBuilder.QueueBufferUpload(DummyBuffer, &ZeroBoundary, sizeof(FGPUBoundaryParticle));
+		PassParameters->BoundaryParticles = GraphBuilder.CreateSRV(DummyBuffer);
+		PassParameters->BoundaryParticleCount = 0;
+		PassParameters->bUseBoundaryViscosity = 0;
+	}
+
+	// AdhesionStrength and AdhesionRadius for boundary viscosity
+	if (BoundarySkinningManager.IsValid())
+	{
+		const FGPUBoundaryAdhesionParams& AdhesionParams = BoundarySkinningManager->GetBoundaryAdhesionParams();
+		PassParameters->AdhesionStrength = AdhesionParams.AdhesionStrength;
+		PassParameters->AdhesionRadius = AdhesionParams.AdhesionRadius;
+	}
+	else
+	{
+		PassParameters->AdhesionStrength = 0.0f;
+		PassParameters->AdhesionRadius = 0.0f;
+	}
+
+	// Z-Order sorted boundary particles
+	const bool bUseSkinnedZOrder = bHasSkinnedBoundary && SpatialData.bSkinnedZOrderPerformed
+		&& SpatialData.SkinnedZOrderSortedSRV != nullptr;
+	const bool bUseStaticZOrder = !bUseSkinnedZOrder && bHasStaticBoundary
+		&& SpatialData.StaticZOrderSortedSRV != nullptr;
+
+	if (bUseSkinnedZOrder)
+	{
+		PassParameters->SortedBoundaryParticles = SpatialData.SkinnedZOrderSortedSRV;
+		PassParameters->BoundaryCellStart = SpatialData.SkinnedZOrderCellStartSRV;
+		PassParameters->BoundaryCellEnd = SpatialData.SkinnedZOrderCellEndSRV;
+		PassParameters->bUseBoundaryZOrder = 1;
+	}
+	else if (bUseStaticZOrder)
+	{
+		PassParameters->SortedBoundaryParticles = SpatialData.StaticZOrderSortedSRV;
+		PassParameters->BoundaryCellStart = SpatialData.StaticZOrderCellStartSRV;
+		PassParameters->BoundaryCellEnd = SpatialData.StaticZOrderCellEndSRV;
+		PassParameters->bUseBoundaryZOrder = 1;
+	}
+	else
+	{
+		// Create dummy buffers for RDG validation
+		FRDGBufferRef DummySortedBuffer = GraphBuilder.CreateBuffer(
+			FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUBoundaryParticle), 1),
+			TEXT("GPUFluidSortedBoundary_ViscCoh_Dummy"));
+		FGPUBoundaryParticle ZeroBoundaryForZOrder = {};
+		GraphBuilder.QueueBufferUpload(DummySortedBuffer, &ZeroBoundaryForZOrder, sizeof(FGPUBoundaryParticle));
+
+		FRDGBufferRef DummyCellStartBuffer = GraphBuilder.CreateBuffer(
+			FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1),
+			TEXT("GPUFluidBoundaryCellStart_ViscCoh_Dummy"));
+		uint32 InvalidIndex = 0xFFFFFFFF;
+		GraphBuilder.QueueBufferUpload(DummyCellStartBuffer, &InvalidIndex, sizeof(uint32));
+
+		FRDGBufferRef DummyCellEndBuffer = GraphBuilder.CreateBuffer(
+			FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1),
+			TEXT("GPUFluidBoundaryCellEnd_ViscCoh_Dummy"));
+		GraphBuilder.QueueBufferUpload(DummyCellEndBuffer, &InvalidIndex, sizeof(uint32));
+
+		PassParameters->SortedBoundaryParticles = GraphBuilder.CreateSRV(DummySortedBuffer);
+		PassParameters->BoundaryCellStart = GraphBuilder.CreateSRV(DummyCellStartBuffer);
+		PassParameters->BoundaryCellEnd = GraphBuilder.CreateSRV(DummyCellEndBuffer);
+		PassParameters->bUseBoundaryZOrder = 0;
+	}
+
+	PassParameters->MortonBoundsMin = SimulationBoundsMin;
+
+	// Boundary velocity transfer
+	PassParameters->BoundaryVelocityTransferStrength = Params.BoundaryVelocityTransferStrength;
+	PassParameters->BoundaryDetachSpeedThreshold = Params.BoundaryDetachSpeedThreshold;
+	PassParameters->BoundaryMaxDetachSpeed = Params.BoundaryMaxDetachSpeed;
+
+	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FApplyViscosityAndCohesionCS::ThreadGroupSize);
 
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
-		RDG_EVENT_NAME("GPUFluid::ApplyCohesion"),
+		RDG_EVENT_NAME("GPUFluid::ApplyViscosityAndCohesion"),
 		ComputeShader,
 		PassParameters,
 		FIntVector(NumGroups, 1, 1)

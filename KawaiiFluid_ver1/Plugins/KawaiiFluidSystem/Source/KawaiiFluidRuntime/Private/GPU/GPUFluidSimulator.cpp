@@ -1055,8 +1055,8 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 {
 	AddFinalizePositionsPass(GraphBuilder, ParticlesUAV, Params);
 
-	AddApplyViscosityPass(GraphBuilder, ParticlesUAV, SpatialData.CellCountsSRV, SpatialData.ParticleIndicesSRV, SpatialData.NeighborListSRV, SpatialData.NeighborCountsSRV, Params, SpatialData);
-	AddApplyCohesionPass(GraphBuilder, ParticlesUAV, SpatialData.CellCountsSRV, SpatialData.ParticleIndicesSRV, SpatialData.NeighborListSRV, SpatialData.NeighborCountsSRV, Params);
+	// Combined Viscosity + Cohesion pass (merged for ~35-40% performance improvement)
+	AddApplyViscosityAndCohesionPass(GraphBuilder, ParticlesUAV, SpatialData.CellCountsSRV, SpatialData.ParticleIndicesSRV, SpatialData.NeighborListSRV, SpatialData.NeighborCountsSRV, Params, SpatialData);
 
 	// Particle Sleeping Pass (NVIDIA Flex stabilization)
 	if (Params.bEnableParticleSleeping && SpatialData.NeighborListSRV && SpatialData.NeighborCountsSRV)

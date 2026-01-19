@@ -36,9 +36,9 @@ IMPLEMENT_GLOBAL_SHADER(FParticleSleepingCS,
 	"/Plugin/KawaiiFluidSystem/Private/FluidParticleSleeping.usf",
 	"UpdateParticleSleepingCS", SF_Compute);
 
-IMPLEMENT_GLOBAL_SHADER(FApplyCohesionCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidApplyCohesion.usf",
-	"ApplyCohesionCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FApplyViscosityAndCohesionCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidApplyViscosityAndCohesion.usf",
+	"ApplyViscosityAndCohesionCS", SF_Compute);
 
 IMPLEMENT_GLOBAL_SHADER(FBoundsCollisionCS,
 	"/Plugin/KawaiiFluidSystem/Private/FluidBoundsCollision.usf",

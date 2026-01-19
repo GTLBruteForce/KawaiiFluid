@@ -808,15 +808,16 @@ private:
 		FRDGBufferSRVRef NeighborCountsSRV,
 		const FGPUFluidSimulationParams& Params);
 
-	/** Add apply cohesion pass (surface tension / cohesion forces) */
-	void AddApplyCohesionPass(
+	/** Add combined viscosity and cohesion pass (optimized single-loop version) */
+	void AddApplyViscosityAndCohesionPass(
 		FRDGBuilder& GraphBuilder,
 		FRDGBufferUAVRef ParticlesUAV,
 		FRDGBufferSRVRef CellCountsSRV,
 		FRDGBufferSRVRef ParticleIndicesSRV,
 		FRDGBufferSRVRef NeighborListSRV,
 		FRDGBufferSRVRef NeighborCountsSRV,
-		const FGPUFluidSimulationParams& Params);
+		const FGPUFluidSimulationParams& Params,
+		const FSimulationSpatialData& SpatialData);
 
 	/** Add bounds collision pass */
 	void AddBoundsCollisionPass(
