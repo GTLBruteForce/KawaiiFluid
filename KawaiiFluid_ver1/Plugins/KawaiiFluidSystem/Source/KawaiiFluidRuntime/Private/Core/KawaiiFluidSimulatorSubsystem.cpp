@@ -155,7 +155,7 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 
 		// Early GPU setup: Initialize GPU state at registration time
 		// so spawn calls before first Tick use the correct path
-		UKawaiiFluidPresetDataAsset* Preset = Module->GetEffectivePreset();
+		UKawaiiFluidPresetDataAsset* Preset = Module->GetPreset();
 
 		// Always setup Context reference (needed for rendering)
 		// Context is keyed by (VolumeComponent + Preset)
@@ -504,7 +504,7 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 		}
 
 		// Get effective preset
-		UKawaiiFluidPresetDataAsset* EffectivePreset = Module->GetEffectivePreset();
+		UKawaiiFluidPresetDataAsset* EffectivePreset = Module->GetPreset();
 		if (!EffectivePreset)
 		{
 			continue;

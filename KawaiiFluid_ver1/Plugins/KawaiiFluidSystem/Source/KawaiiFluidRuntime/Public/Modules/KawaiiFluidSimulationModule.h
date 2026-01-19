@@ -33,7 +33,7 @@ class AKawaiiFluidSimulationVolume;
  * - 파티클 배열 소유
  * - SpatialHash 소유 (Independent 모드용)
  * - 콜라이더/상호작용 컴포넌트 레퍼런스 관리
- * - Preset 레퍼런스 및 Override 관리
+ * - Preset 레퍼런스 관리
  * - 외력 누적
  * - 파티클 생성/삭제 API
  *
@@ -90,20 +90,6 @@ public:
 
 	/** 시뮬레이션 파라미터 빌드 */
 	virtual FKawaiiFluidSimulationParams BuildSimulationParams() const;
-
-	/** Override 적용된 Effective Preset 반환 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid|Module")
-	UKawaiiFluidPresetDataAsset* GetEffectivePreset();
-
-	/** RuntimePreset 갱신 */
-	void UpdateRuntimePreset();
-
-	/** RuntimePreset dirty 마크 */
-	void MarkRuntimePresetDirty() { bRuntimePresetDirty = true; }
-
-	/** Override 존재 여부 */
-	UFUNCTION(BlueprintPure, Category = "Fluid|Module")
-	bool HasAnyOverride() const;
 
 	//========================================
 	// Fluid Identification (for collision filtering)
@@ -570,7 +556,7 @@ public:
 	void SetIndependentSimulation(bool bIndependent) { bIndependentSimulation = bIndependent; }
 
 	UFUNCTION(BlueprintPure, Category = "Fluid|Module")
-	bool IsIndependentSimulation() const { return bIndependentSimulation || HasAnyOverride(); }
+	bool IsIndependentSimulation() const { return bIndependentSimulation; }
 
 	//========================================
 	// Context (Outer 체인 캐시)
@@ -681,77 +667,7 @@ public:
 	UPROPERTY()
 	TObjectPtr<UKawaiiFluidPresetDataAsset> Preset;
 
-	//========================================
-	// Override Setters (런타임 + 에디터 공용)
-	//========================================
-
-	UFUNCTION(BlueprintCallable, Category = "Fluid|Override")
-	void SetOverride_ParticleRadius(bool bEnable, float Value);
-
-	UFUNCTION(BlueprintCallable, Category = "Fluid|Override")
-	void SetOverride_SmoothingRadius(bool bEnable, float Value);
-
-	UFUNCTION(BlueprintCallable, Category = "Fluid|Override")
-	void SetOverride_RestDensity(bool bEnable, float Value);
-
-	UFUNCTION(BlueprintCallable, Category = "Fluid|Override")
-	void SetOverride_Compliance(bool bEnable, float Value);
-
-	UFUNCTION(BlueprintCallable, Category = "Fluid|Override")
-	void SetOverride_ViscosityCoefficient(bool bEnable, float Value);
-
-	UFUNCTION(BlueprintCallable, Category = "Fluid|Override")
-	void SetOverride_Gravity(bool bEnable, FVector Value);
-
-	UFUNCTION(BlueprintCallable, Category = "Fluid|Override")
-	void SetOverride_AdhesionStrength(bool bEnable, float Value);
-
 private:
-	//========================================
-	// Override 값들 (private, Setter로만 수정)
-	//========================================
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", InlineEditConditionToggle))
-	bool bOverride_ParticleRadius = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", EditCondition = "bOverride_ParticleRadius", ClampMin = "0.1", ClampMax = "50.0"))
-	float Override_ParticleRadius = 5.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", InlineEditConditionToggle))
-	bool bOverride_SmoothingRadius = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", EditCondition = "bOverride_SmoothingRadius", ClampMin = "1.0"))
-	float Override_SmoothingRadius = 20.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", InlineEditConditionToggle))
-	bool bOverride_RestDensity = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", EditCondition = "bOverride_RestDensity", ClampMin = "0.1"))
-	float Override_RestDensity = 1200.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", InlineEditConditionToggle))
-	bool bOverride_Compliance = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", EditCondition = "bOverride_Compliance", ClampMin = "0.0"))
-	float Override_Compliance = 0.01f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", InlineEditConditionToggle))
-	bool bOverride_ViscosityCoefficient = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", EditCondition = "bOverride_ViscosityCoefficient", ClampMin = "0.0", ClampMax = "1.0"))
-	float Override_ViscosityCoefficient = 0.5f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", InlineEditConditionToggle))
-	bool bOverride_Gravity = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", EditCondition = "bOverride_Gravity"))
-	FVector Override_Gravity = FVector(0.0f, 0.0f, -980.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", InlineEditConditionToggle))
-	bool bOverride_AdhesionStrength = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Simulation|Override", meta = (AllowPrivateAccess = "true", EditCondition = "bOverride_AdhesionStrength", ClampMin = "0.0", ClampMax = "200.0"))
-	float Override_AdhesionStrength = 0.5f;
 	//========================================
 	// Internal
 	//========================================
@@ -773,13 +689,6 @@ private:
 	/** 등록된 콜라이더 */
 	UPROPERTY()
 	TArray<TObjectPtr<UFluidCollider>> Colliders;
-
-	/** Override 적용된 런타임 Preset (Transient) */
-	UPROPERTY(Transient)
-	TObjectPtr<UKawaiiFluidPresetDataAsset> RuntimePreset = nullptr;
-
-	/** RuntimePreset 갱신 필요 플래그 */
-	bool bRuntimePresetDirty = true;
 
 	/** 누적 외력 */
 	FVector AccumulatedExternalForce = FVector::ZeroVector;

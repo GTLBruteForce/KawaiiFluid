@@ -480,6 +480,8 @@ void FGPUFluidSimulator::BeginFrame()
 	ENQUEUE_RENDER_COMMAND(GPUFluidBeginFrame)(
 		[Self, bHasPendingSpawns, bHasPendingDespawns](FRHICommandListImmediate& RHICmdList)
 		{
+			SCOPED_DRAW_EVENT(RHICmdList, GPUFluid_BeginFrame);
+
 			// =====================================================
 			// Step 1: Process Readbacks (from previous frame)
 			// =====================================================
@@ -640,6 +642,8 @@ void FGPUFluidSimulator::EndFrame()
 	ENQUEUE_RENDER_COMMAND(GPUFluidEndFrame)(
 		[Self](FRHICommandListImmediate& RHICmdList)
 		{
+			SCOPED_DRAW_EVENT(RHICmdList, GPUFluid_EndFrame);
+
 			// Clear stale ReadbackGPUParticles if despawn caused count to become 0
 			if (Self->CurrentParticleCount == 0 && Self->ReadbackGPUParticles.Num() > 0)
 			{
@@ -696,6 +700,8 @@ FRDGBufferRef FGPUFluidSimulator::PrepareParticleBuffer(
 	FRDGBuilder& GraphBuilder,
 	const FGPUFluidSimulationParams& Params)
 {
+	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_PrepareParticleBuffer");
+
 	// Spawn/Despawn are handled in BeginFrame
 	// This function only handles:
 	// - PATH 1: CPU Upload (PIE transfer, save/load)
@@ -796,6 +802,8 @@ FGPUFluidSimulator::FSimulationSpatialData FGPUFluidSimulator::BuildSpatialStruc
 	FRDGBufferUAVRef& OutPositionsUAV,
 	const FGPUFluidSimulationParams& Params)
 {
+	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_BuildSpatialStructures");
+
 	FSimulationSpatialData SpatialData;
 
 	// Skip when no particles (avoid unnecessary GPU work)
@@ -987,6 +995,8 @@ void FGPUFluidSimulator::ExecutePhysicsSolver(
 	FSimulationSpatialData& SpatialData,
 	const FGPUFluidSimulationParams& Params)
 {
+	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_PhysicsSolver");
+
 	// Skip physics solver when no particles (avoid 0-size buffer creation)
 	if (CurrentParticleCount == 0)
 	{
@@ -1035,6 +1045,8 @@ void FGPUFluidSimulator::ExecuteCollisionAndAdhesion(
 	const FSimulationSpatialData& SpatialData,
 	const FGPUFluidSimulationParams& Params)
 {
+	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_CollisionAndAdhesion");
+
 	// Skip when no particles
 	if (CurrentParticleCount == 0)
 	{
@@ -1096,6 +1108,8 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 	const FSimulationSpatialData& SpatialData,
 	const FGPUFluidSimulationParams& Params)
 {
+	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_PostSimulation");
+
 	// Skip when no particles (SpatialData buffers may be invalid)
 	if (CurrentParticleCount == 0)
 	{
@@ -1318,6 +1332,8 @@ void FGPUFluidSimulator::ExtractPersistentBuffers(
 	FRDGBufferRef ParticleBuffer,
 	const FSimulationSpatialData& SpatialData)
 {
+	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_ExtractPersistentBuffers");
+
 	GraphBuilder.QueueBufferExtraction(ParticleBuffer, &PersistentParticleBuffer, ERHIAccess::UAVCompute);
 
 	// Only extract legacy hash table buffers when Z-Order sorting is NOT enabled

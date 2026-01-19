@@ -249,8 +249,7 @@ void UKawaiiFluidSimulationModule::PostEditChangeProperty(FPropertyChangedEvent&
 		// Unbind from old preset's delegate, bind to new preset
 		UnbindFromPresetPropertyChanged();
 
-		bRuntimePresetDirty = true;
-		if (Preset)
+			if (Preset)
 		{
 			// SpatialHash 재구성
 			if (SpatialHash.IsValid())
@@ -302,25 +301,6 @@ void UKawaiiFluidSimulationModule::PostEditChangeProperty(FPropertyChangedEvent&
 			UpdateVolumeInfoDisplay();
 		}
 	}
-	// Override 값 변경 시
-	else if (PropertyName.ToString().StartsWith(TEXT("bOverride_")) ||
-	         PropertyName.ToString().StartsWith(TEXT("Override_")))
-	{
-		bRuntimePresetDirty = true;
-		// SmoothingRadius override 시 SpatialHash도 갱신
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidSimulationModule, Override_SmoothingRadius) ||
-		    PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidSimulationModule, bOverride_SmoothingRadius))
-		{
-			if (bOverride_SmoothingRadius && SpatialHash.IsValid())
-			{
-				SpatialHash = MakeShared<FSpatialHash>(Override_SmoothingRadius);
-			}
-			else if (!bOverride_SmoothingRadius && Preset && SpatialHash.IsValid())
-			{
-				SpatialHash = MakeShared<FSpatialHash>(Preset->SmoothingRadius);
-			}
-		}
-	}
 }
 #endif
 
@@ -332,7 +312,6 @@ void UKawaiiFluidSimulationModule::Initialize(UKawaiiFluidPresetDataAsset* InPre
 	}
 
 	Preset = InPreset;
-	bRuntimePresetDirty = true;
 
 	// SpatialHash 초기화 (Independent 모드용)
 	float SpatialHashCellSize = 20.0f;
@@ -375,7 +354,6 @@ void UKawaiiFluidSimulationModule::Shutdown()
 	Colliders.Empty();
 	SpatialHash.Reset();
 	Preset = nullptr;
-	RuntimePreset = nullptr;
 	OwnedVolumeComponent = nullptr;
 	TargetSimulationVolume = nullptr;
 
@@ -387,7 +365,6 @@ void UKawaiiFluidSimulationModule::Shutdown()
 void UKawaiiFluidSimulationModule::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 {
 	Preset = InPreset;
-	bRuntimePresetDirty = true;
 
 	// SpatialHash 재구성
 	if (Preset && SpatialHash.IsValid())
@@ -399,145 +376,6 @@ void UKawaiiFluidSimulationModule::SetPreset(UKawaiiFluidPresetDataAsset* InPres
 void UKawaiiFluidSimulationModule::InitializeSpatialHash(float InCellSize)
 {
 	SpatialHash = MakeShared<FSpatialHash>(InCellSize);
-}
-
-bool UKawaiiFluidSimulationModule::HasAnyOverride() const
-{
-	return bOverride_RestDensity || bOverride_Compliance || bOverride_SmoothingRadius ||
-	       bOverride_ViscosityCoefficient || bOverride_Gravity || bOverride_AdhesionStrength ||
-	       bOverride_ParticleRadius;
-}
-
-UKawaiiFluidPresetDataAsset* UKawaiiFluidSimulationModule::GetEffectivePreset()
-{
-	if (!HasAnyOverride())
-	{
-		return Preset;
-	}
-
-	if (bRuntimePresetDirty)
-	{
-		UpdateRuntimePreset();
-	}
-
-	return RuntimePreset.Get() ? RuntimePreset.Get() : Preset.Get();
-}
-
-void UKawaiiFluidSimulationModule::UpdateRuntimePreset()
-{
-	if (!Preset)
-	{
-		return;
-	}
-
-	// RuntimePreset이 없으면 생성
-	if (!RuntimePreset)
-	{
-		RuntimePreset = DuplicateObject<UKawaiiFluidPresetDataAsset>(Preset, GetTransientPackage());
-	}
-	else
-	{
-		// 기존 RuntimePreset을 베이스 Preset으로 리셋
-		RuntimePreset->RestDensity = Preset->RestDensity;
-		RuntimePreset->Compliance = Preset->Compliance;
-		RuntimePreset->SmoothingRadius = Preset->SmoothingRadius;
-		RuntimePreset->ViscosityCoefficient = Preset->ViscosityCoefficient;
-		RuntimePreset->Gravity = Preset->Gravity;
-		RuntimePreset->AdhesionStrength = Preset->AdhesionStrength;
-		RuntimePreset->ParticleRadius = Preset->ParticleRadius;
-	}
-
-	// Override 적용
-	if (bOverride_RestDensity)
-	{
-		RuntimePreset->RestDensity = Override_RestDensity;
-	}
-	if (bOverride_Compliance)
-	{
-		RuntimePreset->Compliance = Override_Compliance;
-	}
-	if (bOverride_SmoothingRadius)
-	{
-		RuntimePreset->SmoothingRadius = Override_SmoothingRadius;
-	}
-	if (bOverride_ViscosityCoefficient)
-	{
-		RuntimePreset->ViscosityCoefficient = Override_ViscosityCoefficient;
-	}
-	if (bOverride_Gravity)
-	{
-		RuntimePreset->Gravity = Override_Gravity;
-	}
-	if (bOverride_AdhesionStrength)
-	{
-		RuntimePreset->AdhesionStrength = Override_AdhesionStrength;
-	}
-	if (bOverride_ParticleRadius)
-	{
-		RuntimePreset->ParticleRadius = Override_ParticleRadius;
-	}
-
-	bRuntimePresetDirty = false;
-}
-
-//========================================
-// Override Setters
-//========================================
-
-void UKawaiiFluidSimulationModule::SetOverride_ParticleRadius(bool bEnable, float Value)
-{
-	bOverride_ParticleRadius = bEnable;
-	Override_ParticleRadius = Value;
-	bRuntimePresetDirty = true;
-}
-
-void UKawaiiFluidSimulationModule::SetOverride_SmoothingRadius(bool bEnable, float Value)
-{
-	bOverride_SmoothingRadius = bEnable;
-	Override_SmoothingRadius = Value;
-	bRuntimePresetDirty = true;
-
-	// SpatialHash 재생성
-	if (SpatialHash.IsValid())
-	{
-		float NewCellSize = bEnable ? Value : (Preset ? Preset->SmoothingRadius : 20.0f);
-		SpatialHash = MakeShared<FSpatialHash>(NewCellSize);
-	}
-}
-
-void UKawaiiFluidSimulationModule::SetOverride_RestDensity(bool bEnable, float Value)
-{
-	bOverride_RestDensity = bEnable;
-	Override_RestDensity = Value;
-	bRuntimePresetDirty = true;
-}
-
-void UKawaiiFluidSimulationModule::SetOverride_Compliance(bool bEnable, float Value)
-{
-	bOverride_Compliance = bEnable;
-	Override_Compliance = Value;
-	bRuntimePresetDirty = true;
-}
-
-void UKawaiiFluidSimulationModule::SetOverride_ViscosityCoefficient(bool bEnable, float Value)
-{
-	bOverride_ViscosityCoefficient = bEnable;
-	Override_ViscosityCoefficient = Value;
-	bRuntimePresetDirty = true;
-}
-
-void UKawaiiFluidSimulationModule::SetOverride_Gravity(bool bEnable, FVector Value)
-{
-	bOverride_Gravity = bEnable;
-	Override_Gravity = Value;
-	bRuntimePresetDirty = true;
-}
-
-void UKawaiiFluidSimulationModule::SetOverride_AdhesionStrength(bool bEnable, float Value)
-{
-	bOverride_AdhesionStrength = bEnable;
-	Override_AdhesionStrength = Value;
-	bRuntimePresetDirty = true;
 }
 
 AActor* UKawaiiFluidSimulationModule::GetOwnerActor() const
@@ -1616,18 +1454,11 @@ bool UKawaiiFluidSimulationModule::GetParticleInfo(int32 ParticleIndex, FVector&
 
 float UKawaiiFluidSimulationModule::GetParticleRadius() const
 {
-	// Override가 있으면 Override 값 반환
-	if (bOverride_ParticleRadius)
-	{
-		return Override_ParticleRadius;
-	}
-
-	// Preset에서 실제 시뮬레이션 파티클 반경 가져오기
 	if (Preset)
 	{
 		return Preset->ParticleRadius;
 	}
-	
+
 	return 10.0f; // 기본값
 }
 
@@ -2181,7 +2012,6 @@ void UKawaiiFluidSimulationModule::OnPresetChangedExternal(UKawaiiFluidPresetDat
 
 	// Update preset reference
 	Preset = NewPreset;
-	bRuntimePresetDirty = true;
 
 	// Update SpatialHash if it exists
 	if (SpatialHash.IsValid() && Preset)
@@ -2211,7 +2041,6 @@ void UKawaiiFluidSimulationModule::OnPresetPropertyChanged(UKawaiiFluidPresetDat
 	}
 
 	// Mark preset as dirty for runtime rebuild
-	bRuntimePresetDirty = true;
 
 	// Update SpatialHash if it exists
 	if (SpatialHash.IsValid() && Preset)
@@ -2265,8 +2094,7 @@ void UKawaiiFluidSimulationModule::OnObjectsReplaced(const TMap<UObject*, UObjec
 
 			// Update preset reference
 			Preset = NewPreset;
-			bRuntimePresetDirty = true;
-
+		
 			// Update SpatialHash if it exists
 			if (SpatialHash.IsValid() && Preset)
 			{
