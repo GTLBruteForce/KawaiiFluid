@@ -5,6 +5,7 @@
 #include "GPU/GPUFluidSimulatorShaders.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
+#include "RHIGPUReadback.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogGPUSpawnManager, Log, All);
 DEFINE_LOG_CATEGORY(LogGPUSpawnManager);
@@ -39,7 +40,21 @@ void FGPUSpawnManager::Initialize(int32 InMaxParticleCount)
 	MaxParticleCapacity = InMaxParticleCount;
 	bIsInitialized = true;
 
-	UE_LOG(LogGPUSpawnManager, Log, TEXT("GPUSpawnManager initialized with capacity: %d"), MaxParticleCapacity);
+	// Initialize source counter cache
+	CachedSourceCounts.SetNumZeroed(EGPUParticleSource::MaxSourceCount);
+
+	// Create source counter readback ring buffer
+	SourceCounterReadbacks.SetNum(SourceCounterRingBufferSize);
+	for (int32 i = 0; i < SourceCounterRingBufferSize; ++i)
+	{
+		SourceCounterReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("SourceCounterReadback_%d"), i));
+	}
+	SourceCounterWriteIndex = 0;
+	SourceCounterReadIndex = 0;
+	SourceCounterPendingCount = 0;
+
+	UE_LOG(LogGPUSpawnManager, Log, TEXT("GPUSpawnManager initialized with capacity: %d, MaxSourceCount: %d"),
+		MaxParticleCapacity, EGPUParticleSource::MaxSourceCount);
 }
 
 void FGPUSpawnManager::Release()
@@ -57,6 +72,24 @@ void FGPUSpawnManager::Release()
 		ActiveDespawnByIDs.Empty();
 		AlreadyRequestedIDs.Empty();
 		bHasPendingDespawnByIDRequests.store(false);
+	}
+
+	// Release source counter resources
+	{
+		FScopeLock Lock(&SourceCountLock);
+		SourceCounterBuffer.SafeRelease();
+		for (FRHIGPUBufferReadback* Readback : SourceCounterReadbacks)
+		{
+			if (Readback)
+			{
+				delete Readback;
+			}
+		}
+		SourceCounterReadbacks.Empty();
+		SourceCounterWriteIndex = 0;
+		SourceCounterReadIndex = 0;
+		SourceCounterPendingCount = 0;
+		CachedSourceCounts.Empty();
 	}
 
 	NextParticleID.store(0);
@@ -239,13 +272,18 @@ void FGPUSpawnManager::AddSpawnParticlesPass(
 		ERDGInitialDataFlags::None
 	);
 
+	// Get or create source counter buffer UAV
+	FRDGBufferUAVRef SourceCounterUAV = RegisterSourceCounterUAV(GraphBuilder);
+
 	FSpawnParticlesCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FSpawnParticlesCS::FParameters>();
 	PassParameters->SpawnRequests = GraphBuilder.CreateSRV(SpawnRequestBuffer);
 	PassParameters->Particles = ParticlesUAV;
 	PassParameters->ParticleCounter = ParticleCounterUAV;
+	PassParameters->SourceCounters = SourceCounterUAV;
 	PassParameters->SpawnRequestCount = ActiveSpawnRequests.Num();
 	PassParameters->MaxParticleCount = MaxParticleCount;
 	PassParameters->NextParticleID = NextParticleID.load();
+	PassParameters->MaxSourceCount = EGPUParticleSource::MaxSourceCount;
 	PassParameters->DefaultRadius = DefaultSpawnRadius;
 	PassParameters->DefaultMass = DefaultSpawnMass;
 
@@ -295,13 +333,18 @@ void FGPUSpawnManager::AddDespawnByIDPass(FRDGBuilder& GraphBuilder, FRDGBufferR
 		ERDGInitialDataFlags::None
 	);
 
+	// Get or create source counter buffer UAV for decrementing
+	FRDGBufferUAVRef SourceCounterUAV = RegisterSourceCounterUAV(GraphBuilder);
+
 	// Mark particles for removal by ID matching (binary search)
 	FMarkDespawnByIDCS::FParameters* MarkPassParameters = GraphBuilder.AllocParameters<FMarkDespawnByIDCS::FParameters>();
 	MarkPassParameters->DespawnIDs = GraphBuilder.CreateSRV(DespawnIDsBuffer);
 	MarkPassParameters->Particles = GraphBuilder.CreateSRV(InOutParticleBuffer);
 	MarkPassParameters->OutAliveMask = GraphBuilder.CreateUAV(AliveMaskBuffer);
+	MarkPassParameters->SourceCounters = SourceCounterUAV;
 	MarkPassParameters->DespawnIDCount = ActiveDespawnByIDs.Num();
 	MarkPassParameters->ParticleCount = InOutParticleCount;
+	MarkPassParameters->MaxSourceCount = EGPUParticleSource::MaxSourceCount;
 
 	const uint32 MarkPassNumGroups = FMath::DivideAndRoundUp(InOutParticleCount, FMarkDespawnByIDCS::ThreadGroupSize);
 	FComputeShaderUtils::AddPass(
@@ -427,4 +470,155 @@ void FGPUSpawnManager::OnSpawnComplete(int32 SpawnedCount)
 	{
 		NextParticleID.fetch_add(SpawnedCount);
 	}
+}
+
+//=============================================================================
+// Source Counter API (Per-Component Particle Count Tracking)
+//=============================================================================
+
+FRDGBufferUAVRef FGPUSpawnManager::RegisterSourceCounterUAV(FRDGBuilder& GraphBuilder)
+{
+	// Create persistent buffer if not exists
+	if (!SourceCounterBuffer.IsValid())
+	{
+		// Allocate on render thread via RDG
+		FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), EGPUParticleSource::MaxSourceCount);
+		FRDGBufferRef TempBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("GPUSourceCounters"));
+
+		// Initialize to zero
+		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(TempBuffer), 0u);
+
+		// Extract to persistent buffer
+		GraphBuilder.QueueBufferExtraction(TempBuffer, &SourceCounterBuffer);
+
+		UE_LOG(LogGPUSpawnManager, Log, TEXT("Created SourceCounterBuffer with %d slots"), EGPUParticleSource::MaxSourceCount);
+
+		return GraphBuilder.CreateUAV(TempBuffer);
+	}
+
+	// Register existing buffer
+	FRDGBufferRef RegisteredBuffer = GraphBuilder.RegisterExternalBuffer(SourceCounterBuffer, TEXT("GPUSourceCounters"));
+	return GraphBuilder.CreateUAV(RegisteredBuffer);
+}
+
+int32 FGPUSpawnManager::GetParticleCountForSource(int32 SourceID) const
+{
+	// SourceID 범위 체크
+	if (SourceID < 0 || SourceID >= EGPUParticleSource::MaxSourceCount)
+	{
+		return -1;  // 잘못된 SourceID
+	}
+
+	// GPU 버퍼가 아직 생성 안됐으면 데이터 없음
+	if (!SourceCounterBuffer.IsValid())
+	{
+		return -1;  // 데이터 미준비
+	}
+
+	FScopeLock Lock(&SourceCountLock);
+	if (SourceID < CachedSourceCounts.Num())
+	{
+		return CachedSourceCounts[SourceID];
+	}
+	return -1;
+}
+
+TArray<int32> FGPUSpawnManager::GetAllSourceCounts() const
+{
+	FScopeLock Lock(&SourceCountLock);
+	return CachedSourceCounts;
+}
+
+void FGPUSpawnManager::EnqueueSourceCounterReadback(FRHICommandListImmediate& RHICmdList)
+{
+	if (!SourceCounterBuffer.IsValid())
+	{
+		return;
+	}
+
+	FRHIBuffer* SourceBuffer = SourceCounterBuffer->GetRHI();
+	if (!SourceBuffer)
+	{
+		return;
+	}
+
+	// Ring buffer full - skip this frame
+	if (SourceCounterPendingCount >= SourceCounterRingBufferSize)
+	{
+		UE_LOG(LogGPUSpawnManager, Verbose, TEXT("SourceCounter ring buffer full, skipping enqueue"));
+		return;
+	}
+
+	// Enqueue to write slot
+	if (SourceCounterReadbacks.IsValidIndex(SourceCounterWriteIndex) && SourceCounterReadbacks[SourceCounterWriteIndex])
+	{
+		const uint32 CopySize = EGPUParticleSource::MaxSourceCount * sizeof(uint32);
+
+		// State transition for readback
+		RHICmdList.Transition(FRHITransitionInfo(SourceBuffer, ERHIAccess::UAVCompute, ERHIAccess::CopySrc));
+		SourceCounterReadbacks[SourceCounterWriteIndex]->EnqueueCopy(RHICmdList, SourceBuffer, CopySize);
+		RHICmdList.Transition(FRHITransitionInfo(SourceBuffer, ERHIAccess::CopySrc, ERHIAccess::UAVCompute));
+
+		// Advance write index
+		SourceCounterWriteIndex = (SourceCounterWriteIndex + 1) % SourceCounterRingBufferSize;
+		++SourceCounterPendingCount;
+	}
+}
+
+void FGPUSpawnManager::ProcessSourceCounterReadback()
+{
+	// Nothing pending
+	if (SourceCounterPendingCount <= 0)
+	{
+		return;
+	}
+
+	// Check if oldest readback is ready
+	if (!SourceCounterReadbacks.IsValidIndex(SourceCounterReadIndex) ||
+		!SourceCounterReadbacks[SourceCounterReadIndex] ||
+		!SourceCounterReadbacks[SourceCounterReadIndex]->IsReady())
+	{
+		return;
+	}
+
+	const uint32 CopySize = EGPUParticleSource::MaxSourceCount * sizeof(uint32);
+	const uint32* Data = static_cast<const uint32*>(SourceCounterReadbacks[SourceCounterReadIndex]->Lock(CopySize));
+
+	if (Data)
+	{
+		FScopeLock Lock(&SourceCountLock);
+		CachedSourceCounts.SetNum(EGPUParticleSource::MaxSourceCount);
+		for (int32 i = 0; i < EGPUParticleSource::MaxSourceCount; ++i)
+		{
+			CachedSourceCounts[i] = static_cast<int32>(Data[i]);
+		}
+	}
+
+	SourceCounterReadbacks[SourceCounterReadIndex]->Unlock();
+
+	// Advance read index
+	SourceCounterReadIndex = (SourceCounterReadIndex + 1) % SourceCounterRingBufferSize;
+	--SourceCounterPendingCount;
+}
+
+void FGPUSpawnManager::ClearSourceCounters(FRDGBuilder& GraphBuilder)
+{
+	if (!SourceCounterBuffer.IsValid())
+	{
+		return;
+	}
+
+	FRDGBufferRef RegisteredBuffer = GraphBuilder.RegisterExternalBuffer(SourceCounterBuffer, TEXT("GPUSourceCounters"));
+	AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(RegisteredBuffer), 0u);
+
+	// Also clear cached counts
+	{
+		FScopeLock Lock(&SourceCountLock);
+		for (int32& Count : CachedSourceCounts)
+		{
+			Count = 0;
+		}
+	}
+
+	UE_LOG(LogGPUSpawnManager, Log, TEXT("Cleared all source counters"));
 }

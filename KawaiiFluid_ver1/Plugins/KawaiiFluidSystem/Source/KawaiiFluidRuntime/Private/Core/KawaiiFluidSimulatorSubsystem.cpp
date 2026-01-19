@@ -149,6 +149,10 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 	{
 		AllModules.Add(Module);
 
+		// Allocate SourceID for per-component GPU counter tracking (0 ~ MaxSourceCount-1)
+		const int32 NewSourceID = AllocateSourceID();
+		Module->SetSourceID(NewSourceID);
+
 		// Early GPU setup: Initialize GPU state at registration time
 		// so spawn calls before first Tick use the correct path
 		UKawaiiFluidPresetDataAsset* Preset = Module->GetEffectivePreset();
@@ -216,8 +220,58 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 
 void UKawaiiFluidSimulatorSubsystem::UnregisterModule(UKawaiiFluidSimulationModule* Module)
 {
+	if (Module)
+	{
+		// Release SourceID back to pool
+		const int32 SourceID = Module->GetSourceID();
+		if (SourceID >= 0)
+		{
+			ReleaseSourceID(SourceID);
+			Module->SetSourceID(EGPUParticleSource::InvalidSourceID);
+		}
+	}
+
 	AllModules.Remove(Module);
 	UE_LOG(LogTemp, Verbose, TEXT("SimulationModule unregistered"));
+}
+
+//========================================
+// SourceID Allocation
+//========================================
+
+int32 UKawaiiFluidSimulatorSubsystem::AllocateSourceID()
+{
+	// Initialize bitfield on first use
+	if (UsedSourceIDs.Num() == 0)
+	{
+		UsedSourceIDs.Init(false, EGPUParticleSource::MaxSourceCount);
+	}
+
+	// Search for first available ID starting from hint
+	for (int32 i = 0; i < EGPUParticleSource::MaxSourceCount; ++i)
+	{
+		const int32 Index = (NextSourceIDHint + i) % EGPUParticleSource::MaxSourceCount;
+		if (!UsedSourceIDs[Index])
+		{
+			UsedSourceIDs[Index] = true;
+			NextSourceIDHint = (Index + 1) % EGPUParticleSource::MaxSourceCount;
+			UE_LOG(LogTemp, Log, TEXT("Subsystem::AllocateSourceID = %d"), Index);
+			return Index;
+		}
+	}
+
+	// All slots used - return invalid
+	UE_LOG(LogTemp, Warning, TEXT("Subsystem::AllocateSourceID FAILED - all %d slots in use!"), EGPUParticleSource::MaxSourceCount);
+	return EGPUParticleSource::InvalidSourceID;
+}
+
+void UKawaiiFluidSimulatorSubsystem::ReleaseSourceID(int32 SourceID)
+{
+	if (SourceID >= 0 && SourceID < UsedSourceIDs.Num())
+	{
+		UsedSourceIDs[SourceID] = false;
+		UE_LOG(LogTemp, Log, TEXT("Subsystem::ReleaseSourceID = %d"), SourceID);
+	}
 }
 
 //========================================

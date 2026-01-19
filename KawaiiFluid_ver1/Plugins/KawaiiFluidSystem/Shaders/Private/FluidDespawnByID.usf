@@ -35,9 +35,13 @@ StructuredBuffer<FGPUFluidParticle> Particles;
 // Output: Alive mask (1 = alive, 0 = dead)
 RWStructuredBuffer<uint> OutAliveMask;
 
+// Per-source particle count (decrement when particle is marked for removal)
+RWStructuredBuffer<uint> SourceCounters;
+
 // Parameters
 int DespawnIDCount;
 int ParticleCount;
+int MaxSourceCount;
 
 // ===================================================================================
 // Binary Search Function
@@ -83,12 +87,19 @@ void MarkDespawnByIDCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	if (Index >= (uint)ParticleCount)
 		return;
 
-	// Get this particle's ID
+	// Get this particle's ID and SourceID
 	const int ParticleID = Particles[Index].ParticleID;
+	const int SourceID = Particles[Index].SourceID;
 
 	// Check if this ID is in the despawn list using binary search
 	bool bShouldRemove = BinarySearchID(ParticleID);
 
 	// Write result (1 = Alive, 0 = Dead)
 	OutAliveMask[Index] = bShouldRemove ? 0 : 1;
+
+	// Decrement source counter if particle is being removed
+	if (bShouldRemove && SourceID >= 0 && SourceID < MaxSourceCount)
+	{
+		InterlockedAdd(SourceCounters[SourceID], -1);
+	}
 }

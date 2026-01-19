@@ -261,6 +261,15 @@ public:
 		return Particles.Num();
 	}
 
+	/**
+	 * Get particle count for a specific source (component)
+	 * Uses GPU source counters for per-component tracking (2-3 frame latency)
+	 * @param SourceID - Source component ID (0 to MaxSourceCount-1)
+	 * @return Particle count for the specified source, 0 if invalid or not found
+	 */
+	UFUNCTION(BlueprintPure, Category = "Fluid")
+	int32 GetParticleCountForSource(int32 SourceID) const;
+
 	//========================================
 	// 파티클 생성/삭제
 	//========================================

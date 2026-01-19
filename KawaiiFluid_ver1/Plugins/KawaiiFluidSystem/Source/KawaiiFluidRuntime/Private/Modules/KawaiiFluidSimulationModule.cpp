@@ -1386,14 +1386,38 @@ int32 UKawaiiFluidSimulationModule::SpawnParticleDirectionalHexLayer(FVector Pos
 void UKawaiiFluidSimulationModule::ClearAllParticles()
 {
 	Particles.Empty();
-	NextParticleID = 0;
 
-	// GPU 파티클도 클리어
+	// GPU 파티클 클리어 (이 Module의 SourceID 파티클만)
 	if (bGPUSimulationActive && CachedGPUSimulator)
 	{
-		CachedGPUSimulator->ClearAllParticles();
-		// GPU의 NextParticleID도 리셋 (ID 동기화)
-		CachedGPUSimulator->SetNextParticleID(0);
+		// Readback 데이터 가져오기
+		TArray<FGPUFluidParticle> ReadbackParticles;
+		if (CachedGPUSimulator->GetReadbackGPUParticles(ReadbackParticles) && ReadbackParticles.Num() > 0)
+		{
+			// 내 SourceID의 파티클 ID만 수집
+			TArray<int32> MyParticleIDs;
+			TArray<int32> AllParticleIDs;
+			MyParticleIDs.Reserve(ReadbackParticles.Num());
+			AllParticleIDs.Reserve(ReadbackParticles.Num());
+
+			for (const FGPUFluidParticle& Particle : ReadbackParticles)
+			{
+				AllParticleIDs.Add(Particle.ParticleID);
+
+				if (Particle.SourceID == CachedSourceID)
+				{
+					MyParticleIDs.Add(Particle.ParticleID);
+				}
+			}
+
+			// 내 파티클들 Despawn 요청
+			if (MyParticleIDs.Num() > 0)
+			{
+				CachedGPUSimulator->AddDespawnByIDRequests(MyParticleIDs, AllParticleIDs);
+				UE_LOG(LogTemp, Log, TEXT("ClearAllParticles: SourceID=%d, Clearing %d particles (Total=%d)"),
+					CachedSourceID, MyParticleIDs.Num(), ReadbackParticles.Num());
+			}
+		}
 	}
 }
 
@@ -1407,7 +1431,7 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticles(int32 Count)
 	// GPU 모드
 	if (bGPUSimulationActive && CachedGPUSimulator)
 	{
-		// Readback 데이터 가져오기 (브러시 삭제와 동일한 방식)
+		// Readback 데이터 가져오기
 		TArray<FGPUFluidParticle> ReadbackParticles;
 		if (!CachedGPUSimulator->GetReadbackGPUParticles(ReadbackParticles))
 		{
@@ -1419,37 +1443,51 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticles(int32 Count)
 			return 0;
 		}
 
-		// 제거할 개수 결정
-		const int32 RemoveCount = FMath::Min(Count, ReadbackParticles.Num());
-
-		// ID 배열 수집
+		// 이 Module의 파티클만 필터링 (SourceID 기반)
+		TArray<int32> MyParticleIDs;
 		TArray<int32> AllParticleIDs;
+		MyParticleIDs.Reserve(ReadbackParticles.Num());
 		AllParticleIDs.Reserve(ReadbackParticles.Num());
+
 		for (const FGPUFluidParticle& Particle : ReadbackParticles)
 		{
 			AllParticleIDs.Add(Particle.ParticleID);
+
+			// 내 SourceID의 파티클만 수집
+			if (Particle.SourceID == CachedSourceID)
+			{
+				MyParticleIDs.Add(Particle.ParticleID);
+			}
 		}
+
+		if (MyParticleIDs.Num() == 0)
+		{
+			return 0;
+		}
+
+		// 제거할 개수 결정 (내 파티클 수 기준)
+		const int32 RemoveCount = FMath::Min(Count, MyParticleIDs.Num());
 
 		// nth_element로 가장 작은 ID N개 찾기 (O(n))
-		if (RemoveCount < AllParticleIDs.Num())
+		if (RemoveCount < MyParticleIDs.Num())
 		{
-			std::nth_element(AllParticleIDs.GetData(), AllParticleIDs.GetData() + RemoveCount,
-				AllParticleIDs.GetData() + AllParticleIDs.Num());
+			std::nth_element(MyParticleIDs.GetData(), MyParticleIDs.GetData() + RemoveCount,
+				MyParticleIDs.GetData() + MyParticleIDs.Num());
 		}
 
-		// 앞쪽 RemoveCount개가 가장 작은 ID들
+		// 앞쪽 RemoveCount개가 가장 작은 ID들 (가장 오래된 파티클)
 		TArray<int32> IDsToRemove;
 		IDsToRemove.Reserve(RemoveCount);
 		for (int32 i = 0; i < RemoveCount; i++)
 		{
-			IDsToRemove.Add(AllParticleIDs[i]);
+			IDsToRemove.Add(MyParticleIDs[i]);
 		}
 
 		// Despawn 요청
 		CachedGPUSimulator->AddDespawnByIDRequests(IDsToRemove, AllParticleIDs);
 
-		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticles: Removing %d particles (IDs: %d ~ %d), ReadbackCount=%d"),
-			RemoveCount, IDsToRemove[0], IDsToRemove.Last(), ReadbackParticles.Num());
+		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticles: SourceID=%d, Removing %d particles (IDs: %d ~ %d), MyCount=%d, TotalCount=%d"),
+			CachedSourceID, RemoveCount, IDsToRemove[0], IDsToRemove.Last(), MyParticleIDs.Num(), ReadbackParticles.Num());
 
 		return RemoveCount;
 	}
@@ -1601,6 +1639,19 @@ int32 UKawaiiFluidSimulationModule::GetGPUParticleCount() const
 		return CachedGPUSimulator->GetParticleCount();
 	}
 	return 0;
+}
+
+int32 UKawaiiFluidSimulationModule::GetParticleCountForSource(int32 SourceID) const
+{
+	if (CachedGPUSimulator && CachedGPUSimulator->IsReady())
+	{
+		FGPUSpawnManager* SpawnManager = CachedGPUSimulator->GetSpawnManager();
+		if (SpawnManager)
+		{
+			return SpawnManager->GetParticleCountForSource(SourceID);
+		}
+	}
+	return -1;
 }
 
 //========================================

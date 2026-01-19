@@ -798,10 +798,14 @@ public:
 		// Atomic counter for particle count (RWStructuredBuffer<uint>)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ParticleCounter)
 
+		// Per-source particle count (atomic counters indexed by SourceID)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SourceCounters)
+
 		// Spawn parameters
 		SHADER_PARAMETER(int32, SpawnRequestCount)
 		SHADER_PARAMETER(int32, MaxParticleCount)
 		SHADER_PARAMETER(int32, NextParticleID)
+		SHADER_PARAMETER(int32, MaxSourceCount)
 		SHADER_PARAMETER(float, DefaultRadius)
 		SHADER_PARAMETER(float, DefaultMass)
 	END_SHADER_PARAMETER_STRUCT()
@@ -844,9 +848,13 @@ public:
 		// Output: Alive mask (1 = alive, 0 = dead)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, OutAliveMask)
 
+		// Per-source particle count (decrement when particle is marked for removal)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SourceCounters)
+
 		// Parameters
 		SHADER_PARAMETER(int32, DespawnIDCount)
 		SHADER_PARAMETER(int32, ParticleCount)
+		SHADER_PARAMETER(int32, MaxSourceCount)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;

@@ -6,6 +6,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
 #include "Components/FluidInteractionComponent.h"
+#include "GPU/GPUFluidParticle.h"
 #include "KawaiiFluidSimulatorSubsystem.generated.h"
 
 class UKawaiiFluidComponent;
@@ -101,6 +102,16 @@ public:
 
 	/** Get all registered modules */
 	const TArray<TObjectPtr<UKawaiiFluidSimulationModule>>& GetAllModules() const { return AllModules; }
+
+	//========================================
+	// SourceID Allocation (Per-Component GPU Counter)
+	//========================================
+
+	/** Allocate a unique SourceID (0 ~ MaxSourceCount-1) for GPU counter tracking */
+	int32 AllocateSourceID();
+
+	/** Release a SourceID back to the pool */
+	void ReleaseSourceID(int32 SourceID);
 
 	//========================================
 	// Volume Registration
@@ -211,6 +222,16 @@ private:
 	/** All registered simulation modules */
 	UPROPERTY()
 	TArray<TObjectPtr<UKawaiiFluidSimulationModule>> AllModules;
+
+	//========================================
+	// SourceID Allocation State
+	//========================================
+
+	/** Bitfield tracking used SourceIDs (index = SourceID, true = in use) */
+	TBitArray<> UsedSourceIDs;
+
+	/** Next SourceID hint for faster allocation */
+	int32 NextSourceIDHint = 0;
 
 	//========================================
 	// Volume Component Management

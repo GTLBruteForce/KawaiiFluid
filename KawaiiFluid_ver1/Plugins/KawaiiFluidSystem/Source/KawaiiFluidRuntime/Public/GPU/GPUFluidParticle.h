@@ -67,6 +67,7 @@ namespace EGPUParticleFlags
 namespace EGPUParticleSource
 {
 	constexpr int32 InvalidSourceID = -1;
+	constexpr int32 MaxSourceCount = 64;  // Maximum number of unique sources (components) for GPU counter tracking
 }
 
 /** Check if SourceID is valid */

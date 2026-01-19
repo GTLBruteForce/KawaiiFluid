@@ -363,15 +363,17 @@ void FFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FView
 	const FFluidBrushSettings& Settings = TargetComponent->BrushSettings;
 	FString ModeStr = (Settings.Mode == EFluidBrushMode::Add) ? TEXT("ADD") : TEXT("REMOVE");
 
-	// 파티클 개수
-	int32 ParticleCount = 0;
-	if (TargetComponent->GetSimulationModule())
+	// 파티클 개수 (per-source count: 이 컴포넌트가 소유한 파티클 수)
+	int32 ParticleCount = -1;
+	if (TargetComponent->GetSimulationModule()) 
 	{
-		ParticleCount = TargetComponent->GetSimulationModule()->GetParticleCount();
+		const int32 SourceID = TargetComponent->GetSimulationModule()->GetSourceID();
+		ParticleCount = TargetComponent->GetSimulationModule()->GetParticleCountForSource(SourceID);
 	}
 
-	FString InfoText = FString::Printf(TEXT("Brush: %s | Radius: %.0f | Particles: %d | [ ] Size | 1/2 Mode | ESC Exit"),
-	                               *ModeStr, Settings.Radius, ParticleCount);
+	FString ParticleStr = (ParticleCount >= 0) ? FString::FromInt(ParticleCount) : TEXT("-");
+	FString InfoText = FString::Printf(TEXT("Brush: %s | Radius: %.0f | Particles: %s | [ ] Size | 1/2 Mode | ESC Exit"),
+	                               *ModeStr, Settings.Radius, *ParticleStr);
 
 	FCanvasTextItem Text(FVector2D(10, 40), FText::FromString(InfoText),
 	                     GEngine->GetSmallFont(), GetBrushColor());

@@ -122,6 +122,50 @@ public:
 		int32& InOutParticleCount);
 
 	//=========================================================================
+	// Source Counter API (Per-Component Particle Count Tracking)
+	//=========================================================================
+
+	/**
+	 * Get persistent source counter buffer for RDG pass
+	 * Buffer contains [MaxSourceCount] uint32 counters, one per SourceID
+	 */
+	TRefCountPtr<FRDGPooledBuffer> GetSourceCounterBuffer() const { return SourceCounterBuffer; }
+
+	/**
+	 * Register source counter buffer for RDG and get UAV
+	 * Call this in simulation passes that need to update source counters
+	 */
+	FRDGBufferUAVRef RegisterSourceCounterUAV(FRDGBuilder& GraphBuilder);
+
+	/**
+	 * Get particle count for a specific source (component)
+	 * Returns cached value from last readback (2-3 frame latency)
+	 * @param SourceID - Source component ID (0 to MaxSourceCount-1)
+	 */
+	int32 GetParticleCountForSource(int32 SourceID) const;
+
+	/**
+	 * Get all source counts (returns copy of cached array)
+	 */
+	TArray<int32> GetAllSourceCounts() const;
+
+	/**
+	 * Enqueue source counter readback (call from render thread after simulation)
+	 */
+	void EnqueueSourceCounterReadback(FRHICommandListImmediate& RHICmdList);
+
+	/**
+	 * Process source counter readback (check completion, copy to cache)
+	 * Call from game thread or render thread before querying counts
+	 */
+	void ProcessSourceCounterReadback();
+
+	/**
+	 * Clear all source counters (call when clearing all particles)
+	 */
+	void ClearSourceCounters(FRDGBuilder& GraphBuilder);
+
+	//=========================================================================
 	// Configuration
 	//=========================================================================
 
@@ -227,4 +271,22 @@ private:
 
 	float DefaultSpawnRadius = 5.0f;
 	float DefaultSpawnMass = 1.0f;
+
+	//=========================================================================
+	// Source Counter (Per-Component Particle Count)
+	//=========================================================================
+
+	// GPU buffer storing per-source particle counts [MaxSourceCount]
+	TRefCountPtr<FRDGPooledBuffer> SourceCounterBuffer;
+
+	// Ring buffer for async GPU→CPU readback (handles GPU latency)
+	static constexpr int32 SourceCounterRingBufferSize = 4;
+	TArray<FRHIGPUBufferReadback*> SourceCounterReadbacks;
+	int32 SourceCounterWriteIndex = 0;  // Next slot to write (enqueue)
+	int32 SourceCounterReadIndex = 0;   // Next slot to read (process)
+	int32 SourceCounterPendingCount = 0; // Number of pending readbacks
+
+	// CPU-cached source counts (updated from readback)
+	TArray<int32> CachedSourceCounts;
+	mutable FCriticalSection SourceCountLock;
 };

@@ -455,6 +455,19 @@ void FGPUFluidSimulator::SimulateSubstep(const FGPUFluidSimulationParams& Params
 				}
 			}
 
+			// =====================================================
+			// Phase 5: Source Counter Readback (per-source particle count)
+			// Used for per-component MaxParticleCount tracking
+			// =====================================================
+			if (Self->SpawnManager.IsValid())
+			{
+				// First, process any previously completed readback
+				Self->SpawnManager->ProcessSourceCounterReadback();
+
+				// Then enqueue new readback for this frame
+				Self->SpawnManager->EnqueueSourceCounterReadback(RHICmdList);
+			}
+
 			// Mark that we have valid GPU results (buffer is ready for rendering)
 			Self->bHasValidGPUResults.store(true);
 		}

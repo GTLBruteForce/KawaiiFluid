@@ -71,10 +71,7 @@ void UKawaiiFluidComponent::OnRegister()
 		}
 		// Module에 Preset 설정 후 초기화
 		SimulationModule->Initialize(Preset);
-
-		// SourceID 설정 (에디터 모드) - 충돌 피드백에서 파티클 소속 식별용
-		SimulationModule->SetSourceID(GetUniqueID());
-
+		
 		// RenderingModule 초기화 (Preset 포함)
 		RenderingModule->Initialize(World, this, SimulationModule, Preset);
 
@@ -117,10 +114,7 @@ void UKawaiiFluidComponent::BeginPlay()
 		}
 		// Module에 Preset 설정 후 초기화
 		SimulationModule->Initialize(Preset);
-
-		// SourceID 설정 - 충돌 피드백에서 파티클 소속 식별용
-		SimulationModule->SetSourceID(GetUniqueID());
-
+		
 		// 이벤트 콜백 항상 연결 (Module에서 bEnableCollisionEvents 체크)
 		SimulationModule->SetCollisionEventCallback(
 			FOnModuleCollisionEvent::CreateUObject(this, &UKawaiiFluidComponent::HandleCollisionEvent)
@@ -638,9 +632,11 @@ void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 			return;
 		}
 
-		// 비-Recycle 모드: max 도달 시 스폰 중단
+		// 비-Recycle 모드: max 도달 시 스폰 중단 (per-source count 사용)
+		// -1 = 데이터 미준비 → 스폰 허용
+		const int32 SourceCountForStream = SimulationModule->GetParticleCountForSource(SimulationModule->GetSourceID());
 		if (!SpawnSettings.bRecycleOldestParticles && SpawnSettings.MaxParticleCount > 0 &&
-			SimulationModule->GetParticleCount() >= SpawnSettings.MaxParticleCount)
+			SourceCountForStream >= 0 && SourceCountForStream >= SpawnSettings.MaxParticleCount)
 		{
 			return;
 		}
@@ -678,8 +674,9 @@ void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 		//========================================
 		if (SpawnSettings.bRecycleOldestParticles && SpawnSettings.MaxParticleCount > 0 && TotalSpawned > 0)
 		{
-			const int32 CurrentCount = SimulationModule->GetParticleCount();  // 이미 pending spawn 포함
-			if (CurrentCount > SpawnSettings.MaxParticleCount)
+			const int32 CurrentCount = SimulationModule->GetParticleCountForSource(SimulationModule->GetSourceID());
+			// -1 = 데이터 미준비 → Recycle 스킵
+			if (CurrentCount >= 0 && CurrentCount > SpawnSettings.MaxParticleCount)
 			{
 				const int32 ToRemove = CurrentCount - SpawnSettings.MaxParticleCount;
 				SimulationModule->RemoveOldestParticles(ToRemove);
@@ -711,9 +708,11 @@ void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 			return;
 		}
 
-		// 비-Recycle 모드: max 도달 시 스폰 중단
+		// 비-Recycle 모드: max 도달 시 스폰 중단 (per-source count 사용)
+		// -1 = 데이터 미준비 → 스폰 허용
+		const int32 SourceCountForSpray = SimulationModule->GetParticleCountForSource(SimulationModule->GetSourceID());
 		if (!SpawnSettings.bRecycleOldestParticles && SpawnSettings.MaxParticleCount > 0 &&
-			SimulationModule->GetParticleCount() >= SpawnSettings.MaxParticleCount)
+			SourceCountForSpray >= 0 && SourceCountForSpray >= SpawnSettings.MaxParticleCount)
 		{
 			return;
 		}
@@ -732,8 +731,9 @@ void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 		//========================================
 		if (SpawnSettings.bRecycleOldestParticles && SpawnSettings.MaxParticleCount > 0)
 		{
-			const int32 CurrentCount = SimulationModule->GetParticleCount();
-			if (CurrentCount > SpawnSettings.MaxParticleCount)
+			const int32 CurrentCount = SimulationModule->GetParticleCountForSource(SimulationModule->GetSourceID());
+			// -1 = 데이터 미준비 → Recycle 스킵
+			if (CurrentCount >= 0 && CurrentCount > SpawnSettings.MaxParticleCount)
 			{
 				const int32 ToRemove = CurrentCount - SpawnSettings.MaxParticleCount;
 				SimulationModule->RemoveOldestParticles(ToRemove);
@@ -1186,20 +1186,24 @@ void UKawaiiFluidComponent::AddParticlesInRadius(const FVector& WorldCenter, flo
 	SimulationModule->Modify();
 #endif
 
-	// MaxParticleCount 체크 (브러시는 단순하게 - 공간 있으면 스폰)
+	// MaxParticleCount 체크 (브러시는 단순하게 - 공간 있으면 스폰, per-source count 사용)
+	// -1 = 데이터 미준비 → 제한 없이 스폰 허용
 	int32 ActualCount = Count;
 	if (SpawnSettings.MaxParticleCount > 0)
 	{
-		const int32 CurrentCount = SimulationModule->GetParticleCount();
-		const int32 Available = SpawnSettings.MaxParticleCount - CurrentCount;
+		const int32 CurrentCount = SimulationModule->GetParticleCountForSource(SimulationModule->GetSourceID());
+		if (CurrentCount >= 0)  // 데이터 준비됨
+		{
+			const int32 Available = SpawnSettings.MaxParticleCount - CurrentCount;
 
-		if (Available <= 0)
-		{
-			return;  // 공간 없음 - 스폰 안함
-		}
-		else if (Available < Count)
-		{
-			ActualCount = Available;  // 남은 공간만큼만
+			if (Available <= 0)
+			{
+				return;  // 공간 없음 - 스폰 안함
+			}
+			else if (Available < Count)
+			{
+				ActualCount = Available;  // 남은 공간만큼만
+			}
 		}
 	}
 
@@ -1254,9 +1258,10 @@ int32 UKawaiiFluidComponent::RemoveParticlesInRadius(const FVector& WorldCenter,
 		return 0;
 	}
 
-	// Find particles within radius and collect their IDs
+	// Find particles within radius and collect their IDs (filtered by SourceID)
 	const float RadiusSq = Radius * Radius;
 	const FVector3f WorldCenterF = FVector3f(WorldCenter);
+	const int32 MySourceID = SimulationModule->GetSourceID();
 	TArray<int32> ParticleIDsToRemove;
 	TArray<int32> AllReadbackIDs;
 	ParticleIDsToRemove.Reserve(128);  // Pre-allocate for typical brush operation
@@ -1265,6 +1270,12 @@ int32 UKawaiiFluidComponent::RemoveParticlesInRadius(const FVector& WorldCenter,
 	for (const FGPUFluidParticle& Particle : ReadbackParticles)
 	{
 		AllReadbackIDs.Add(Particle.ParticleID);
+
+		// 내 SourceID의 파티클만 제거 대상으로
+		if (Particle.SourceID != MySourceID)
+		{
+			continue;
+		}
 
 		const float DistSq = FVector3f::DistSquared(Particle.Position, WorldCenterF);
 		if (DistSq <= RadiusSq)

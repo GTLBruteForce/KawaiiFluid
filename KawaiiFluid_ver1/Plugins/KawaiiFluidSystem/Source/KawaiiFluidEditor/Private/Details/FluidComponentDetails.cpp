@@ -98,10 +98,16 @@ void FFluidComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 		{
 			if (TargetComponent.IsValid() && TargetComponent->GetSimulationModule())
 			{
-				int32 Count = TargetComponent->GetSimulationModule()->GetParticleCount();
+				// Per-source count: 이 컴포넌트가 소유한 파티클 수만 표시
+				const int32 SourceID = TargetComponent->GetSimulationModule()->GetSourceID();
+				int32 Count = TargetComponent->GetSimulationModule()->GetParticleCountForSource(SourceID);
+				if (Count < 0)
+				{
+					return FText::FromString(TEXT("-"));  // 데이터 미준비
+				}
 				return FText::AsNumber(Count);
 			}
-			return FText::FromString(TEXT("0"));
+			return FText::FromString(TEXT("-"));
 		})
 		.Font(IDetailLayoutBuilder::GetDetailFont())
 	];

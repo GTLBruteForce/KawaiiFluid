@@ -42,10 +42,14 @@ RWStructuredBuffer<FGPUFluidParticle> Particles;
 // CounterBuffer[0] = current particle count
 RWStructuredBuffer<uint> ParticleCounter;
 
+// Per-source particle count (indexed by SourceID, 0 ~ MaxSourceCount-1)
+RWStructuredBuffer<uint> SourceCounters;
+
 // Spawn parameters
 int SpawnRequestCount;      // Number of spawn requests this frame
 int MaxParticleCount;       // Maximum particle capacity (buffer size)
 int NextParticleID;         // Starting ID for new particles
+int MaxSourceCount;         // Maximum number of source slots (for bounds check)
 float DefaultRadius;        // Default radius if request.Radius == 0
 float DefaultMass;          // Default mass if request.Mass == 0
 
@@ -108,6 +112,13 @@ void SpawnParticlesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	// Write to particle buffer
 	Particles[particleIdx] = newParticle;
+
+	// Increment source counter (for per-component particle count tracking)
+	int sourceIdx = request.SourceID;
+	if (sourceIdx >= 0 && sourceIdx < MaxSourceCount)
+	{
+		InterlockedAdd(SourceCounters[sourceIdx], 1);
+	}
 }
 
 //=============================================================================
@@ -192,4 +203,11 @@ void SpawnParticlesBatchCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	newParticle.NeighborCount = 0;
 
 	Particles[particleIdx] = newParticle;
+
+	// Increment source counter (for per-component particle count tracking)
+	int sourceIdx = request.SourceID;
+	if (sourceIdx >= 0 && sourceIdx < MaxSourceCount)
+	{
+		InterlockedAdd(SourceCounters[sourceIdx], 1);
+	}
 }

@@ -622,6 +622,11 @@ public:
 	 */
 	void SetNextParticleID(int32 ID) { if (SpawnManager.IsValid()) SpawnManager->SetNextParticleID(ID); }
 
+	/**
+	 * Get the spawn manager (for per-source particle count tracking)
+	 */
+	FGPUSpawnManager* GetSpawnManager() const { return SpawnManager.Get(); }
+
 private:
 	//=============================================================================
 	// Internal Methods
