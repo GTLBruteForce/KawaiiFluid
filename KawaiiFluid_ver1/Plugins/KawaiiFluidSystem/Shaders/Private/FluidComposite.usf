@@ -33,6 +33,18 @@ float SpecularStrength;
 float SpecularRoughness;
 float4 EnvironmentLightColor;
 
+// -----------------------------------------------------------------------------
+// Multi-Light Support
+// Packed as float4 arrays for shader compatibility:
+// - LightDirectionsAndIntensity[i] = (Direction.xyz, Intensity)
+// - LightColors[i] = (Color.rgb, unused)
+// -----------------------------------------------------------------------------
+#define FLUID_MAX_LIGHTS 8
+
+int NumLights;  // Number of active lights (0 = use View.DirectionalLight fallback)
+float4 LightDirectionsAndIntensity[FLUID_MAX_LIGHTS];
+float4 LightColors[FLUID_MAX_LIGHTS];
+
 // Lighting Scale Parameters
 float AmbientScale;
 float TransmittanceScale;
@@ -161,7 +173,11 @@ float G_Smith(float NoV, float NoL, float Roughness)
 /**
  * Fresnel-Schlick approximation.
  *
- * @param CosTheta - Dot product of Half vector and View direction
+ * For direct lighting (point/directional), CosTheta should be HoV (Half·View).
+ * This is physically correct for microfacet theory where each microfacet
+ * reflects light along the half vector direction.
+ *
+ * @param CosTheta - Typically dot(HalfVector, ViewDir) for direct lighting
  * @param F0 - Reflectance at normal incidence
  * @return Fresnel reflectance
  */
@@ -474,39 +490,89 @@ void MainPS(
 	}
 	float3 F0 = float3(FinalF0, FinalF0, FinalF0);
 
-	// B. PBR Lighting (Cook-Torrance BRDF) - using scene's actual directional light
-	float3 LightDir = normalize(-View.DirectionalLightDirection);
-	float3 LightColor = View.DirectionalLightColor.rgb;
-
-	// Common dot products (use LightingNormal for stable shading)
-	float NoL = saturate(dot(LightingNormal, LightDir));
-	float3 HalfDir = normalize(LightDir + ViewDir);
-	float NoH = saturate(dot(LightingNormal, HalfDir));
-	float HoV = saturate(dot(HalfDir, ViewDir));
+	// B. PBR Lighting (Cook-Torrance BRDF) - Multi-Light Support
+	// ========================================================================
+	// Loops over all active lights and accumulates Cook-Torrance contributions.
+	// Each light needs its own half-vector and HoV for physically correct Fresnel.
+	// Falls back to View.DirectionalLight if NumLights == 0.
+	// ========================================================================
 
 	// Roughness (clamp to avoid divide by zero in GGX)
 	float Roughness = max(SpecularRoughness, 0.04);
 
-	// Cook-Torrance Specular BRDF
-	float3 SpecularFresnel;
-	float3 SpecularBRDF = CookTorranceBRDF(NoV, NoL, NoH, HoV, Roughness, F0, SpecularFresnel);
-	float3 Specular = SpecularBRDF * LightColor * NoL * SpecularStrength;
+	// Accumulated lighting results
+	float3 TotalSpecular = float3(0, 0, 0);
+	float3 TotalDiffuse = float3(0, 0, 0);
+	float3 TotalSSSLightColor = float3(0, 0, 0);  // For SSS calculation later
 
-	// Energy Conservation: diffuse is reduced by specular reflection
-	// kD = 1 - kS (for dielectrics, metallic = 0)
-	float3 kD = 1.0 - SpecularFresnel;
+	// Determine effective light count (fallback to View.DirectionalLight if 0)
+	int EffectiveLightCount = (NumLights > 0) ? NumLights : 1;
 
-	// Diffuse (Lambert with energy conservation)
-	float3 DiffuseLighting = kD * NoL * LightColor;
+	for (int LightIndex = 0; LightIndex < EffectiveLightCount; LightIndex++)
+	{
+		float3 LightDir;
+		float3 LightColor;
+
+		if (NumLights > 0)
+		{
+			// Unpack light from float4 arrays
+			// LightDirectionsAndIntensity[i] = (Direction.xyz, Intensity)
+			// LightColors[i] = (Color.rgb, unused)
+			float4 DirAndIntensity = LightDirectionsAndIntensity[LightIndex];
+			float4 ColorPacked = LightColors[LightIndex];
+
+			LightDir = normalize(-DirAndIntensity.xyz);
+			float Intensity = DirAndIntensity.w;
+			LightColor = ColorPacked.rgb * Intensity;
+		}
+		else
+		{
+			// Fallback: use View's main directional light
+			LightDir = normalize(-View.DirectionalLightDirection);
+			LightColor = View.DirectionalLightColor.rgb;
+		}
+
+		// Per-light dot products (use LightingNormal for stable shading)
+		float NoL = saturate(dot(LightingNormal, LightDir));
+		float3 HalfDir = normalize(LightDir + ViewDir);
+		float NoH = saturate(dot(LightingNormal, HalfDir));
+		float HoV = saturate(dot(HalfDir, ViewDir));
+
+		// Cook-Torrance Specular BRDF
+		// Each light has its own HoV for physically correct Fresnel
+		float3 SpecularFresnel;
+		float3 SpecularBRDF = CookTorranceBRDF(NoV, NoL, NoH, HoV, Roughness, F0, SpecularFresnel);
+		TotalSpecular += SpecularBRDF * LightColor * NoL * SpecularStrength;
+
+		// Energy Conservation: diffuse is reduced by specular reflection
+		// kD = 1 - kS (for dielectrics, metallic = 0)
+		float3 kD = 1.0 - SpecularFresnel;
+
+		// Diffuse (Lambert with energy conservation)
+		TotalDiffuse += kD * NoL * LightColor;
+
+		// Accumulate light color for SSS
+		TotalSSSLightColor += LightColor * NoL;
+	}
+
+	// Use accumulated specular
+	float3 Specular = TotalSpecular;
 
 	// Ambient (prevents completely dark surfaces)
 	float3 AmbientColor = EnvironmentLightColor.rgb * AmbientScale;
 
 	// Total Lighting (diffuse + ambient, specular added separately)
-	float3 TotalLighting = DiffuseLighting + AmbientColor;
+	float3 TotalLighting = TotalDiffuse + AmbientColor;
 
-	// Fresnel for reflection (use NoV-based Fresnel for environment reflections)
-	// Standard Schlick Fresnel with F0 already scaled by FresnelStrength
+	// Fresnel for environment reflection (IBL/Cubemap/SSR)
+	// ========================================================================
+	// Unlike direct lighting which uses HoV (Half·View), environment reflection
+	// uses NoV (Normal·View) as an approximation. This is because:
+	// - Environment light comes from ALL directions, not a single light direction
+	// - Therefore, no single half-vector can be defined
+	// - NoV approximation is the industry standard (UE4/5, Unity, Frostbite)
+	// - Reference: "Real Shading in Unreal Engine 4" (Brian Karis, SIGGRAPH 2013)
+	// ========================================================================
 	float Fresnel = F0.r + (1.0 - F0.r) * pow(1.0 - NoV, 5.0);
 
 	// C. Subsurface Scattering (SSS) - Jelly Effect
@@ -514,11 +580,12 @@ void MainPS(
 	// Rim-based SSS: Light transmits through at edges (where NoV is small)
 	// - RimFactor: Larger at edges (1.0 - NoV)
 	// - Thickness coupling: Stronger transmission in thin areas
+	// - Uses accumulated light color from all lights (TotalSSSLightColor)
 	// ========================================================================
 	float RimFactor = 1.0 - NoV;
 	float ThicknessSSSMask = exp(-Thickness * 0.05);  // Stronger SSS in thin areas
 	float SSSFactor = smoothstep(0.3, 1.0, RimFactor) * SSSIntensity * ThicknessSSSMask * 0.5;
-	float3 SSSContribution = SSSColor.rgb * SSSFactor * LightColor;
+	float3 SSSContribution = SSSColor.rgb * SSSFactor * TotalSSSLightColor;
 
 	// ========================================================================
 	// Color Compositing (Flex-style Simple Approach)

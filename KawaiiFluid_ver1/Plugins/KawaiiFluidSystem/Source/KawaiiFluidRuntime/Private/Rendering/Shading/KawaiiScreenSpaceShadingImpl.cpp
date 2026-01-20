@@ -240,6 +240,28 @@ void KawaiiScreenSpaceShading::RenderPostProcessShading(
 	PassParameters->ReflectionIntensity = RenderParams.ReflectionIntensity;
 	PassParameters->ReflectionMipLevel = RenderParams.ReflectionMipLevel;
 
+	// Multi-Light parameters
+	// ========================================================================
+	// NumLights = 0 means fallback to View.DirectionalLight (single main light).
+	// To use multiple lights, populate the packed float4 arrays from scene or external source.
+	// - LightDirectionsAndIntensity[i] = FVector4f(Direction.X, Direction.Y, Direction.Z, Intensity)
+	// - LightColors[i] = FVector4f(Color.R, Color.G, Color.B, 0.0f)
+	// ========================================================================
+	PassParameters->NumLights = 0;  // Default: use View.DirectionalLight fallback
+
+	// TODO: Populate lights from FScene if needed
+	// Example future implementation:
+	// const FScene* Scene = static_cast<const FViewInfo&>(View).Family->Scene->GetRenderScene();
+	// for (int32 i = 0; i < FMath::Min(NumSceneLights, FLUID_MAX_LIGHTS); i++)
+	// {
+	//     FVector3f Dir = GetLightDirection(i);
+	//     float Intensity = GetLightIntensity(i);
+	//     FLinearColor Color = GetLightColor(i);
+	//     PassParameters->LightDirectionsAndIntensity[i] = FVector4f(Dir.X, Dir.Y, Dir.Z, Intensity);
+	//     PassParameters->LightColors[i] = FVector4f(Color.R, Color.G, Color.B, 0.0f);
+	//     PassParameters->NumLights++;
+	// }
+
 	// SSR parameters
 	PassParameters->bEnableSSR = RenderParams.bEnableSSR ? 1 : 0;
 	PassParameters->SSRMaxSteps = RenderParams.SSRMaxSteps;

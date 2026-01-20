@@ -76,31 +76,37 @@ float3 CalculateViewRayDirection(float2 ScreenUV, float4x4 InverseProjectionMatr
  * UE5 coordinate conventions:
  * - Screen UV: (0,0) = top-left, (1,1) = bottom-right
  * - Clip Space: (-1,-1) = bottom-left, (1,1) = top-right (Y is flipped from UV)
- * - View Space: Z < 0 = in front of camera
+ * - View Space: X = right, Y = up, Z = backward (camera looks toward -Z)
+ *   Objects in front of camera have Z < 0
  *
  * @param ScreenUV Screen UV coordinates (0~1)
  * @param LinearDepth Linear depth (positive, distance from camera)
  * @param InverseProjectionMatrix Inverse projection matrix
- * @return View Space position (Z < 0)
+ * @return View Space position (Z < 0 for visible objects)
  */
 float3 ReconstructViewPositionFromDepth(float2 ScreenUV, float LinearDepth, float4x4 InverseProjectionMatrix)
 {
-	// Convert UV to Clip Space (Y-axis flip applied)
-	// UV (0,0) top-left -> Clip (-1, 1) top-left
+	// Step 1: UV -> Clip Space (with Y-axis flip)
+	// UV (0,0) top-left  -> Clip (-1, +1)
+	// UV (1,1) bot-right -> Clip (+1, -1)
 	float2 ClipXY = float2(ScreenUV.x * 2.0 - 1.0, 1.0 - ScreenUV.y * 2.0);
+
+	// Z = 0.5 is arbitrary - we only need the ray DIRECTION, not a specific depth.
+	// Any Z value yields the same ray direction after normalization.
 	float4 ClipPosition = float4(ClipXY, 0.5, 1.0);
 
-	// Clip Space -> View Space
+	// Step 2: Clip Space -> View Space (via InverseProjectionMatrix)
 	float4 ViewPosition = mul(ClipPosition, InverseProjectionMatrix);
 	ViewPosition /= ViewPosition.w;
 
-	// Calculate View Ray direction (normalized to Z = 1)
-	// Use abs() to ensure sign consistency
+	// Step 3: Normalize ray direction (scale so |Z| = 1)
+	// This gives us a unit ray in the Z direction that we can scale by LinearDepth.
 	float3 ViewRay = ViewPosition.xyz / abs(ViewPosition.z);
 
-	// Apply Linear Depth to calculate final position
-	// In View Space, Z < 0 is in front of camera
-	// UE5's InverseProjectionMatrix outputs Z+ as forward, so X,Y must also be negated
+	// Step 4: Scale ray by LinearDepth and flip to UE5 View Space convention
+	// UE5's InverseProjectionMatrix outputs Z+ as forward, but UE5 View Space
+	// convention is Z- as forward. We negate all components to convert.
+	// Result: Z = -Depth (always negative, in front of camera)
 	float Depth = abs(LinearDepth);
 	return float3(-ViewRay.x, -ViewRay.y, -1.0) * Depth;
 }
