@@ -27,6 +27,11 @@ BEGIN_SHADER_PARAMETER_STRUCT(FFluidCompositeParameters, )
     SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
 
     SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
+    SHADER_PARAMETER_SAMPLER(SamplerState, PointClampSampler)  // Point sampling for depth textures
+
+    // UV scaling for SceneColor/SceneDepth (ViewRect / TextureSize)
+    // Needed when texture size differs from ViewRect (e.g., Screen Percentage)
+    SHADER_PARAMETER(FVector2f, SceneUVScale)
 
     // ------------------------------------------------------
     // Matrices

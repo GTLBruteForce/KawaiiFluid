@@ -10,6 +10,20 @@
 #include "RHIStaticStates.h"
 
 //=============================================================================
+// Console Variables
+//=============================================================================
+
+static TAutoConsoleVariable<int32> CVarFluidSurfaceDecorationDebug(
+	TEXT("r.Fluid.SurfaceDecorationDebug"),
+	0,
+	TEXT("Surface Decoration debug visualization mode.\n")
+	TEXT("0: Off (normal rendering)\n")
+	TEXT("1: AccumulatedFlow (Red=X, Green=Y magnitude)\n")
+	TEXT("2: Velocity (Blue=velocity magnitude)\n")
+	TEXT("3: Both (AccumulatedFlow + Velocity)"),
+	ECVF_RenderThreadSafe);
+
+//=============================================================================
 // Surface Decoration Compute Shader
 //=============================================================================
 
@@ -363,12 +377,11 @@ void RenderFluidSurfaceDecorationPass(
 	PassParameters->View = View.ViewUniformBuffer;
 
 	// Debug mode: 0=off, 1=AccumulatedFlow, 2=Velocity, 3=Both
-	// Change this value to debug flow accumulation:
+	// Use console variable: r.Fluid.SurfaceDecorationDebug
 	// - Mode 1: Red/Green shows AccumulatedFlow.xy magnitude
 	// - Mode 2: Blue shows Velocity magnitude
 	// - Mode 3: Shows both
-	// TODO: Expose as runtime parameter or console variable
-	PassParameters->DebugMode = 0;
+	PassParameters->DebugMode = CVarFluidSurfaceDecorationDebug.GetValueOnRenderThread();
 
 	// Output
 	PassParameters->OutputTexture = GraphBuilder.CreateUAV(OutDecoratedTexture);

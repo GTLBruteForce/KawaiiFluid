@@ -179,6 +179,20 @@ void KawaiiScreenSpaceShading::RenderPostProcessShading(
 	PassParameters->View = View.ViewUniformBuffer;
 	PassParameters->InputSampler = TStaticSamplerState<
 		SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+	PassParameters->PointClampSampler = TStaticSamplerState<
+		SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+
+	// UV scaling for SceneColor/SceneDepth sampling
+	// When Screen Percentage < 100%, ViewRect is smaller than texture size
+	FVector2f SceneUVScale(1.0f, 1.0f);
+	if (SceneColorTexture)
+	{
+		FIntPoint TextureSize = SceneColorTexture->Desc.Extent;
+		SceneUVScale = FVector2f(
+			(float)Output.ViewRect.Width() / (float)TextureSize.X,
+			(float)Output.ViewRect.Height() / (float)TextureSize.Y);
+	}
+	PassParameters->SceneUVScale = SceneUVScale;
 
 	// View matrices
 	PassParameters->InverseProjectionMatrix =

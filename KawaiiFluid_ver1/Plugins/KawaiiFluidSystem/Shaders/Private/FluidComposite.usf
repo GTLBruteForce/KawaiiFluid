@@ -12,6 +12,11 @@ Texture2D<float> SceneDepthTexture;
 Texture2D<float4> SceneColorTexture;
 
 SamplerState InputSampler;
+SamplerState PointClampSampler;  // Point sampling for depth textures to avoid edge interpolation artifacts
+
+// UV scaling for SceneColor/SceneDepth (ViewRect / TextureSize)
+// Needed when texture size differs from ViewRect (e.g., Screen Percentage)
+float2 SceneUVScale;
 
 float4x4 InverseProjectionMatrix;
 float4x4 ProjectionMatrix;
@@ -274,8 +279,9 @@ float TraceSSR(float3 RayOrigin, float3 RayDir, out float2 OutHitUV, out float3 
 			break;
 		}
 
-		// Sample scene depth at projected UV
-		float SceneDeviceZ = SceneDepthTexture.SampleLevel(InputSampler, CurrentUV, 0).r;
+		// Sample scene depth at projected UV (apply SceneUVScale for correct sampling)
+		float2 CurrentSceneUV = CurrentUV * SceneUVScale;
+		float SceneDeviceZ = SceneDepthTexture.SampleLevel(InputSampler, CurrentSceneUV, 0).r;
 		float SceneDepth = ConvertFromDeviceZ(SceneDeviceZ);
 		float RayDepth = -CurrentPos.z;
 
@@ -335,8 +341,9 @@ float TraceSSR(float3 RayOrigin, float3 RayDir, out float2 OutHitUV, out float3 
 
 					if (MidUV.x >= 0 && MidUV.x <= 1 && MidUV.y >= 0 && MidUV.y <= 1)
 					{
+						float2 MidSceneUV = MidUV * SceneUVScale;
 						float MidSceneZ = ConvertFromDeviceZ(
-							SceneDepthTexture.SampleLevel(InputSampler, MidUV, 0).r
+							SceneDepthTexture.SampleLevel(InputSampler, MidSceneUV, 0).r
 						);
 						float MidRayZ = -Mid.z;
 
@@ -352,9 +359,10 @@ float TraceSSR(float3 RayOrigin, float3 RayDir, out float2 OutHitUV, out float3 
 					}
 				}
 
-				// Output hit
+				// Output hit (apply SceneUVScale for correct sampling)
 				OutHitUV = HitUV;
-				OutHitColor = SceneColorTexture.SampleLevel(InputSampler, HitUV, 0).rgb;
+				float2 HitSceneUV = HitUV * SceneUVScale;
+				OutHitColor = SceneColorTexture.SampleLevel(InputSampler, HitSceneUV, 0).rgb;
 
 				// Fade factors
 				float2 EdgeDist = min(HitUV, 1.0 - HitUV);
@@ -379,8 +387,12 @@ void MainPS(
 {
 	float2 UV = Input.UV;
 
+	// SceneUV for sampling SceneColor/SceneDepth (handles Screen Percentage)
+	float2 SceneUV = UV * SceneUVScale;
+
 	// 1. Sample fluid depth (assumed to be linear depth)
-	float FluidDepth = FluidDepthTexture.Sample(InputSampler, UV);
+	// Use point sampling to avoid edge interpolation artifacts (white border at fluid-mesh boundary)
+	float FluidDepth = FluidDepthTexture.Sample(PointClampSampler, UV);
 
 	// Handle background (no fluid)
 	// FluidDepth is initialized to a very large value (e.g., 3.4e38)
@@ -391,7 +403,7 @@ void MainPS(
 	}
 
 	// 2. Get scene depth (DeviceZ -> Linear)
-	float SceneDeviceZ = SceneDepthTexture.SampleLevel(InputSampler, UV, 0).r;
+	float SceneDeviceZ = SceneDepthTexture.SampleLevel(InputSampler, SceneUV, 0).r;
 	float SceneLinearDepth = ConvertFromDeviceZ(SceneDeviceZ);
 
 	// 3. Occlusion test - discard fluid pixels behind scene geometry
@@ -402,8 +414,9 @@ void MainPS(
 	}
 
 	// 4. Sample fluid properties
-	float3 Normal = FluidNormalTexture.Sample(InputSampler, UV).xyz;
-	float Thickness = FluidThicknessTexture.Sample(InputSampler, UV).r;
+	// Use point sampling to avoid edge interpolation artifacts at fluid boundary
+	float3 Normal = FluidNormalTexture.Sample(PointClampSampler, UV).xyz;
+	float Thickness = FluidThicknessTexture.Sample(PointClampSampler, UV).r;
 
 	// Normal validation with proper NaN/Inf check
 	bool bInvalidNormal = any(isnan(Normal)) || any(isinf(Normal)) || length(Normal) < 0.1f;
@@ -509,8 +522,8 @@ void MainPS(
 	// ========================================================================
 	float3 FinalColor;
 
-	// 1. Sample scene color (background)
-	float3 SceneColor = SceneColorTexture.Sample(InputSampler, UV).rgb;
+	// 1. Sample scene color (background) - use SceneUV for correct texture mapping
+	float3 SceneColor = SceneColorTexture.Sample(InputSampler, SceneUV).rgb;
 
 	// 2. Sample refracted background color (with Refraction Mask)
 	// ========================================================================
@@ -527,8 +540,11 @@ void MainPS(
 	float2 RefractedUV = UV + RefractOffset;
 	RefractedUV = saturate(RefractedUV);
 
+	// Apply SceneUVScale to refracted UV for scene texture sampling
+	float2 RefractedSceneUV = RefractedUV * SceneUVScale;
+
 	// Check depth at refracted UV position
-	float RefractedSceneDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(InputSampler, RefractedUV, 0).r);
+	float RefractedSceneDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(InputSampler, RefractedSceneUV, 0).r);
 
 	// Soft refraction validity check:
 	// 1. Refracted position must be behind fluid (not sampling objects in front of fluid)
@@ -545,10 +561,11 @@ void MainPS(
 
 	float RefractionValidity = BehindFluidFactor * NotPullingForwardFactor * ScreenEdgeFade;
 
-	// Soft blend between original UV and refracted UV
+	// Soft blend between original UV and refracted UV, then apply SceneUVScale
 	float2 FinalRefractUV = lerp(UV, RefractedUV, RefractionValidity);
+	float2 FinalRefractSceneUV = FinalRefractUV * SceneUVScale;
 
-	float3 RefractedBackground = SceneColorTexture.Sample(InputSampler, FinalRefractUV).rgb;
+	float3 RefractedBackground = SceneColorTexture.Sample(InputSampler, FinalRefractSceneUV).rgb;
 
 	// 3. Beer's Law: Calculate per-channel transmittance based on thickness
 	// T(λ) = exp(-σ(λ) * thickness)
