@@ -29,6 +29,7 @@ Texture2D<float4> SecondaryLayerTexture;
 Texture2D<float2> FlowMapTexture;
 Texture2D<float2> VelocityMapTexture;     // Screen-space velocity from Depth pass (RDG)
 Texture2D<float2> AccumulatedFlowTexture; // Accumulated flow offset in world units (velocity-based, RDG)
+Texture2D<float> OcclusionMaskTexture;    // Occlusion mask (R8: 1.0=visible, 0.0=occluded by scene geometry)
 SamplerState BilinearClampSampler;        // For screen-space textures that shouldn't wrap
 
 //=============================================================================
@@ -476,6 +477,15 @@ void SurfaceDecorationCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	// Background check - pass through
 	if (Depth > BACKGROUND_DEPTH_THRESH || Thickness < 0.001)
+	{
+		OutputTexture[PixelCoord] = SceneColor;
+		return;
+	}
+
+	// Occlusion check - if pixel is occluded by scene geometry, pass through scene color
+	// OcclusionMask: 1.0 = fluid is visible, 0.0 = fluid is occluded by closer scene geometry
+	float OcclusionMask = OcclusionMaskTexture.Load(int3(SSFRPixelCoord, 0));
+	if (OcclusionMask < 0.5)
 	{
 		OutputTexture[PixelCoord] = SceneColor;
 		return;

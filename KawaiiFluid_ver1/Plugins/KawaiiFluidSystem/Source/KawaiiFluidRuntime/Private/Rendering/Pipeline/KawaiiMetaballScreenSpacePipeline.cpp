@@ -374,6 +374,7 @@ void FKawaiiMetaballScreenSpacePipeline::ExecuteRender(
 			CompositeResultTexture,
 			CachedIntermediateTextures.VelocityTexture,         // Screen-space velocity
 			CachedIntermediateTextures.AccumulatedFlowTexture,  // Accumulated flow UV offset
+			CachedIntermediateTextures.OcclusionMaskTexture,    // Occlusion mask for depth culling
 			Output.ViewRect,  // Pass the actual ViewRect where fluid was rendered
 			DecoratedTexture);
 

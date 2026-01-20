@@ -40,6 +40,7 @@ class FFluidSurfaceDecorationCS : public FGlobalShader
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SceneColorTexture)
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, VelocityMapTexture)  // Screen-space velocity (RDG, from Depth pass)
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, AccumulatedFlowTexture)  // Accumulated flow offset in world units (RDG)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, OcclusionMaskTexture)  // Occlusion mask (R8: 1.0=visible, 0.0=occluded by scene geometry)
 		SHADER_PARAMETER_SAMPLER(SamplerState, PointClampSampler)
 		SHADER_PARAMETER_SAMPLER(SamplerState, BilinearWrapSampler)
 		SHADER_PARAMETER_SAMPLER(SamplerState, BilinearMirrorSampler)  // For mirror addressing mode
@@ -181,6 +182,7 @@ void RenderFluidSurfaceDecorationPass(
 	FRDGTextureRef SceneColorTexture,
 	FRDGTextureRef VelocityMapTexture,
 	FRDGTextureRef AccumulatedFlowTexture,
+	FRDGTextureRef OcclusionMaskTexture,
 	const FIntRect& OutputViewRect,
 	FRDGTextureRef& OutDecoratedTexture)
 {
@@ -277,6 +279,29 @@ void RenderFluidSurfaceDecorationPass(
 	else
 	{
 		PassParameters->AccumulatedFlowTexture = CreateAndClearDummyTexture(TEXT("DummyAccumulatedFlow"));
+	}
+
+	// Occlusion mask texture binding
+	// Create R8 dummy texture for occlusion mask (1.0 = visible by default)
+	auto CreateAndClearOcclusionDummyTexture = [&GraphBuilder]() -> FRDGTextureRef
+	{
+		FRDGTextureDesc DummyDesc = FRDGTextureDesc::Create2D(
+			FIntPoint(4, 4),
+			PF_R8,  // Single channel for occlusion
+			FClearValueBinding(FLinearColor::White),  // 1.0 = visible (no occlusion)
+			TexCreate_ShaderResource | TexCreate_RenderTargetable);
+		FRDGTextureRef DummyTexture = GraphBuilder.CreateTexture(DummyDesc, TEXT("DummyOcclusionMask"));
+		AddClearRenderTargetPass(GraphBuilder, DummyTexture, FLinearColor::White);
+		return DummyTexture;
+	};
+
+	if (OcclusionMaskTexture)
+	{
+		PassParameters->OcclusionMaskTexture = OcclusionMaskTexture;
+	}
+	else
+	{
+		PassParameters->OcclusionMaskTexture = CreateAndClearOcclusionDummyTexture();
 	}
 
 	// Auto-enable layers if textures are assigned (user convenience)
