@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SceneComponent.h"
+#include "Components/BoxComponent.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
 #include "Components/KawaiiFluidComponent.h"  // For enums (EFluidType, EFluidDebugVisualization, etc.)
 #include "KawaiiFluidVolumeComponent.generated.h"
@@ -25,7 +25,7 @@ class UNiagaraSystem;
  * - Debug visualization
  */
 UCLASS(ClassGroup=(KawaiiFluid), meta=(BlueprintSpawnableComponent, DisplayName="Kawaii Fluid Volume"))
-class KAWAIIFLUIDRUNTIME_API UKawaiiFluidVolumeComponent : public USceneComponent
+class KAWAIIFLUIDRUNTIME_API UKawaiiFluidVolumeComponent : public UBoxComponent
 {
 	GENERATED_BODY()
 
@@ -60,16 +60,18 @@ public:
 	/**
 	 * Simulation volume size (cm) - cube dimensions when Uniform Size is checked
 	 * Particles are confined within this box. Enter the full box size (not half).
+	 * Maximum size is automatically limited by Internal Grid (Large preset) capacity.
 	 *
 	 * Example: 400 cm means a 400x400x400 cm cube.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Volume",
-		meta = (EditCondition = "bUniformSize", EditConditionHides, DisplayName = "Size", ClampMin = "10.0", ClampMax = "10240.0"))
+		meta = (EditCondition = "bUniformSize", EditConditionHides, DisplayName = "Size", ClampMin = "10.0"))
 	float UniformVolumeSize = 2560.0f;
 
 	/**
 	 * Simulation volume size (cm) - separate X/Y/Z dimensions
 	 * Particles are confined within this box. Enter the full box size (not half).
+	 * Each axis is automatically clamped to Internal Grid (Large preset) capacity.
 	 *
 	 * Example: (400, 300, 200) means a 400x300x200 cm box.
 	 */

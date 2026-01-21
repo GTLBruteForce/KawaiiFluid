@@ -14,6 +14,16 @@ UKawaiiFluidVolumeComponent::UKawaiiFluidVolumeComponent()
 	// Enable ticking in editor for debug visualization
 	bTickInEditor = true;
 
+	// UBoxComponent configuration for editor visualization and selection
+	SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	SetCollisionResponseToAllChannels(ECR_Ignore);
+	SetGenerateOverlapEvents(false);
+
+	// Wireframe visualization settings
+	LineThickness = 2.0f;
+	ShapeColor = FColor::Green;
+	bHiddenInGame = true;  // Hide wireframe at runtime by default
+
 	// Initialize default volume size based on Medium Z-Order preset and default CellSize (20.0f)
 	// Formula: GridResolution(Medium) * CellSize = 128 * 20 = 2560
 	// CellSize will be automatically derived from Preset->SmoothingRadius when Preset is set
@@ -23,8 +33,17 @@ UKawaiiFluidVolumeComponent::UKawaiiFluidVolumeComponent()
 	UniformVolumeSize = DefaultVolumeSize;
 	VolumeSize = FVector(DefaultVolumeSize);
 
-	// Calculate initial bounds
-	RecalculateBounds();
+	// Initialize BoxExtent directly (don't call SetBoxExtent in constructor)
+	// SetBoxExtent() will be called in OnRegister after the component is fully constructed
+	BoxExtent = FVector(DefaultVolumeSize * 0.5f);
+
+	// Initialize grid parameters (without calling RecalculateBounds which uses SetBoxExtent)
+	CellSize = DefaultCellSize;
+	GridResolutionPreset = EGridResolutionPreset::Medium;
+	GridAxisBits = GridResolutionPresetHelper::GetAxisBits(GridResolutionPreset);
+	GridResolution = GridResolutionPresetHelper::GetGridResolution(GridResolutionPreset);
+	MaxCells = GridResolutionPresetHelper::GetMaxCells(GridResolutionPreset);
+	BoundsExtent = static_cast<float>(GridResolution) * CellSize;
 }
 
 void UKawaiiFluidVolumeComponent::OnRegister()
@@ -59,15 +78,23 @@ void UKawaiiFluidVolumeComponent::TickComponent(float DeltaTime, ELevelTick Tick
 	// Update bounds if component moved
 	RecalculateBounds();
 
-	// Draw debug visualization
-	const bool bShouldDraw = GetWorld() &&
-		((bShowBoundsInEditor && !GetWorld()->IsGameWorld()) ||
-		 (bShowBoundsAtRuntime && GetWorld()->IsGameWorld()));
-
-	if (bShouldDraw)
+	// Update UBoxComponent visibility based on settings
+	UWorld* World = GetWorld();
+	if (World)
 	{
-		DrawBoundsVisualization();
+		const bool bIsEditor = !World->IsGameWorld();
+		const bool bShouldBeVisible = (bIsEditor && bShowBoundsInEditor) || (!bIsEditor && bShowBoundsAtRuntime);
+
+		SetHiddenInGame(!bShowBoundsAtRuntime);
+		SetVisibility(bShouldBeVisible);
+
+		// Update wireframe color based on selection
+		AActor* Owner = GetOwner();
+		ShapeColor = (Owner && Owner->IsSelected()) ? FColor::Yellow : BoundsColor;
 	}
+
+	// Draw additional debug visualization (Z-Order space, info text)
+	DrawBoundsVisualization();
 }
 
 #if WITH_EDITOR
@@ -77,6 +104,10 @@ void UKawaiiFluidVolumeComponent::PostEditChangeProperty(FPropertyChangedEvent& 
 
 	const FName PropertyName = PropertyChangedEvent.Property ?
 		PropertyChangedEvent.Property->GetFName() : NAME_None;
+
+	// MemberProperty is the outer property when editing nested struct members (e.g., FVector.X/Y/Z)
+	const FName MemberPropertyName = PropertyChangedEvent.MemberProperty ?
+		PropertyChangedEvent.MemberProperty->GetFName() : NAME_None;
 
 	// Sync size values when toggling Uniform Size mode
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, bUniformSize))
@@ -93,10 +124,27 @@ void UKawaiiFluidVolumeComponent::PostEditChangeProperty(FPropertyChangedEvent& 
 		}
 	}
 
+	// Apply minimum size constraint only (max is handled by RecalculateBounds with rotation awareness)
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, UniformVolumeSize) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, bUniformSize))
+	{
+		UniformVolumeSize = FMath::Max(UniformVolumeSize, 10.0f);
+	}
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, VolumeSize) ||
+		MemberPropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, VolumeSize) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, bUniformSize))
+	{
+		VolumeSize.X = FMath::Max(VolumeSize.X, 10.0f);
+		VolumeSize.Y = FMath::Max(VolumeSize.Y, 10.0f);
+		VolumeSize.Z = FMath::Max(VolumeSize.Z, 10.0f);
+	}
+
 	// Handle size-related property changes or Preset change (which affects CellSize)
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, bUniformSize) ||
 		PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, UniformVolumeSize) ||
 		PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, VolumeSize) ||
+		MemberPropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, VolumeSize) ||
 		PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, Preset))
 	{
 		RecalculateBounds();
@@ -109,6 +157,16 @@ void UKawaiiFluidVolumeComponent::PostEditChangeProperty(FPropertyChangedEvent& 
 				Module->UpdateVolumeInfoDisplay();
 			}
 		}
+	}
+
+	// Update wireframe appearance
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, BoundsColor))
+	{
+		ShapeColor = BoundsColor;
+	}
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, BoundsLineThickness))
+	{
+		SetLineThickness(BoundsLineThickness);
 	}
 }
 #endif
@@ -128,12 +186,121 @@ void UKawaiiFluidVolumeComponent::RecalculateBounds()
 	// Ensure valid CellSize
 	CellSize = FMath::Max(CellSize, 1.0f);
 
-	// Get user-defined volume size (full size)
-	const FVector EffectiveSize = GetEffectiveVolumeSize();
-	const FVector HalfExtent = EffectiveSize * 0.5f;
+	// Get the maximum half-extent supported by Large preset
+	const float LargeMaxHalfExtent = GridResolutionPresetHelper::GetMaxExtentForPreset(EGridResolutionPreset::Large, CellSize);
 
-	// Auto-select optimal GridResolutionPreset based on volume size
-	GridResolutionPreset = GridResolutionPresetHelper::SelectPresetForExtent(HalfExtent, CellSize);
+	// Get user-defined volume size (full size)
+	const FVector OriginalHalfExtent = GetEffectiveVolumeSize() * 0.5f;
+
+	// First pass: Clamp half-extent to Large max (without rotation)
+	FVector WorkingHalfExtent = GridResolutionPresetHelper::ClampExtentToMaxSupported(OriginalHalfExtent, CellSize);
+
+	// Get component rotation
+	const FQuat ComponentRotation = GetComponentQuat();
+
+	// Helper lambda to compute AABB half-extent from OBB half-extent and rotation
+	auto ComputeRotatedAABBHalfExtent = [&ComponentRotation](const FVector& OBBHalfExtent) -> FVector
+	{
+		if (ComponentRotation.Equals(FQuat::Identity))
+		{
+			return OBBHalfExtent;
+		}
+
+		FVector RotatedCorners[8];
+		for (int32 i = 0; i < 8; ++i)
+		{
+			FVector Corner(
+				(i & 1) ? OBBHalfExtent.X : -OBBHalfExtent.X,
+				(i & 2) ? OBBHalfExtent.Y : -OBBHalfExtent.Y,
+				(i & 4) ? OBBHalfExtent.Z : -OBBHalfExtent.Z
+			);
+			RotatedCorners[i] = ComponentRotation.RotateVector(Corner);
+		}
+
+		FVector AABBMin = RotatedCorners[0];
+		FVector AABBMax = RotatedCorners[0];
+		for (int32 i = 1; i < 8; ++i)
+		{
+			AABBMin = AABBMin.ComponentMin(RotatedCorners[i]);
+			AABBMax = AABBMax.ComponentMax(RotatedCorners[i]);
+		}
+
+		return FVector(
+			FMath::Max(FMath::Abs(AABBMin.X), FMath::Abs(AABBMax.X)),
+			FMath::Max(FMath::Abs(AABBMin.Y), FMath::Abs(AABBMax.Y)),
+			FMath::Max(FMath::Abs(AABBMin.Z), FMath::Abs(AABBMax.Z))
+		);
+	};
+
+	// Calculate the AABB extent for the rotated OBB
+	FVector EffectiveHalfExtent = WorkingHalfExtent;
+
+	if (!ComponentRotation.Equals(FQuat::Identity))
+	{
+		// Compute rotated AABB
+		EffectiveHalfExtent = ComputeRotatedAABBHalfExtent(WorkingHalfExtent);
+
+		// Check if rotated AABB exceeds Large preset limits
+		const float MaxAABBHalfExtent = FMath::Max3(EffectiveHalfExtent.X, EffectiveHalfExtent.Y, EffectiveHalfExtent.Z);
+		if (MaxAABBHalfExtent > LargeMaxHalfExtent)
+		{
+			// Scale down the original extent proportionally so rotated AABB fits within Large
+			const float ScaleFactor = LargeMaxHalfExtent / MaxAABBHalfExtent;
+			WorkingHalfExtent = WorkingHalfExtent * ScaleFactor;
+
+			// Recompute rotated AABB with scaled extent
+			EffectiveHalfExtent = ComputeRotatedAABBHalfExtent(WorkingHalfExtent);
+		}
+	}
+
+	// Apply final extent if different from original (update VolumeSize/UniformVolumeSize)
+	if (!WorkingHalfExtent.Equals(OriginalHalfExtent, 0.01f))
+	{
+		const FVector NewSize = WorkingHalfExtent * 2.0f;
+
+#if WITH_EDITOR
+		const bool bWasRotated = !ComponentRotation.Equals(FQuat::Identity);
+		const FVector OriginalSize = OriginalHalfExtent * 2.0f;
+
+		if (bWasRotated)
+		{
+			const FVector OriginalRotatedAABB = ComputeRotatedAABBHalfExtent(OriginalHalfExtent);
+			const float RotatedAABBMax = FMath::Max3(OriginalRotatedAABB.X, OriginalRotatedAABB.Y, OriginalRotatedAABB.Z);
+			UE_LOG(LogTemp, Warning, TEXT("VolumeSize adjusted: Rotated AABB (%.1f cm) exceeds limit (%.1f cm). Size scaled from (%s) to (%s)"),
+				RotatedAABBMax * 2.0f, LargeMaxHalfExtent * 2.0f, *OriginalSize.ToString(), *NewSize.ToString());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("VolumeSize exceeds limit (%.1f cm per axis). Clamped from (%s) to (%s)"),
+				LargeMaxHalfExtent * 2.0f, *OriginalSize.ToString(), *NewSize.ToString());
+		}
+#endif
+
+		// Update the stored size values
+		VolumeSize = NewSize;
+		if (bUniformSize)
+		{
+			UniformVolumeSize = FMath::Max3(NewSize.X, NewSize.Y, NewSize.Z);
+		}
+	}
+
+	// Final half-extent to use for BoxComponent
+	const FVector FinalHalfExtent = WorkingHalfExtent;
+
+	// Sync UBoxComponent's BoxExtent with our VolumeSize
+	// Only call SetBoxExtent after the component is registered (not in constructor)
+	if (IsRegistered())
+	{
+		SetBoxExtent(FinalHalfExtent, false);
+	}
+	else
+	{
+		// Direct assignment for pre-registration (constructor) phase
+		BoxExtent = FinalHalfExtent;
+	}
+
+	// Auto-select optimal GridResolutionPreset based on rotated AABB size
+	GridResolutionPreset = GridResolutionPresetHelper::SelectPresetForExtent(EffectiveHalfExtent, CellSize);
 
 	// Update grid parameters from auto-selected preset
 	GridAxisBits = GridResolutionPresetHelper::GetAxisBits(GridResolutionPreset);
@@ -213,26 +380,9 @@ void UKawaiiFluidVolumeComponent::DrawBoundsVisualization()
 		return;
 	}
 
-	AActor* Owner = GetOwner();
 	const FVector ComponentLocation = GetComponentLocation();
 
-	// Draw user-defined volume size (main wireframe)
-	const FVector UserExtent = GetVolumeHalfExtent();
-	const FColor DrawColor = (Owner && Owner->IsSelected()) ? FColor::Yellow : BoundsColor;
-
-	DrawDebugBox(
-		World,
-		ComponentLocation,
-		UserExtent,
-		FQuat::Identity,
-		DrawColor,
-		false,  // bPersistentLines
-		-1.0f,  // LifeTime (negative = one frame)
-		0,      // DepthPriority
-		BoundsLineThickness
-	);
-
-	// Optionally draw internal Z-Order space (advanced debug)
+	// Optionally draw internal Z-Order space (advanced debug) - different from user-defined volume
 	if (bShowZOrderSpaceWireframe)
 	{
 		const FVector ZOrderCenter = (WorldBoundsMin + WorldBoundsMax) * 0.5f;
@@ -251,17 +401,18 @@ void UKawaiiFluidVolumeComponent::DrawBoundsVisualization()
 		);
 	}
 
-	// Draw info text at center
+	// Draw info text at center (editor only)
 #if WITH_EDITOR
-	if (!World->IsGameWorld())
+	if (!World->IsGameWorld() && bShowBoundsInEditor)
 	{
+		const FVector UserExtent = GetVolumeHalfExtent();
 		const FVector EffectiveSize = GetEffectiveVolumeSize();
 		const FString InfoText = FString::Printf(
 			TEXT("Size: %.0fx%.0fx%.0f cm\nBounce: %.1f, Friction: %.1f"),
 			EffectiveSize.X, EffectiveSize.Y, EffectiveSize.Z,
 			WallBounce, WallFriction
 		);
-		DrawDebugString(World, ComponentLocation + FVector(0, 0, UserExtent.Z + 50.0f), InfoText, nullptr, DrawColor, -1.0f, true);
+		DrawDebugString(World, ComponentLocation + FVector(0, 0, UserExtent.Z + 50.0f), InfoText, nullptr, ShapeColor, -1.0f, true);
 	}
 #endif
 }
