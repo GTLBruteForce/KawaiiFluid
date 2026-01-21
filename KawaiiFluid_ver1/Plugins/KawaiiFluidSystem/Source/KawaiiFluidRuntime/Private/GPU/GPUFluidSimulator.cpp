@@ -88,10 +88,6 @@ void FGPUFluidSimulator::Initialize(int32 InMaxParticleCount)
 	SpawnManager = MakeUnique<FGPUSpawnManager>();
 	SpawnManager->Initialize(InMaxParticleCount);
 
-	// Initialize StreamCompactionManager
-	StreamCompactionManager = MakeUnique<FGPUStreamCompactionManager>();
-	StreamCompactionManager->Initialize(InMaxParticleCount);
-
 	// Initialize CollisionManager
 	CollisionManager = MakeUnique<FGPUCollisionManager>();
 	CollisionManager->Initialize();
@@ -136,13 +132,6 @@ void FGPUFluidSimulator::Release()
 	{
 		SpawnManager->Release();
 		SpawnManager.Reset();
-	}
-
-	// Release StreamCompactionManager
-	if (StreamCompactionManager.IsValid())
-	{
-		StreamCompactionManager->Release();
-		StreamCompactionManager.Reset();
 	}
 
 	// Release CollisionManager
@@ -2276,50 +2265,6 @@ bool FGPUFluidSimulator::GetParticlesBySourceID(int32 SourceID, TArray<FFluidPar
 	}
 
 	return OutParticles.Num() > 0;
-}
-
-//=============================================================================
-// Stream Compaction API (Delegated to FGPUStreamCompactionManager)
-//=============================================================================
-
-void FGPUFluidSimulator::ExecuteAABBFiltering(const TArray<FGPUFilterAABB>& FilterAABBs)
-{
-	if (!StreamCompactionManager.IsValid() || !bIsInitialized || CurrentParticleCount == 0)
-	{
-		return;
-	}
-
-	// Pass PersistentParticleBuffer and fallback SRV to manager
-	// Manager will create proper SRV on render thread from PersistentParticleBuffer if valid
-	StreamCompactionManager->ExecuteAABBFiltering(FilterAABBs, CurrentParticleCount, PersistentParticleBuffer, ParticleSRV);
-}
-
-bool FGPUFluidSimulator::GetFilteredCandidates(TArray<FGPUCandidateParticle>& OutCandidates)
-{
-	if (!StreamCompactionManager.IsValid())
-	{
-		OutCandidates.Empty();
-		return false;
-	}
-	return StreamCompactionManager->GetFilteredCandidates(OutCandidates);
-}
-
-void FGPUFluidSimulator::ApplyCorrections(const TArray<FParticleCorrection>& Corrections)
-{
-	if (!StreamCompactionManager.IsValid() || !bIsInitialized)
-	{
-		return;
-	}
-	StreamCompactionManager->ApplyCorrections(Corrections, PersistentParticleBuffer);
-}
-
-void FGPUFluidSimulator::ApplyAttachmentUpdates(const TArray<FAttachedParticleUpdate>& Updates)
-{
-	if (!StreamCompactionManager.IsValid() || !bIsInitialized)
-	{
-		return;
-	}
-	StreamCompactionManager->ApplyAttachmentUpdates(Updates, PersistentParticleBuffer);
 }
 
 //=============================================================================

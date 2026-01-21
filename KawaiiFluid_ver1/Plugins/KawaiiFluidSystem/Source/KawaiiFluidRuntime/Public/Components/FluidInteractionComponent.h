@@ -1,4 +1,4 @@
-﻿// Copyright KawaiiFluid Team. All Rights Reserved.
+// Copyright KawaiiFluid Team. All Rights Reserved.
 
 #pragma once
 
@@ -12,8 +12,8 @@ class UMeshFluidCollider;
 class UKawaiiFluidPresetDataAsset;
 
 /**
- * 유체 타입 Enum (BP에서 드롭다운 선택용)
- * 충돌 이벤트에서 어떤 유체와 충돌했는지 구분
+ * Fluid type enum (BP dropdown).
+ * Used to distinguish which fluid was involved in collision events.
  */
 UENUM(BlueprintType)
 enum class EFluidType : uint8
@@ -30,20 +30,6 @@ enum class EFluidType : uint8
 	Custom2		UMETA(DisplayName = "Custom2"),
 	Custom3		UMETA(DisplayName = "Custom3"),
 };
-
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFluidAttached, int32, ParticleCount);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnFluidDetached);
-
-/**
- * Collider와 충돌 시작 (파티클이 Collider 안에 들어옴)
- * @param CollidingCount 충돌 중인 파티클 수 (붙은 것 + 겹친 것)
- */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFluidColliding, int32, CollidingCount);
-
-/**
- * Collider 충돌 종료 (모든 파티클이 Collider에서 벗어남)
- */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnFluidStopColliding);
 
 //========================================
 // GPU Collision Feedback Delegates (Particle -> Player Interaction)
@@ -71,23 +57,24 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFluidExit, FName, FluidTag);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnFluidForceUpdate, FVector, Force, float, Pressure, int32, ContactCount);
 
 /**
- * 특정 본에 파티클 충돌이 발생했을 때 발생
- * Niagara 이펙트 스폰용으로 사용 (본에 Attach하면 캐릭터를 따라다님)
- * @param BoneIndex 충돌이 발생한 본 인덱스
- * @param BoneName 충돌이 발생한 본 이름
- * @param ContactCount 해당 본에 접촉 중인 파티클 수
- * @param AverageVelocity 충돌 파티클들의 평균 속도 (Niagara 방향/강도용)
- * @param FluidName 충돌한 유체의 이름 (Preset의 FluidName, Switch on Name으로 분기)
+ * Fired when particles collide with a specific bone.
+ * Used for Niagara spawning (AttachToComponent follows the bone).
+ * @param BoneIndex Bone index that received the collision
+ * @param BoneName Bone name that received the collision
+ * @param ContactCount Number of particles contacting that bone
+ * @param AverageVelocity Average velocity of colliding particles (Niagara direction/intensity)
+ * @param FluidName Name of the colliding fluid (Preset FluidName, use Switch on Name)
+ * @param ImpactOffset Offset from the bone origin to the impact location (cm)
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_SixParams(FOnBoneParticleCollision, int32, BoneIndex, FName, BoneName, int32, ContactCount, FVector, AverageVelocity, FName, FluidName, FVector, ImpactOffset);
 
 /**
- * 모니터링 중인 본에 임계값 이상의 충격이 들어왔을 때 발생 (자동 이벤트)
- * 매 틱마다 MonitoredBones 리스트를 체크하여 BoneImpactSpeedThreshold 초과 시 발생
- * @param BoneName 충격받은 본 이름
- * @param ImpactSpeed 유체의 절대 속도 (cm/s)
- * @param ImpactForce 충격력 (Newton)
- * @param ImpactDirection 충격 방향 (정규화된 벡터)
+ * Fired when a monitored bone receives an impact above the threshold.
+ * Checks MonitoredBones each tick and triggers when speed exceeds BoneImpactSpeedThreshold.
+ * @param BoneName Bone name that received the impact
+ * @param ImpactSpeed Absolute fluid speed (cm/s)
+ * @param ImpactForce Impact force (Newton)
+ * @param ImpactDirection Impact direction (normalized)
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FOnBoneFluidImpact, FName, BoneName, float, ImpactSpeed, float, ImpactForce, FVector, ImpactDirection);
 
@@ -109,240 +96,129 @@ public:
 	UPROPERTY(Transient)
 	TObjectPtr<UKawaiiFluidSimulatorSubsystem> TargetSubsystem;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction")
-	bool bCanAttachFluid;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction", meta = (ClampMin = "0.0", ClampMax = "2.0"))
-	float AdhesionMultiplier;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float DragAlongStrength;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction",
+		meta = (ToolTip = "Automatically creates and registers a MeshFluidCollider on begin play."))
 	bool bAutoCreateCollider;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Status")
-	int32 AttachedParticleCount;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Status")
-	bool bIsWet;
-
-	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
-	FOnFluidAttached OnFluidAttached;
-
-	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
-	FOnFluidDetached OnFluidDetached;
-
-	//========================================
-	// Collision Detection (Collider 기반)
-	//========================================
-
-	/** Collider 기반 충돌 감지 활성화 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Collision Detection")
-	bool bEnableCollisionDetection = false;
-
-	/** 트리거를 위한 최소 파티클 수 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Collision Detection", 
-	          meta = (EditCondition = "bEnableCollisionDetection", ClampMin = "1"))
-	int32 MinParticleCountForTrigger = 1;
-
-	/** Collider와 충돌 중인 파티클 수 (붙은 것 + 겹친 것) */
-	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Status")
-	int32 CollidingParticleCount = 0;
-
-	/** Collider 충돌 시작 이벤트 */
-	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
-	FOnFluidColliding OnFluidColliding;
-
-	/** Collider 충돌 종료 이벤트 */
-	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
-	FOnFluidStopColliding OnFluidStopColliding;
-
-	//========================================
-	// Per-Polygon Collision (Phase 2)
-	// GPU AABB Filtering + CPU Per-Polygon Collision
-	//========================================
-
-	/**
-	 * Per-Polygon Collision 활성화
-	 * 정밀한 스켈레탈 메시 충돌을 위해 GPU에서 AABB 필터링 후 CPU에서 삼각형 충돌 검사
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Polygon Collision",
-	          meta = (ToolTip = "Per-Polygon Collision 활성화.\n체크 시 스켈레탈 메쉬의 실제 삼각형과 충돌 검사를 수행합니다.\nGPU AABB 필터링 → CPU 삼각형 충돌의 하이브리드 방식으로 성능 최적화."))
-	bool bUsePerPolygonCollision = false;
-
-	/**
-	 * Per-Polygon Collision용 AABB 확장 (cm)
-	 * 캐릭터 바운딩 박스를 이 값만큼 확장하여 후보 입자 검색
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Polygon Collision",
-	          meta = (EditCondition = "bUsePerPolygonCollision", ClampMin = "0.0", ClampMax = "100.0",
-	                  ToolTip = "AABB 확장 (cm).\n캐릭터 바운딩 박스를 이 값만큼 확장하여 후보 파티클을 검색합니다.\n너무 작으면 빠른 파티클이 누락될 수 있고, 너무 크면 CPU 부하 증가."))
-	float PerPolygonAABBPadding = 10.0f;
-
-	/**
-	 * Per-Polygon Collision AABB 디버그 라인 표시
-	 * 에디터/런타임에서 AABB를 시각적으로 확인
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Polygon Collision",
-	          meta = (EditCondition = "bUsePerPolygonCollision",
-	                  ToolTip = "디버그용 AABB 박스를 화면에 표시합니다.\n파티클 필터링 범위를 시각적으로 확인할 때 사용."))
-	bool bDrawPerPolygonAABB = false;
-
-	/**
-	 * 충돌 감지 마진 (cm)
-	 * 클수록 더 일찍/멀리서 충돌 감지. ParticleRadius와 비슷하게 설정 권장
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Polygon Collision",
-	          meta = (EditCondition = "bUsePerPolygonCollision", ClampMin = "0.1", ClampMax = "20.0",
-	                  ToolTip = "충돌 감지 마진 (cm). 클수록 더 일찍/멀리서 충돌 감지합니다.\n파티클이 메쉬를 뚫고 들어가면 이 값을 높여보세요.\nParticleRadius와 비슷하게 설정 권장 (3~10)"))
-	float PerPolygonCollisionMargin = 3.0f;
-
-	/**
-	 * 표면 마찰 계수 (0-1)
-	 * 높을수록 표면에서 느리게 흐름
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Polygon Collision",
-	          meta = (EditCondition = "bUsePerPolygonCollision", ClampMin = "0.0", ClampMax = "1.0",
-	                  ToolTip = "표면 마찰 계수 (0~1).\n0: 마찰 없음 (미끄러움)\n1: 최대 마찰 (표면에서 정지)\n유체가 자연스럽게 흐르려면 0.1~0.3 권장"))
-	float PerPolygonFriction = 0.2f;
-
-	/**
-	 * 반발 계수 (0-1)
-	 * 낮을수록 표면에 붙어서 흐름, 높을수록 튕겨나감
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Polygon Collision",
-	          meta = (EditCondition = "bUsePerPolygonCollision", ClampMin = "0.0", ClampMax = "1.0",
-	                  ToolTip = "반발 계수 (0~1).\n0: 반발 없음 (표면에 붙어서 흐름)\n1: 완전 탄성 (튕겨나감)\n유체가 표면을 타고 흐르려면 0.05~0.2 권장"))
-	float PerPolygonRestitution = 0.1f;
-
-	/** Per-Polygon Collision 활성화 여부 반환 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Per-Polygon Collision")
-	bool IsPerPolygonCollisionEnabled() const { return bUsePerPolygonCollision; }
-
-	/** Per-Polygon Collision용 필터 AABB 반환 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Per-Polygon Collision")
-	FBox GetPerPolygonFilterAABB() const;
 
 	//========================================
 	// GPU Collision Feedback (Particle -> Player Interaction)
-	// GPU에서 계산된 충돌 정보를 기반으로 힘 계산 및 이벤트 발생
+	// Computes forces and fires events using GPU collision feedback data.
 	//========================================
 
 	/**
-	 * GPU 충돌 피드백 활성화
-	 * 활성화 시 GPU에서 파티클-콜라이더 충돌 정보를 리드백하여 힘/이벤트 계산
+	 * Enable GPU collision feedback.
+	 * Reads back particle-collider contacts to compute forces and events.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
-	          meta = (ToolTip = "GPU 충돌 피드백 활성화.\n활성화 시 GPU에서 파티클-콜라이더 충돌 정보를 리드백하여\n물리적 힘 계산 및 유체 이벤트(OnFluidEnter/Exit)를 발생시킵니다.\n2-3 프레임 지연이 있지만 FPS 영향은 최소화됩니다."))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Drag Force Feedback",
+	          meta = (ToolTip = "Enables GPU collision feedback.\nWhen enabled, particle-collider contacts are read back to compute physical forces and trigger fluid events (OnFluidEnter/Exit).\nThere is a 2-3 frame latency with minimal FPS impact."))
 	bool bEnableForceFeedback = false;
 
 	/**
-	 * 힘 스무딩 속도 (1/s)
-	 * 높을수록 힘 변화가 빠르고, 낮을수록 부드럽게 변화
+	 * Force smoothing speed (1/s).
+	 * Higher values respond faster; lower values are smoother.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Drag Force Feedback",
 	          meta = (EditCondition = "bEnableForceFeedback", ClampMin = "0.1", ClampMax = "50.0",
-	                  ToolTip = "힘 스무딩 속도 (1/s).\n높을수록 힘 변화가 빠르고, 낮을수록 부드럽게 변화합니다.\n급격한 힘 변화를 방지하려면 5~15 권장."))
+	                  ToolTip = "Force smoothing speed (1/s).\nHigher values react faster; lower values are smoother.\n5-15 is recommended to avoid sudden spikes."))
 	float ForceSmoothingSpeed = 10.0f;
 
 	/**
-	 * 항력 계수 (C_d)
-	 * 유체 항력 공식에서 사용되는 무차원 계수
-	 * 구체: ~0.47, 캡슐/원통: ~1.0, 사람: ~1.0-1.3
+	 * Drag coefficient (C_d).
+	 * Dimensionless coefficient used in the drag equation.
+	 * Sphere: ~0.47, capsule/cylinder: ~1.0, human: ~1.0-1.3
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Drag Force Feedback",
 	          meta = (EditCondition = "bEnableForceFeedback", ClampMin = "0.1", ClampMax = "3.0",
-	                  ToolTip = "항력 계수 (C_d).\n유체 항력 공식 F = ½ρCdA|v|² 에서 사용됩니다.\n구체: ~0.47, 캡슐/원통: ~1.0, 사람: ~1.0-1.3"))
+	                  ToolTip = "Drag coefficient (C_d).\nUsed in the drag equation F = 1/2 * rho * C_d * A * |v|^2.\nSphere: ~0.47, capsule/cylinder: ~1.0, human: ~1.0-1.3"))
 	float DragCoefficient = 1.0f;
 
 	/**
-	 * 항력 → 힘 변환 배율
-	 * 계산된 항력을 실제 게임 힘으로 변환할 때 적용되는 스케일
+	 * Drag-to-force scale.
+	 * Scales physical drag into gameplay force.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Drag Force Feedback",
 	          meta = (EditCondition = "bEnableForceFeedback", ClampMin = "0.0001", ClampMax = "10.0",
-	                  ToolTip = "항력 → 힘 변환 배율.\n물리적 항력 값을 게임에 맞게 스케일링합니다.\n파도가 캐릭터를 밀어내는 강도를 조절합니다."))
+	                  ToolTip = "Drag-to-force scale.\nScales physical drag into game force.\nAdjusts how strongly waves push characters."))
 	float DragForceMultiplier = 0.01f;
 
 	/**
-	 * OnFluidForceUpdate에서 상대 속도 사용 여부
-	 * true: 상대 속도 (v_fluid - v_body) - 물속 저항 구현에 적합
-	 * false: 절대 속도 (v_fluid) - 파도/폭포 밀림 효과에 적합
+	 * Use relative velocity for force calculation in OnFluidForceUpdate.
+	 * true: relative velocity (v_fluid - v_body) for drag in still water
+	 * false: absolute velocity (v_fluid) for waves/waterfalls pushing
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Drag Force Feedback",
 	          meta = (EditCondition = "bEnableForceFeedback",
-	                  ToolTip = "OnFluidForceUpdate에서 상대 속도 사용.\ntrue: 상대 속도 (v_fluid - v_body) - 정지된 물속을 달릴 때 저항 발생\nfalse: 절대 속도 (v_fluid) - 파도/폭포가 캐릭터를 밀어냄\n일반적으로 true 권장."))
+	                  ToolTip = "Use relative velocity in OnFluidForceUpdate.\ntrue: relative velocity (v_fluid - v_body) for resistance in still water\nfalse: absolute velocity (v_fluid) for waves/waterfalls pushing\nGenerally, true is recommended."))
 	bool bUseRelativeVelocityForForce = true;
 
 	/**
-	 * 유체 태그별 트리거를 위한 최소 파티클 수
-	 * 이 수 이상의 파티클이 충돌해야 OnFluidEnter 이벤트 발생
+	 * Minimum particle count required to trigger per-tag events.
+	 * OnFluidEnter/Exit fire only above this threshold.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Force Feedback",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Drag Force Feedback",
 	          meta = (EditCondition = "bEnableForceFeedback", ClampMin = "1", ClampMax = "100",
-	                  ToolTip = "OnFluidEnter/Exit 이벤트를 위한 최소 파티클 수.\n이 수 이상의 파티클이 충돌해야 이벤트가 발생합니다.\n노이즈 방지를 위해 5~20 권장."))
+	                  ToolTip = "Minimum particle count for OnFluidEnter/Exit.\nEvents fire only when colliding particles meet this threshold.\n5-20 is recommended to reduce noise."))
 	int32 MinParticleCountForFluidEvent = 5;
 
-	/** 현재 유체로부터 받는 힘 벡터 (스무딩 적용됨) */
-	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Force Feedback")
+	/** Current force from fluid (smoothed). */
+	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Drag Force Feedback")
 	FVector CurrentFluidForce;
 
-	/** 현재 접촉 중인 파티클 수 */
-	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Force Feedback")
+	/** Current number of contact particles. */
+	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Drag Force Feedback")
 	int32 CurrentContactCount;
 
-	/** 현재 평균 압력 값 */
-	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Force Feedback")
+	/** Current average pressure. */
+	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Drag Force Feedback")
 	float CurrentAveragePressure;
 
-	/** 유체 영역 진입 이벤트 (유체 태그별) */
+	/** Fluid area enter event (per fluid tag). */
 	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
 	FOnFluidEnter OnFluidEnter;
 
-	/** 유체 영역 이탈 이벤트 (유체 태그별) */
+	/** Fluid area exit event (per fluid tag). */
 	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
 	FOnFluidExit OnFluidExit;
 
-	/** 유체 힘 업데이트 이벤트 (매 틱, Force Feedback 활성화 시) */
+	/** Fluid force update event (every tick when force feedback is enabled). */
 	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
 	FOnFluidForceUpdate OnFluidForceUpdate;
 
 	//========================================
-	// Bone Impact Monitoring (자동 이벤트)
+	// Bone Impact Monitoring (Auto Events)
 	//========================================
 
 	/**
-	 * 본별 충격 모니터링 활성화
-	 * 활성화 시 MonitoredBones 리스트의 본들을 매 틱마다 체크하여
-	 * BoneImpactSpeedThreshold를 초과하면 OnBoneFluidImpact 이벤트 발생
+	 * Enable per-bone impact monitoring.
+	 * Checks monitored bones every tick and fires OnBoneFluidImpact
+	 * when BoneImpactSpeedThreshold is exceeded.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Bone Impact Monitoring",
-	          meta = (ToolTip = "본별 충격 자동 감지 활성화.\n모니터링할 본들을 매 틱마다 체크하여 임계값 초과 시 이벤트를 발생시킵니다."))
+	          meta = (ToolTip = "Enable automatic per-bone impact detection.\nMonitored bones are checked every tick and an event is fired when the threshold is exceeded."))
 	bool bEnableBoneImpactMonitoring = false;
 
 	/**
-	 * 모니터링할 본 목록
-	 * 이 리스트의 본들을 매 틱마다 체크
-	 * 예: "head", "spine_03", "thigh_l"
+	 * List of bones to monitor.
+	 * These bones are checked every tick.
+	 * Example: "head", "spine_03", "thigh_l"
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Bone Impact Monitoring",
 	          meta = (EditCondition = "bEnableBoneImpactMonitoring",
-	                  ToolTip = "모니터링할 본 이름 리스트.\n스켈레톤 에디터에서 본 이름을 확인하여 추가하세요.\n예: head, spine_03, thigh_l"))
+	                  ToolTip = "List of bone names to monitor.\nUse names from the skeleton asset (e.g., head, spine_03, thigh_l)."))
 	TArray<FName> MonitoredBones;
 
 	/**
-	 * 본 충격 감지 임계값 (cm/s)
-	 * 유체의 절대 속도가 이 값을 초과하면 OnBoneFluidImpact 이벤트 발생
+	 * Impact speed threshold (cm/s).
+	 * OnBoneFluidImpact fires when fluid speed exceeds this value.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Bone Impact Monitoring",
 	          meta = (EditCondition = "bEnableBoneImpactMonitoring", ClampMin = "0.0", ClampMax = "5000.0",
-	                  ToolTip = "충격 감지 임계값 (cm/s).\n유체 속도가 이 값을 초과하면 이벤트가 발생합니다.\n권장값: 500-1000"))
+	                  ToolTip = "Impact speed threshold (cm/s).\nThe event fires when fluid speed exceeds this value.\nRecommended: 500-1000"))
 	float BoneImpactSpeedThreshold = 500.0f;
 
 	/**
-	 * 본별 충격 이벤트
-	 * MonitoredBones의 본이 BoneImpactSpeedThreshold를 초과하는 충격을 받으면 발생
+	 * Per-bone impact event.
+	 * Fired when a monitored bone exceeds the impact threshold.
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
 	FOnBoneFluidImpact OnBoneFluidImpact;
@@ -352,67 +228,67 @@ public:
 	//========================================
 
 	/**
-	 * 본별 힘 계산 활성화
-	 * 활성화 시 본별로 개별 항력을 계산하여 Additive Animation/Spring에 사용 가능
+	 * Enable per-bone force computation.
+	 * When enabled, computes per-bone drag for additive animation or springs.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Bone Force",
 	          meta = (EditCondition = "bEnableForceFeedback",
-	                  ToolTip = "본별 힘 계산 활성화.\n활성화 시 본별로 개별 항력을 계산합니다.\nAdditive Animation 또는 AnimDynamics Spring에 사용할 수 있습니다."))
+	                  ToolTip = "Enable per-bone force computation.\nWhen enabled, computes per-bone drag.\nUseful for Additive Animation or AnimDynamics springs."))
 	bool bEnablePerBoneForce = false;
 
 	/**
-	 * 본별 힘 스무딩 속도 (1/s)
-	 * 높을수록 힘 변화가 빠르고, 낮을수록 부드럽게 변화
+	 * Per-bone force smoothing speed (1/s).
+	 * Higher responds faster, lower smooths changes.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Bone Force",
 	          meta = (EditCondition = "bEnablePerBoneForce", ClampMin = "0.1", ClampMax = "50.0",
-	                  ToolTip = "본별 힘 스무딩 속도 (1/s).\n높을수록 힘 변화가 빠르고, 낮을수록 부드럽게 변화합니다."))
+	                  ToolTip = "Per-bone force smoothing speed (1/s).\nHigher responds faster, lower smooths changes."))
 	float PerBoneForceSmoothingSpeed = 10.0f;
 
 	/**
-	 * 본별 힘 배율
-	 * 계산된 본별 힘에 적용되는 스케일
+	 * Per-bone force multiplier.
+	 * Scales the computed per-bone force.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Per-Bone Force",
 	          meta = (EditCondition = "bEnablePerBoneForce", ClampMin = "0.0001", ClampMax = "100.0",
-	                  ToolTip = "본별 힘 배율.\nAdditive Animation이나 Spring에 적용할 힘의 강도를 조절합니다."))
+	                  ToolTip = "Per-bone force multiplier.\nScales the force applied to additive animation or springs."))
 	float PerBoneForceMultiplier = 1.0f;
 
 	/**
-	 * 특정 본의 현재 유체 힘 반환 (BoneIndex)
-	 * @param BoneIndex 조회할 본 인덱스
-	 * @return 해당 본에 적용되는 유체 힘 벡터. 본이 없으면 ZeroVector
+	 * Get current fluid force for a bone (by index).
+	 * @param BoneIndex Bone index to query
+	 * @return Fluid force vector for that bone (ZeroVector if not found)
 	 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Per-Bone Force")
 	FVector GetFluidForceForBone(int32 BoneIndex) const;
 
 	/**
-	 * 특정 본의 현재 유체 힘 반환 (BoneName)
-	 * @param BoneName 조회할 본 이름
-	 * @return 해당 본에 적용되는 유체 힘 벡터. 본이 없으면 ZeroVector
+	 * Get current fluid force for a bone (by name).
+	 * @param BoneName Bone name to query
+	 * @return Fluid force vector for that bone (ZeroVector if not found)
 	 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Per-Bone Force")
 	FVector GetFluidForceForBoneByName(FName BoneName) const;
 
 	/**
-	 * 모든 본의 유체 힘 맵 반환 (BoneIndex → Force)
-	 * @return 본 인덱스 → 힘 벡터 맵
+	 * Get a map of all bone forces (BoneIndex -> Force).
+	 * @return Map of bone indices to force vectors
 	 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Per-Bone Force")
 	TMap<int32, FVector> GetAllBoneForces() const { return CurrentPerBoneForces; }
 
 	/**
-	 * 유체 힘이 적용된 본 인덱스 배열 반환
-	 * @param OutBoneIndices 힘이 적용된 본 인덱스 배열
+	 * Get bone indices with active fluid force.
+	 * @param OutBoneIndices Output array of bone indices
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Per-Bone Force")
 	void GetActiveBoneIndices(TArray<int32>& OutBoneIndices) const;
 
 	/**
-	 * 가장 강한 힘을 받는 본 인덱스와 힘 반환
-	 * @param OutBoneIndex 가장 강한 힘을 받는 본 인덱스 (-1 if none)
-	 * @param OutForce 해당 본의 힘 벡터
-	 * @return 힘을 받는 본이 있으면 true
+	 * Get the bone with the strongest force.
+	 * @param OutBoneIndex Bone index with the strongest force (-1 if none)
+	 * @param OutForce Force vector for that bone
+	 * @return true if any bone has force
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Per-Bone Force")
 	bool GetStrongestBoneForce(int32& OutBoneIndex, FVector& OutForce) const;
@@ -422,173 +298,162 @@ public:
 	//========================================
 
 	/**
-	 * 본별 충돌 이벤트 활성화
-	 * 활성화 시 본에 파티클 충돌이 발생하면 OnBoneParticleCollision 이벤트 발생
+	 * Enable per-bone collision events.
+	 * Fires OnBoneParticleCollision when particles hit bones.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Bone Collision Events",
 	          meta = (EditCondition = "bEnablePerBoneForce",
-	                  ToolTip = "본별 충돌 이벤트 활성화.\n활성화 시 본에 파티클 충돌이 발생하면 OnBoneParticleCollision 이벤트가 발생합니다.\nNiagara 이펙트 스폰에 사용할 수 있습니다."))
+	                  ToolTip = "Enable per-bone collision events.\nWhen enabled, OnBoneParticleCollision is fired on bone hits.\nUseful for Niagara effect spawning."))
 	bool bEnableBoneCollisionEvents = false;
 
 	/**
-	 * 충돌 이벤트를 위한 최소 파티클 수
-	 * 이 수 이상의 파티클이 충돌해야 OnBoneParticleCollision 이벤트 발생
+	 * Minimum particle count required to trigger OnBoneParticleCollision.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Bone Collision Events",
 	          meta = (EditCondition = "bEnableBoneCollisionEvents", ClampMin = "1", ClampMax = "50",
-	                  ToolTip = "본별 충돌 이벤트를 위한 최소 파티클 수.\n이 수 이상의 파티클이 본에 충돌해야 이벤트가 발생합니다."))
+	                  ToolTip = "Minimum particle count required to fire the event.\nEvents fire only when enough particles hit the bone."))
 	int32 MinParticleCountForBoneEvent = 3;
 
 	/**
-	 * 본 충돌 이벤트 발생 간격 (초)
-	 * 너무 빈번한 이벤트 발생 방지
+	 * Collision event cooldown (seconds).
+	 * Prevents firing too frequently on the same bone.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Bone Collision Events",
 	          meta = (EditCondition = "bEnableBoneCollisionEvents", ClampMin = "0.0", ClampMax = "2.0",
-	                  ToolTip = "본 충돌 이벤트 발생 간격 (초).\n같은 본에 대해 이 시간 간격 이내에는 이벤트를 다시 발생시키지 않습니다."))
+	                  ToolTip = "Collision event cooldown (seconds).\nPrevents repeated events on the same bone within this time window."))
 	float BoneEventCooldown = 0.1f;
 
 	/**
-	 * 본에 파티클 충돌 발생 이벤트
-	 * Niagara 이펙트 스폰에 사용 - SpawnSystemAttached로 본에 Attach하면 캐릭터를 따라다님
+	 * Per-bone collision event.
+	 * Useful for Niagara spawning (SpawnSystemAttached follows the bone).
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "Fluid Interaction|Events")
 	FOnBoneParticleCollision OnBoneParticleCollision;
 
 	/**
-	 * 특정 본의 현재 접촉 파티클 수 반환
-	 * @param BoneIndex 조회할 본 인덱스
-	 * @return 해당 본에 접촉 중인 파티클 수
+	 * Get current contact count for a bone.
+	 * @param BoneIndex Bone index to query
+	 * @return Number of particles in contact with that bone
 	 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Bone Collision Events")
 	int32 GetBoneContactCount(int32 BoneIndex) const;
 
 	/**
-	 * 모든 본의 접촉 파티클 수 맵 반환
-	 * @return 본 인덱스 → 접촉 파티클 수 맵
+	 * Get a map of all bone contact counts.
+	 * @return Map of bone indices to contact counts
 	 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Bone Collision Events")
 	TMap<int32, int32> GetAllBoneContactCounts() const { return CurrentBoneContactCounts; }
 
 	/**
-	 * 파티클과 접촉 중인 본 인덱스 배열 반환
-	 * @param OutBoneIndices 접촉 중인 본 인덱스 배열
+	 * Get bone indices that are currently in contact with particles.
+	 * @param OutBoneIndices Output array of bone indices
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Bone Collision Events")
 	void GetBonesWithContacts(TArray<int32>& OutBoneIndices) const;
 
 	/**
-	 * 본 인덱스를 본 이름으로 변환
-	 * @param BoneIndex 본 인덱스
-	 * @return 본 이름 (없으면 NAME_None)
+	 * Convert a bone index to a bone name.
+	 * @param BoneIndex Bone index
+	 * @return Bone name (NAME_None if invalid)
 	 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Bone Collision Events")
 	FName GetBoneNameFromIndex(int32 BoneIndex) const;
 
 	/**
-	 * Owner의 SkeletalMeshComponent 반환
-	 * Niagara SpawnSystemAttached의 AttachToComponent로 사용
-	 * @return SkeletalMeshComponent (없으면 nullptr)
+	 * Get the owner's SkeletalMeshComponent.
+	 * Used by Niagara SpawnSystemAttached -> AttachToComponent.
+	 * @return SkeletalMeshComponent (nullptr if none)
 	 */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Bone Collision Events")
 	class USkeletalMeshComponent* GetOwnerSkeletalMesh() const;
 
 	/**
-	 * 가장 많은 파티클이 충돌 중인 본 반환
-	 * @param OutBoneIndex 가장 많이 충돌 중인 본 인덱스 (-1 if none)
-	 * @param OutContactCount 해당 본의 접촉 파티클 수
-	 * @return 충돌 중인 본이 있으면 true
+	 * Get the bone with the most particle contacts.
+	 * @param OutBoneIndex Bone index with most contacts (-1 if none)
+	 * @param OutContactCount Contact count for that bone
+	 * @return true if any bone is in contact
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Bone Collision Events")
 	bool GetMostContactedBone(int32& OutBoneIndex, int32& OutContactCount) const;
 
-	/** 현재 유체 힘 반환 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	/** Get the current fluid force. */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Drag Force Feedback")
 	FVector GetCurrentFluidForce() const { return CurrentFluidForce; }
 
-	/** 현재 평균 압력 반환 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	/** Get the current average fluid pressure. */
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Drag Force Feedback")
 	float GetCurrentFluidPressure() const { return CurrentAveragePressure; }
 
 	/**
-	 * 유체 힘을 CharacterMovement에 적용
-	 * CharacterMovementComponent가 있는 액터에서만 작동
-	 * @param ForceScale 힘 스케일 배율 (기본 1.0)
+	 * Apply fluid force to CharacterMovement.
+	 * Works only if the actor has a CharacterMovementComponent.
+	 * @param ForceScale Force scale (default 1.0)
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Force Feedback")
+	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Drag Force Feedback")
 	void ApplyFluidForceToCharacterMovement(float ForceScale = 1.0f);
 
 	/**
-	 * 특정 유체 태그와 현재 충돌 중인지 확인
-	 * @param FluidTag 확인할 유체 태그 (예: "Water", "Lava")
-	 * @return 해당 태그의 유체와 충돌 중이면 true
+	 * Check if currently colliding with a specific fluid tag.
+	 * @param FluidTag Fluid tag to test (e.g., "Water", "Lava")
+	 * @return true if colliding with that tag
 	 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Drag Force Feedback")
 	bool IsCollidingWithFluidTag(FName FluidTag) const;
 
 	/**
-	 * 현재 충돌 중인 유체의 평균 절대 속도 반환 (cm/s)
-	 * 캐릭터 넘어짐 판정 등에 사용 - 캐릭터 속도와 무관하게 유체 자체의 속도만 측정
-	 * @return 유체의 평균 절대 속도 (cm/s). 충돌 중이 아니면 0
+	 * Get average absolute speed of the currently colliding fluid (cm/s).
+	 * Useful for knockdown checks; independent of character velocity.
+	 * @return Average fluid speed (cm/s). 0 if not colliding.
 	 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Drag Force Feedback")
 	float GetFluidImpactSpeed() const;
 
 	/**
-	 * 특정 본에 충돌한 유체의 평균 절대 속도 반환 (cm/s)
-	 * @param BoneName 필터링할 본 이름 (예: "head", "spine_01", "pelvis")
-	 * @return 해당 본에 충돌한 유체의 평균 속도 (cm/s). 충돌 중이 아니면 0
+	 * Get average absolute speed of fluid colliding with a specific bone (cm/s).
+	 * @param BoneName Bone name to filter (e.g., "head", "spine_01", "pelvis")
+	 * @return Average fluid speed for that bone (cm/s). 0 if not colliding.
 	 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Drag Force Feedback")
 	float GetFluidImpactSpeedForBone(FName BoneName) const;
 
 	/**
-	 * 현재 충돌 중인 유체의 충격력 크기 반환 (N)
-	 * F = ½ρCdA|v|² 공식 기반 (v는 유체의 절대 속도)
-	 * @return 총 충격력 크기 (Newton). 충돌 중이 아니면 0
+	 * Get impact force magnitude of the currently colliding fluid (N).
+	 * Based on F = 1/2 * rho * C_d * A * |v|^2 (v is absolute fluid speed).
+	 * @return Total impact force (Newton). 0 if not colliding.
 	 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Drag Force Feedback")
 	float GetFluidImpactForceMagnitude() const;
 
 	/**
-	 * 특정 본에 충돌한 유체의 충격력 크기 반환 (N)
-	 * @param BoneName 필터링할 본 이름 (예: "head", "spine_01", "pelvis")
-	 * @return 해당 본에 충돌한 유체의 충격력 (Newton). 충돌 중이 아니면 0
+	 * Get impact force magnitude of fluid colliding with a specific bone (N).
+	 * @param BoneName Bone name to filter (e.g., "head", "spine_01", "pelvis")
+	 * @return Impact force for that bone (Newton). 0 if not colliding.
 	 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Drag Force Feedback")
 	float GetFluidImpactForceMagnitudeForBone(FName BoneName) const;
 
 	/**
-	 * 현재 충돌 중인 유체의 충격 방향 반환 (정규화된 벡터)
-	 * 여러 파티클의 속도를 평균하여 계산
-	 * @return 정규화된 충격 방향 벡터. 충돌 중이 아니면 ZeroVector
+	 * Get impact direction of the currently colliding fluid (normalized).
+	 * Computed from the average particle velocity.
+	 * @return Normalized impact direction. ZeroVector if not colliding.
 	 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Drag Force Feedback")
 	FVector GetFluidImpactDirection() const;
 
 	/**
-	 * 특정 본에 충돌한 유체의 충격 방향 반환 (정규화된 벡터)
-	 * @param BoneName 필터링할 본 이름 (예: "head", "spine_01", "pelvis")
-	 * @return 해당 본에 충돌한 유체의 방향 벡터. 충돌 중이 아니면 ZeroVector
+	 * Get impact direction of fluid colliding with a specific bone (normalized).
+	 * @param BoneName Bone name to filter (e.g., "head", "spine_01", "pelvis")
+	 * @return Impact direction for that bone. ZeroVector if not colliding.
 	 */
-	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Force Feedback")
+	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Drag Force Feedback")
 	FVector GetFluidImpactDirectionForBone(FName BoneName) const;
-
-	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction")
-	int32 GetAttachedParticleCount() const { return AttachedParticleCount; }
-
-	/** Collider와 충돌 중인 파티클 수 반환 */
-	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction")
-	int32 GetCollidingParticleCount() const { return CollidingParticleCount; }
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction")
 	void DetachAllFluid();
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction")
 	void PushFluid(FVector Direction, float Force);
-
-	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction")
-	bool IsWet() const { return bIsWet; }
 
 	/** Check if subsystem is valid */
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction")
@@ -604,90 +469,83 @@ private:
 	UPROPERTY()
 	TObjectPtr<UMeshFluidCollider> AutoCollider;
 
-	/** 이전 프레임 충돌 상태 */
-	bool bWasColliding = false;
-
 	void CreateAutoCollider();
 	void RegisterWithSimulator();
 	void UnregisterFromSimulator();
-	void UpdateAttachedParticleCount();
-
-	/** Collider와 충돌 중인 파티클 감지 */
-	void DetectCollidingParticles();
 
 	//========================================
-	// Force Feedback Internal State
+	// Drag Force Feedback Internal State
 	//========================================
 
-	/** 스무딩 전 누적 힘 (스무딩에 사용) */
+	/** Accumulated force before smoothing (used for smoothing). */
 	FVector SmoothedForce = FVector::ZeroVector;
 
-	/** 유체 태그별 이전 프레임 충돌 상태 (Enter/Exit 이벤트용) */
+	/** Previous-frame collision state per fluid tag (for enter/exit events). */
 	TMap<FName, bool> PreviousFluidTagStates;
 
-	/** 유체 태그별 현재 프레임 충돌 파티클 수 */
+	/** Current-frame colliding particle counts per fluid tag. */
 	TMap<FName, int32> CurrentFluidTagCounts;
 
-	/** 이 컴포넌트와 연결된 콜라이더 인덱스 (GPU 피드백 필터링용) */
+	/** Collider index associated with this component (for GPU feedback filtering). */
 	int32 ColliderIndex = -1;
 
-	/** GPU 피드백이 이미 활성화되었는지 여부 */
+	/** Whether GPU feedback is already enabled. */
 	bool bGPUFeedbackEnabled = false;
 
 	//========================================
 	// Per-Bone Force Internal State
 	//========================================
 
-	/** 본 인덱스별 현재 유체 힘 (스무딩 적용됨) */
+	/** Current fluid force per bone index (smoothed). */
 	TMap<int32, FVector> CurrentPerBoneForces;
 
-	/** 본 인덱스별 스무딩 전 힘 (스무딩 계산에 사용) */
+	/** Pre-smoothed force per bone index (used for smoothing). */
 	TMap<int32, FVector> SmoothedPerBoneForces;
 
-	/** 본 인덱스 → 본 이름 캐시 (SkeletalMesh에서 가져옴) */
+	/** Bone index -> bone name cache (from SkeletalMesh). */
 	TMap<int32, FName> BoneIndexToNameCache;
 
-	/** 본 이름 캐시가 초기화되었는지 여부 */
+	/** Whether the bone name cache is initialized. */
 	bool bBoneNameCacheInitialized = false;
 
-	/** 디버그 로그 타이머 (3초마다 출력) */
+	/** Debug log timer (prints every 3 seconds). */
 	float PerBoneForceDebugTimer = 0.0f;
 
 	//========================================
 	// Bone Collision Events Internal State
 	//========================================
 
-	/** 본 인덱스별 현재 접촉 파티클 수 */
+	/** Current contact particle count per bone index. */
 	TMap<int32, int32> CurrentBoneContactCounts;
 
-	/** 본 인덱스별 평균 충돌 속도 (Niagara 방향용) */
+	/** Average collision velocity per bone index (for Niagara direction). */
 	TMap<int32, FVector> CurrentBoneAverageVelocities;
 
-	/** 본별 이벤트 쿨다운 타이머 (본 인덱스 → 남은 쿨다운 시간) */
+	/** Per-bone event cooldown timers (bone index -> remaining time). */
 	TMap<int32, float> BoneEventCooldownTimers;
 
-	/** 이전 프레임에 충돌이 있던 본 인덱스 (새 충돌 감지용) */
+	/** Bones that had contacts last frame (for new contact detection). */
 	TSet<int32> PreviousContactBones;
 
-	/** 본 충돌 이벤트 처리 (ProcessPerBoneForces 내부에서 호출) */
+	/** Process bone collision events (called inside ProcessPerBoneForces). */
 	void ProcessBoneCollisionEvents(float DeltaTime, const TArray<struct FGPUCollisionFeedback>& AllFeedback, int32 FeedbackCount);
 
-	/** 본 이름 캐시 초기화 */
+	/** Initialize bone name cache. */
 	void InitializeBoneNameCache();
 
-	/** 본별 힘 처리 (ProcessCollisionFeedback 내부에서 호출) */
-	void ProcessPerBoneForces(float DeltaTime, const TArray<struct FGPUCollisionFeedback>& AllFeedback, int32 FeedbackCount);
+	/** Process per-bone forces (called inside ProcessCollisionFeedback). */
+	void ProcessPerBoneForces(float DeltaTime, const TArray<struct FGPUCollisionFeedback>& AllFeedback, int32 FeedbackCount, float ParticleRadius);
 
-	/** GPU 피드백 처리 (매 틱 호출) */
+	/** Process GPU feedback (called every tick). */
 	void ProcessCollisionFeedback(float DeltaTime);
 
-	/** 유체 태그 이벤트 업데이트 (Enter/Exit) */
+	/** Update fluid tag enter/exit events. */
 	void UpdateFluidTagEvents();
 
-	/** 본별 충격 모니터링 및 이벤트 발생 */
+	/** Monitor per-bone impacts and fire events. */
 	void CheckBoneImpacts();
 
-	/** GPU Collision Feedback 자동 활성화 */
+	/** Auto-enable GPU collision feedback. */
 	void EnableGPUCollisionFeedbackIfNeeded();
 
 	//========================================
@@ -696,149 +554,143 @@ private:
 
 public:
 	/**
-	 * 경계 입자 시스템 활성화
-	 * 메시 표면에 입자를 생성하여 Flex 스타일의 자연스러운 Adhesion 구현
+	 * Enable boundary particle system.
+	 * Generates particles on the mesh surface for Flex-style adhesion.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
-	          meta = (ToolTip = "경계 입자 시스템 활성화.\n메시 표면에 보이지 않는 입자를 생성하여\nFlex 스타일의 자연스러운 Adhesion/Cohesion을 구현합니다."))
+	          meta = (ToolTip = "Enable boundary particle system.\nCreates invisible particles on the mesh surface\nfor natural Flex-style adhesion/cohesion."))
 	bool bEnableBoundaryParticles = false;
 
 	/**
-	 * 경계 입자 간격 (cm)
-	 * ParticleRadius의 0.5~1.0배 권장
+	 * Boundary particle spacing (cm).
+	 * Recommended: 0.5-1.0x ParticleRadius.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
 	          meta = (EditCondition = "bEnableBoundaryParticles", ClampMin = "1.0", ClampMax = "50.0",
-	                  ToolTip = "경계 입자 간격 (cm).\n작을수록 정밀하지만 입자 수 증가.\nParticleRadius의 0.5~1.0배 권장."))
+	                  ToolTip = "Boundary particle spacing (cm).\nSmaller is more precise but increases particle count.\nRecommended: 0.5-1.0x ParticleRadius."))
 	float BoundaryParticleSpacing = 5.0f;
 
 	/**
-	 * 경계 입자 디버그 표시
-	 * 체크 시 경계 입자를 화면에 시각화
+	 * Show boundary particles for debug.
+	 * Visualizes boundary particles in the viewport.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
 	          meta = (EditCondition = "bEnableBoundaryParticles",
-	                  ToolTip = "경계 입자 디버그 표시.\n체크 시 경계 입자 위치를 작은 구체로 시각화합니다."))
+	                  ToolTip = "Show boundary particles for debug.\nVisualizes boundary particle positions as small spheres."))
 	bool bShowBoundaryParticles = false;
 
-	/**
-	 * 디버그 입자 색상
-	 */
+	/** Debug particle color. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
 	          meta = (EditCondition = "bShowBoundaryParticles"))
 	FColor BoundaryParticleDebugColor = FColor::Cyan;
 
-	/**
-	 * 디버그 입자 크기 (cm)
-	 */
+	/** Debug particle size (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
 	          meta = (EditCondition = "bShowBoundaryParticles", ClampMin = "0.5", ClampMax = "10.0"))
 	float BoundaryParticleDebugSize = 2.0f;
 
 	/**
-	 * 경계 입자 노말 방향 표시
-	 * 체크 시 경계 입자의 표면 노말을 화살표로 시각화
+	 * Show boundary particle normals.
+	 * Visualizes surface normals as arrows.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
 	          meta = (EditCondition = "bShowBoundaryParticles",
-	                  ToolTip = "경계 입자 노말 방향 표시.\n체크 시 각 경계 입자의 표면 노말을 화살표로 시각화합니다."))
+	                  ToolTip = "Show boundary particle normals.\nVisualizes each boundary particle's surface normal as an arrow."))
 	bool bShowBoundaryNormals = false;
 
-	/**
-	 * 노말 화살표 길이 (cm)
-	 */
+	/** Normal arrow length (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
 	          meta = (EditCondition = "bShowBoundaryParticles && bShowBoundaryNormals", ClampMin = "1.0", ClampMax = "50.0"))
 	float BoundaryNormalLength = 10.0f;
 
-	/** 경계 입자 수 반환 */
+	/** Get boundary particle count. */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Boundary Particles")
 	int32 GetBoundaryParticleCount() const { return BoundaryParticlePositions.Num(); }
 
-	/** 경계 입자 위치 배열 반환 (월드 좌표) */
+	/** Get boundary particle positions (world space). */
 	UFUNCTION(BlueprintPure, Category = "Fluid Interaction|Boundary Particles")
 	const TArray<FVector>& GetBoundaryParticlePositions() const { return BoundaryParticlePositions; }
 
-	/** 경계 입자 수동 재생성 */
+	/** Regenerate boundary particles manually. */
 	UFUNCTION(BlueprintCallable, Category = "Fluid Interaction|Boundary Particles")
 	void RegenerateBoundaryParticles();
 
-	/** GPU용 경계 입자 데이터 수집 (legacy - CPU 월드 좌표 업로드 방식) */
+	/** Collect boundary particle data for GPU (legacy - CPU world-space upload). */
 	void CollectGPUBoundaryParticles(struct FGPUBoundaryParticles& OutBoundaryParticles) const;
 
-	/** GPU Skinning용 로컬 경계 입자 데이터 수집 (한 번만 업로드) */
+	/** Collect local boundary particle data for GPU skinning (one-time upload). */
 	void CollectLocalBoundaryParticles(TArray<struct FGPUBoundaryParticleLocal>& OutLocalParticles) const;
 
-	/** GPU Skinning용 본 트랜스폼 수집 (매 프레임 업로드) */
+	/** Collect bone transforms for GPU skinning (per-frame upload). */
 	void CollectBoneTransformsForBoundary(TArray<FMatrix>& OutBoneTransforms, FMatrix& OutComponentTransform) const;
 
-	/** 컴포넌트 고유 ID 반환 (GPU Skinning Owner ID용) */
+	/** Get component unique ID (for GPU skinning owner ID). */
 	int32 GetBoundaryOwnerID() const { return GetUniqueID(); }
 
-	/** GPU Skinning 활성화 여부 (bEnableBoundaryParticles가 true이고 로컬 입자가 있으면 true) */
+	/** Whether GPU skinning is enabled (true when boundary particles and local data exist). */
 	bool HasLocalBoundaryParticles() const { return bEnableBoundaryParticles && bBoundaryParticlesInitialized && BoundaryParticleLocalPositions.Num() > 0; }
 
-	/** 초기화된 로컬 입자가 있는지 확인 (bEnableBoundaryParticles와 무관) */
+	/** Check if initialized local particles exist (independent of bEnableBoundaryParticles). */
 	bool HasInitializedBoundaryParticles() const { return bBoundaryParticlesInitialized && BoundaryParticleLocalPositions.Num() > 0; }
 
-	/** Boundary Adhesion 활성화 여부 */
+	/** Whether boundary adhesion is enabled. */
 	bool IsBoundaryAdhesionEnabled() const { return bEnableBoundaryParticles && bBoundaryParticlesInitialized && BoundaryParticlePositions.Num() > 0; }
 
 private:
-	/** 경계 입자 월드 위치 (매 프레임 업데이트됨) */
+	/** Boundary particle world positions (updated every frame). */
 	TArray<FVector> BoundaryParticlePositions;
 
-	/** 경계 입자 로컬 위치 (메시 표면 기준, 초기화 시 생성) */
+	/** Boundary particle local positions (mesh surface, generated on init). */
 	TArray<FVector> BoundaryParticleLocalPositions;
 
-	/** 경계 입자 표면 노멀 (월드 좌표, 매 프레임 업데이트됨) */
+	/** Boundary particle surface normals (world space, updated every frame). */
 	TArray<FVector> BoundaryParticleNormals;
 
-	/** 경계 입자 로컬 노멀 (메시 표면 기준, 초기화 시 생성) */
+	/** Boundary particle local normals (mesh surface, generated on init). */
 	TArray<FVector> BoundaryParticleLocalNormals;
 
-	/** 경계 입자가 속한 본 인덱스 (-1 = 스태틱) */
+	/** Bone index that owns each boundary particle (-1 = static). */
 	TArray<int32> BoundaryParticleBoneIndices;
 
-	/** 스켈레탈 메시용: 정점 인덱스 (GetSkinnedVertexPosition 호출용) */
+	/** For skeletal meshes: vertex indices for GetSkinnedVertexPosition. */
 	TArray<int32> BoundaryParticleVertexIndices;
 
-	/** 스켈레탈 메시 사용 여부 */
+	/** Whether this is a skeletal mesh. */
 	bool bIsSkeletalMesh = false;
 
-	/** 경계 입자 초기화 여부 */
+	/** Whether boundary particles are initialized. */
 	bool bBoundaryParticlesInitialized = false;
 
-	/** 경계 입자 생성 (메시 표면 샘플링) */
+	/** Generate boundary particles (sample mesh surface). */
 	void GenerateBoundaryParticles();
 
-	/** 경계 입자 위치 업데이트 (스켈레탈 메시의 경우 본 트랜스폼 적용) */
+	/** Update boundary particle positions (apply bone transforms for skeletal meshes). */
 	void UpdateBoundaryParticlePositions();
 
-	/** 디버그 경계 입자 그리기 */
+	/** Draw debug boundary particles. */
 	void DrawDebugBoundaryParticles();
 
-	/** 삼각형 표면 샘플링 */
+	/** Sample triangle surface. */
 	void SampleTriangleSurface(const FVector& V0, const FVector& V1, const FVector& V2,
 	                           float Spacing, TArray<FVector>& OutPoints);
 
 	//=============================================================================
-	// Physics Asset/Simple Collision 기반 표면 샘플링
+	// Surface sampling based on Physics Asset / Simple Collision
 	//=============================================================================
 
-	/** Sphere 콜라이더 표면 샘플링 */
+	/** Sample sphere collider surface. */
 	void SampleSphereSurface(const struct FKSphereElem& Sphere, int32 BoneIndex, const FTransform& LocalTransform);
 
-	/** Capsule(Sphyl) 콜라이더 표면 샘플링 */
+	/** Sample capsule (sphyl) collider surface. */
 	void SampleCapsuleSurface(const struct FKSphylElem& Capsule, int32 BoneIndex);
 
-	/** Box 콜라이더 표면 샘플링 */
+	/** Sample box collider surface. */
 	void SampleBoxSurface(const struct FKBoxElem& Box, int32 BoneIndex);
 
-	/** 반구 표면 샘플링 (캡슐 상/하단용) */
+	/** Sample hemisphere surface (capsule top/bottom). */
 	void SampleHemisphere(const FTransform& Transform, float Radius, float ZOffset,
 	                      int32 ZDirection, int32 BoneIndex, int32 NumSamples);
 
-	/** AggGeom에서 모든 프리미티브 샘플링 */
+	/** Sample all primitives from AggGeom. */
 	void SampleAggGeomSurfaces(const struct FKAggregateGeom& AggGeom, int32 BoneIndex);
 };

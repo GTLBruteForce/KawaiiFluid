@@ -33,12 +33,12 @@ public:
 	float Restitution;
 
 	/** 접착 가능 여부 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Collider")
-	bool bAllowAdhesion;
+	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Collider")
+	//bool bAllowAdhesion;
 
 	/** 접착력 배율 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Collider", meta = (ClampMin = "0.0", ClampMax = "2.0", EditCondition = "bAllowAdhesion"))
-	float AdhesionMultiplier;
+	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Collider", meta = (ClampMin = "0.0", ClampMax = "2.0", EditCondition = "bAllowAdhesion"))
+	//float AdhesionMultiplier;
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid Collider")
 	bool IsColliderEnabled() const { return bColliderEnabled; }

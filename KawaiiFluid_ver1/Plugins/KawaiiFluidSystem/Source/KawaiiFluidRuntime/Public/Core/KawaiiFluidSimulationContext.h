@@ -6,7 +6,6 @@
 #include "UObject/NoExportTypes.h"
 #include "Core/FluidParticle.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
-#include "Collision/PerPolygonCollisionProcessor.h"
 #include "GPU/GPUFluidParticle.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Components/KawaiiFluidVolumeComponent.h"
@@ -292,8 +291,7 @@ protected:
 		const FKawaiiFluidSimulationParams& Params,
 		const FBox& QueryBounds,
 		float DefaultFriction,
-		float DefaultRestitution,
-		const TSet<AActor*>& PerPolygonActors
+		float DefaultRestitution
 	);
 
 protected:
@@ -333,9 +331,6 @@ protected:
 	/** Shared render resource for all renderers using this context */
 	TSharedPtr<FKawaiiFluidRenderResource> RenderResource;
 
-	/** Per-Polygon collision processor for CPU-based skeletal mesh triangle collision */
-	TUniquePtr<FPerPolygonCollisionProcessor> PerPolygonProcessor;
-
 	/**
 	 * Simulate using GPU compute shaders
 	 * Always uses GPU simulation
@@ -365,7 +360,7 @@ protected:
 	TArray<int32> ExtractAttachedParticleIndices(const TArray<FFluidParticle>& Particles) const;
 
 	/**
-	 * Handle attached particles on CPU (bone tracking, adhesion, per-polygon collision)
+	 * Handle attached particles on CPU (bone tracking, adhesion)
 	 */
 	virtual void HandleAttachedParticlesCPU(
 		TArray<FFluidParticle>& Particles,

@@ -11,7 +11,6 @@
 #include "Physics/StackPressureSolver.h"
 #include "Collision/FluidCollider.h"
 #include "Collision/MeshFluidCollider.h"
-#include "Collision/PerPolygonCollisionProcessor.h"
 #include "Components/FluidInteractionComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -288,8 +287,6 @@ UKawaiiFluidSimulationContext::UKawaiiFluidSimulationContext()
 
 UKawaiiFluidSimulationContext::~UKawaiiFluidSimulationContext()
 {
-	// Explicitly reset to ensure complete type is available for destruction
-	PerPolygonProcessor.Reset();
 	ReleaseRenderResource();
 	ReleaseGPUSimulator();
 }
@@ -725,20 +722,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 		const float DefaultFriction = Preset->Friction;
 		const float DefaultRestitution = Preset->Restitution;
 
-		// Build set of actors using Per-Polygon collision (to skip their primitive colliders)
-		TSet<AActor*> PerPolygonActors;
-		for (UFluidInteractionComponent* Interaction : Params.InteractionComponents)
-		{
-			if (Interaction && Interaction->IsPerPolygonCollisionEnabled())
-			{
-				if (AActor* Owner = Interaction->GetOwner())
-				{
-					PerPolygonActors.Add(Owner);
-				}
-			}
-		}
-
-		// Check if adhesion is enabled (Per-Polygon disabled actors can use GPU adhesion)
+		// Check if adhesion is enabled (use bone-aware export path)
 		const bool bUseGPUAdhesion = (Preset->AdhesionForceStrength > 0.0f || Preset->AdhesionVelocityStrength > 0.0f);
 
 		for (UFluidCollider* Collider : Params.Colliders)
@@ -748,12 +732,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 				continue;
 			}
 
-			// Skip colliders on actors that use Per-Polygon collision
 			AActor* ColliderOwner = Collider->GetOwner();
-			if (ColliderOwner && PerPolygonActors.Contains(ColliderOwner))
-			{
-				continue;
-			}
 
 			// Check if this is a MeshFluidCollider (has ExportToGPUPrimitives)
 			UMeshFluidCollider* MeshCollider = Cast<UMeshFluidCollider>(Collider);
@@ -810,8 +789,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 				Params,
 				GPUWorldQueryBounds,
 				DefaultFriction,
-				DefaultRestitution,
-				PerPolygonActors
+				DefaultRestitution
 			);
 		}
 
@@ -1009,183 +987,6 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 
 		// Frame lifecycle: EndFrame (readback enqueue)
 		GPUSimulator->EndFrame();
-	}
-
-	// =====================================================
-	// Phase 2: AABB Filtering for Per-Polygon Collision
-	// Filter particles inside Per-Polygon Collision enabled AABBs
-	// =====================================================
-	{
-		TRACE_CPUPROFILER_EVENT_SCOPE(SimGPU_PerPolygon);
-		TArray<FGPUFilterAABB> FilterAABBs;
-
-		for (int32 i = 0; i < Params.InteractionComponents.Num(); ++i)
-		{
-			UFluidInteractionComponent* Interaction = Params.InteractionComponents[i];
-			if (Interaction && Interaction->IsPerPolygonCollisionEnabled())
-			{
-				FBox AABB = Interaction->GetPerPolygonFilterAABB();
-				if (AABB.IsValid)
-				{
-					FGPUFilterAABB FilterAABB;
-					FilterAABB.Min = FVector3f(AABB.Min);
-					FilterAABB.Max = FVector3f(AABB.Max);
-					FilterAABB.InteractionIndex = i;
-					FilterAABBs.Add(FilterAABB);
-				}
-			}
-		}
-
-		if (FilterAABBs.Num() > 0)
-		{
-			// Debug: Log each AABB coordinates (only occasionally to reduce spam)
-			static int32 DebugFrameCounter = 0;
-			if (++DebugFrameCounter % 60 == 0)  // Every 60 frames
-			{
-				for (int32 j = 0; j < FilterAABBs.Num(); ++j)
-				{
-					const FGPUFilterAABB& FAABB = FilterAABBs[j];
-					//UE_LOG(LogTemp, Log, TEXT("AABB[%d]: Min=(%.1f, %.1f, %.1f) Max=(%.1f, %.1f, %.1f)"),j,FAABB.Min.X, FAABB.Min.Y, FAABB.Min.Z,FAABB.Max.X, FAABB.Max.Y, FAABB.Max.Z);
-				}
-			}
-
-			GPUSimulator->ExecuteAABBFiltering(FilterAABBs);
-
-			// Note: Results are available on NEXT frame due to async GPU execution
-			// The actual count is logged by GPUFluidSimulator itself after GPU completes
-		}
-
-		// =====================================================
-		// Phase 2.5: Per-Polygon Collision Processing
-		// CPU processes filtered candidates against skeletal mesh triangles
-		// Results are applied back to GPU via ApplyCorrections
-		// =====================================================
-
-		// DEBUG: Check Per-Polygon status
-		static int32 PerPolygonDebugCounter = 0;
-		const bool bDebugLog = (++PerPolygonDebugCounter % 60 == 0);
-
-		// Collect Per-Polygon enabled interaction components FIRST
-		TArray<TObjectPtr<UFluidInteractionComponent>> PerPolygonInteractions;
-		for (UFluidInteractionComponent* Interaction : Params.InteractionComponents)
-		{
-			if (Interaction && Interaction->IsPerPolygonCollisionEnabled())
-			{
-				PerPolygonInteractions.Add(Interaction);
-			}
-		}
-
-		if (bDebugLog)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Per-Polygon DEBUG: InteractionComponents=%d, PerPolygonEnabled=%d, HasFilteredCandidates=%d"),
-				Params.InteractionComponents.Num(),
-				PerPolygonInteractions.Num(),
-				GPUSimulator->HasFilteredCandidates() ? 1 : 0);
-		}
-
-		if (PerPolygonInteractions.Num() > 0)
-		{
-			// Initialize Per-Polygon processor if needed
-			if (!PerPolygonProcessor)
-			{
-				PerPolygonProcessor = MakeUnique<FPerPolygonCollisionProcessor>();
-				PerPolygonProcessor->SetCollisionMargin(1.0f);
-				PerPolygonProcessor->SetFriction(Preset->Friction);
-				PerPolygonProcessor->SetRestitution(Preset->Restitution);
-				UE_LOG(LogTemp, Warning, TEXT("Per-Polygon: Processor initialized"));
-			}
-
-			// Update BVH cache (skinned mesh vertex positions)
-			PerPolygonProcessor->UpdateBVHCache(PerPolygonInteractions);
-
-			if (bDebugLog)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("Per-Polygon DEBUG: BVH updated, time=%.2fms"),
-					PerPolygonProcessor->GetLastBVHUpdateTimeMs());
-			}
-
-			// Check if we have filtered candidates from PREVIOUS frame
-			if (GPUSimulator->HasFilteredCandidates())
-			{
-				// Get filtered candidates from GPU (this may block for readback)
-				TArray<FGPUCandidateParticle> Candidates;
-				if (GPUSimulator->GetFilteredCandidates(Candidates))
-				{
-					if (bDebugLog)
-					{
-						UE_LOG(LogTemp, Warning, TEXT("Per-Polygon DEBUG: Got %d candidates from GPU"), Candidates.Num());
-					}
-
-					if (Candidates.Num() > 0)
-					{
-						// Process collisions on CPU (parallel)
-						// NOTE: Use original InteractionComponents array, not PerPolygonInteractions
-						// because Candidate.InteractionIndex is based on original array indices
-						TArray<FParticleCorrection> Corrections;
-						PerPolygonProcessor->ProcessCollisions(
-							Candidates,
-							Params.InteractionComponents,
-							Preset->ParticleRadius,
-							Preset->AdhesionForceStrength,  // 유체의 접착력
-							Preset->AdhesionContactOffset,
-							Corrections
-						);
-
-						if (bDebugLog)
-						{
-							UE_LOG(LogTemp, Warning, TEXT("Per-Polygon DEBUG: Processed=%d, Collisions=%d, Corrections=%d"),
-								PerPolygonProcessor->GetLastProcessedCount(),
-								PerPolygonProcessor->GetLastCollisionCount(),
-								Corrections.Num());
-						}
-
-						// Apply corrections to GPU particles
-						if (Corrections.Num() > 0)
-						{
-							GPUSimulator->ApplyCorrections(Corrections);
-							UE_LOG(LogTemp, Warning, TEXT("Per-Polygon: Applied %d corrections to GPU"), Corrections.Num());
-
-							// DEBUG: Log first correction details
-							if (Corrections.Num() > 0)
-							{
-								const FParticleCorrection& First = Corrections[0];
-								UE_LOG(LogTemp, Warning, TEXT("  First correction: ParticleIdx=%d, Delta=(%.2f,%.2f,%.2f)"),
-									First.ParticleIndex,
-									First.PositionDelta.X, First.PositionDelta.Y, First.PositionDelta.Z);
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	//========================================
-	// Phase 2.6: Update Attached Particles
-	// Update positions for particles attached to skeletal mesh surfaces
-	// Check for detachment based on surface acceleration
-	//========================================
-	if (PerPolygonProcessor && PerPolygonProcessor->GetAttachedParticleCount() > 0)
-	{
-		TArray<FAttachedParticleUpdate> AttachmentUpdates;
-		PerPolygonProcessor->UpdateAttachedParticles(
-			Params.InteractionComponents,
-			DeltaTime,
-			AttachmentUpdates
-		);
-
-		if (AttachmentUpdates.Num() > 0)
-		{
-			GPUSimulator->ApplyAttachmentUpdates(AttachmentUpdates);
-
-			static int32 AttachmentDebugCounter = 0;
-			if (++AttachmentDebugCounter % 60 == 1)
-			{
-				UE_LOG(LogTemp, Log, TEXT("Attachment: Updated %d particles (%d attached)"),
-					AttachmentUpdates.Num(),
-					PerPolygonProcessor->GetAttachedParticleCount());
-			}
-		}
 	}
 
 	//========================================
@@ -1473,8 +1274,7 @@ void UKawaiiFluidSimulationContext::AppendGPUWorldCollisionPrimitives(
 	const FKawaiiFluidSimulationParams& Params,
 	const FBox& QueryBounds,
 	float DefaultFriction,
-	float DefaultRestitution,
-	const TSet<AActor*>& PerPolygonActors)
+	float DefaultRestitution)
 {
 	// 진단 로그 (60프레임마다)
 	static int32 DiagLogCounter = 0;
@@ -1572,10 +1372,6 @@ void UKawaiiFluidSimulationContext::AppendGPUWorldCollisionPrimitives(
 			}
 
 			const AActor* Owner = PrimComp->GetOwner();
-			if (Owner && PerPolygonActors.Contains(const_cast<AActor*>(Owner)))
-			{
-				continue;
-			}
 
 			const UStaticMeshComponent* StaticMeshComp = Cast<UStaticMeshComponent>(PrimComp);
 			if (!StaticMeshComp)

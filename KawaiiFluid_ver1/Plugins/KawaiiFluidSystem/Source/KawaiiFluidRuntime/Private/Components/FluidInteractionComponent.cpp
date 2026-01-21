@@ -4,7 +4,6 @@
 #include "Components/KawaiiFluidComponent.h"
 #include "Core/KawaiiFluidSimulatorSubsystem.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
-#include "Core/SpatialHash.h"
 #include "Collision/MeshFluidCollider.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -26,13 +25,10 @@ UFluidInteractionComponent::UFluidInteractionComponent()
 	PrimaryComponentTick.bCanEverTick = true;
 
 	TargetSubsystem = nullptr;
-	bCanAttachFluid = true;
-	AdhesionMultiplier = 1.0f;
-	DragAlongStrength = 0.5f;
+	//bCanAttachFluid = true;
+	//AdhesionMultiplier = 1.0f;
+	//DragAlongStrength = 0.5f;
 	bAutoCreateCollider = true;
-
-	AttachedParticleCount = 0;
-	bIsWet = false;
 
 	AutoCollider = nullptr;
 }
@@ -118,69 +114,7 @@ void UFluidInteractionComponent::TickComponent(float DeltaTime, ELevelTick TickT
 		return;
 	}
 
-	// 기존: 붙은 파티클 추적
-	int32 PrevCount = AttachedParticleCount;
-	UpdateAttachedParticleCount();
-
-	if (AttachedParticleCount > 0 && PrevCount == 0)
-	{
-		bIsWet = true;
-		OnFluidAttached.Broadcast(AttachedParticleCount);
-	}
-	else if (AttachedParticleCount == 0 && PrevCount > 0)
-	{
-		bIsWet = false;
-		OnFluidDetached.Broadcast();
-	}
-
-	// 새로운: Collider 충돌 감지
-	if (bEnableCollisionDetection && AutoCollider)
-	{
-		DetectCollidingParticles();
-		
-		// 트리거 이벤트 발생 조건
-		bool bIsColliding = (CollidingParticleCount >= MinParticleCountForTrigger);
-		
-		// Enter 이벤트
-		if (bIsColliding && !bWasColliding)
-		{
-			if (OnFluidColliding.IsBound())
-			{
-				OnFluidColliding.Broadcast(CollidingParticleCount);
-			}
-		}
-		// Exit 이벤트
-		else if (!bIsColliding && bWasColliding)
-		{
-			if (OnFluidStopColliding.IsBound())
-			{
-				OnFluidStopColliding.Broadcast();
-			}
-		}
-		
-		bWasColliding = bIsColliding;
-	}
-
 	// 본 레벨 추적은 FluidSimulator::UpdateAttachedParticlePositions()에서 처리
-
-	// Per-Polygon Collision AABB 디버그 시각화
-	if (bUsePerPolygonCollision && bDrawPerPolygonAABB)
-	{
-		FBox AABB = GetPerPolygonFilterAABB();
-		if (AABB.IsValid)
-		{
-			DrawDebugBox(
-				GetWorld(),
-				AABB.GetCenter(),
-				AABB.GetExtent(),
-				FColor::Cyan,
-				false,  // bPersistentLines
-				-1.0f,  // LifeTime (매 프레임 갱신)
-				0,      // DepthPriority
-				2.0f    // Thickness
-			);
-		}
-	}
 
 	// GPU Collision Feedback 처리 (Particle -> Player Interaction)
 	if (bEnableForceFeedback)
@@ -215,8 +149,8 @@ void UFluidInteractionComponent::CreateAutoCollider()
 	if (AutoCollider)
 	{
 		AutoCollider->RegisterComponent();
-		AutoCollider->bAllowAdhesion = bCanAttachFluid;
-		AutoCollider->AdhesionMultiplier = AdhesionMultiplier;
+		//AutoCollider->bAllowAdhesion = bCanAttachFluid;
+		//AutoCollider->AdhesionMultiplier = AdhesionMultiplier;
 
 		// TargetMeshComponent 자동 설정
 		// 우선순위: SkeletalMeshComponent > CapsuleComponent > StaticMeshComponent
@@ -268,30 +202,6 @@ void UFluidInteractionComponent::UnregisterFromSimulator()
 	}
 }
 
-void UFluidInteractionComponent::UpdateAttachedParticleCount()
-{
-	AActor* Owner = GetOwner();
-	int32 Count = 0;
-
-	if (TargetSubsystem)
-	{
-		// Iterate all Modules from subsystem
-		for (UKawaiiFluidSimulationModule* Module : TargetSubsystem->GetAllModules())
-		{
-			if (!Module) continue;
-			for (const FFluidParticle& Particle : Module->GetParticles())
-			{
-				if (Particle.bIsAttached && Particle.AttachedActor.Get() == Owner)
-				{
-					++Count;
-				}
-			}
-		}
-	}
-
-	AttachedParticleCount = Count;
-}
-
 void UFluidInteractionComponent::DetachAllFluid()
 {
 	AActor* Owner = GetOwner();
@@ -319,8 +229,6 @@ void UFluidInteractionComponent::DetachAllFluid()
 		}
 	}
 
-	AttachedParticleCount = 0;
-	bIsWet = false;
 }
 
 void UFluidInteractionComponent::PushFluid(FVector Direction, float Force)
@@ -363,115 +271,6 @@ void UFluidInteractionComponent::PushFluid(FVector Direction, float Force)
 	}
 }
 
-void UFluidInteractionComponent::DetectCollidingParticles()
-{
-	if (!AutoCollider)
-	{
-		CollidingParticleCount = 0;
-		return;
-	}
-
-	// 캐시 갱신
-	AutoCollider->CacheCollisionShapes();
-	if (!AutoCollider->IsCacheValid())
-	{
-		CollidingParticleCount = 0;
-		return;
-	}
-
-	AActor* Owner = GetOwner();
-	int32 Count = 0;
-	FBox ColliderBounds = AutoCollider->GetCachedBounds();
-
-	if (TargetSubsystem)
-	{
-		TArray<int32> CandidateIndices;
-
-		for (UKawaiiFluidSimulationModule* Module : TargetSubsystem->GetAllModules())
-		{
-			if (!Module) continue;
-
-			FSpatialHash* SpatialHash = Module->GetSpatialHash();
-			const TArray<FFluidParticle>& Particles = Module->GetParticles();
-
-			if (SpatialHash)
-			{
-				// SpatialHash로 바운딩 박스 내 파티클만 쿼리
-				SpatialHash->QueryBox(ColliderBounds, CandidateIndices);
-
-				for (int32 Idx : CandidateIndices)
-				{
-					if (Idx < 0 || Idx >= Particles.Num()) continue;
-
-					const FFluidParticle& Particle = Particles[Idx];
-
-					// 1. 이미 붙어있으면 충돌 중
-					if (Particle.bIsAttached && Particle.AttachedActor.Get() == Owner)
-					{
-						++Count;
-						continue;
-					}
-
-					// 2. 정밀 체크 (후보만)
-					if (AutoCollider->IsPointInside(Particle.Position))
-					{
-						++Count;
-					}
-				}
-			}
-			else
-			{
-				// SpatialHash 없으면 기존 방식 (폴백)
-				for (const FFluidParticle& Particle : Particles)
-				{
-					if (Particle.bIsAttached && Particle.AttachedActor.Get() == Owner)
-					{
-						++Count;
-						continue;
-					}
-
-					if (AutoCollider->IsPointInside(Particle.Position))
-					{
-						++Count;
-					}
-				}
-			}
-		}
-	}
-
-	CollidingParticleCount = Count;
-}
-
-FBox UFluidInteractionComponent::GetPerPolygonFilterAABB() const
-{
-	AActor* Owner = GetOwner();
-	if (!Owner)
-	{
-		return FBox(ForceInit);
-	}
-
-	FBox ActorBounds(ForceInit);
-
-	// SkeletalMeshComponent가 있으면 그 바운딩 박스 사용 (더 정확함)
-	if (USkeletalMeshComponent* SkelMesh = Owner->FindComponentByClass<USkeletalMeshComponent>())
-	{
-		ActorBounds = SkelMesh->Bounds.GetBox();
-	}
-	else
-	{
-		// 없으면 Actor 전체 바운딩 박스 사용
-		ActorBounds = Owner->GetComponentsBoundingBox(true);
-	}
-
-	// 패딩 적용
-	if (PerPolygonAABBPadding > 0.0f && ActorBounds.IsValid)
-	{
-		ActorBounds = ActorBounds.ExpandBy(PerPolygonAABBPadding);
-	}
-
-	return ActorBounds;
-}
-
 //=============================================================================
 // GPU Collision Feedback Implementation (Particle -> Player Interaction)
 //=============================================================================
@@ -493,11 +292,13 @@ void UFluidInteractionComponent::ProcessCollisionFeedback(float DeltaTime)
 
 	// GPUSimulator에서 피드백 가져오기 (첫 번째 GPU 모드 모듈에서)
 	FGPUFluidSimulator* GPUSimulator = nullptr;
-for (UKawaiiFluidSimulationModule* Module : TargetSubsystem->GetAllModules())
+	UKawaiiFluidSimulationModule* SourceModule = nullptr;
+	for (UKawaiiFluidSimulationModule* Module : TargetSubsystem->GetAllModules())
 	{
 		if (Module && Module->GetGPUSimulator())
 		{
 			GPUSimulator = Module->GetGPUSimulator();
+			SourceModule = Module;
 			break;
 		}
 	}
@@ -551,7 +352,8 @@ for (UKawaiiFluidSimulationModule* Module : TargetSubsystem->GetAllModules())
 		// 본별 힘 처리 (Per-Bone Force)
 		if (bEnablePerBoneForce)
 		{
-			ProcessPerBoneForces(DeltaTime, AllFeedback, FeedbackCount);
+			const float ParticleRadius = FMath::Max(SourceModule ? SourceModule->GetParticleRadius() : 3.0f, 0.1f);
+			ProcessPerBoneForces(DeltaTime, AllFeedback, FeedbackCount, ParticleRadius);
 
 			// 본 충돌 이벤트 처리 (Niagara Spawning용)
 			ProcessBoneCollisionEvents(DeltaTime, AllFeedback, FeedbackCount);
@@ -560,7 +362,7 @@ for (UKawaiiFluidSimulationModule* Module : TargetSubsystem->GetAllModules())
 		if (FeedbackCount > 0)
 		{
 			// 항력 계산 파라미터
-			const float ParticleRadius = 3.0f;  // cm (기본값)
+			const float ParticleRadius = FMath::Max(SourceModule ? SourceModule->GetParticleRadius() : 3.0f, 0.1f);
 			const float ParticleArea = PI * ParticleRadius * ParticleRadius;  // cm²
 			const float AreaInM2 = ParticleArea * 0.0001f;  // m² (cm² → m²)
 
@@ -745,7 +547,7 @@ void UFluidInteractionComponent::CheckBoneImpacts()
 	// [디버깅] 충돌된 BoneIndex와 ColliderIndex 출력
 	if (ActualCollidedBones.Num() > 0)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[BoneImpact] 실제 충돌된 BoneIndex: %s"), *FString::JoinBy(ActualCollidedBones, TEXT(", "), [](int32 Idx) { return FString::FromInt(Idx); }));
+		//UE_LOG(LogTemp, Warning, TEXT("[BoneImpact] 실제 충돌된 BoneIndex: %s"), *FString::JoinBy(ActualCollidedBones, TEXT(", "), [](int32 Idx) { return FString::FromInt(Idx); }));
 
 		// ColliderIndex도 출력
 		for (UKawaiiFluidSimulationModule* Module : TargetSubsystem->GetAllModules())
@@ -763,8 +565,7 @@ void UFluidInteractionComponent::CheckBoneImpacts()
 			{
 				if (ActualCollidedBones.Contains(Feedback.BoneIndex))
 				{
-					UE_LOG(LogTemp, Warning, TEXT("[BoneImpact]   ColliderIndex=%d, ColliderType=%d → BoneIndex=%d"),
-						Feedback.ColliderIndex, Feedback.ColliderType, Feedback.BoneIndex);
+					//UE_LOG(LogTemp, Warning, TEXT("[BoneImpact]   ColliderIndex=%d, ColliderType=%d → BoneIndex=%d"),Feedback.ColliderIndex, Feedback.ColliderType, Feedback.BoneIndex);
 					break;  // 첫 번째만 출력
 				}
 			}
@@ -781,7 +582,7 @@ void UFluidInteractionComponent::CheckBoneImpacts()
 	{
 		// [디버깅] BoneName → BoneIndex 변환 로그
 		int32 ExpectedBoneIndex = SkelMesh ? SkelMesh->GetBoneIndex(BoneName) : INDEX_NONE;
-		UE_LOG(LogTemp, Warning, TEXT("[BoneImpact] MonitoredBone: %s → BoneIndex: %d"), *BoneName.ToString(), ExpectedBoneIndex);
+		//UE_LOG(LogTemp, Warning, TEXT("[BoneImpact] MonitoredBone: %s → BoneIndex: %d"), *BoneName.ToString(), ExpectedBoneIndex);
 
 		// 본별 충격 데이터 가져오기
 		float ImpactSpeed = GetFluidImpactSpeedForBone(BoneName);
@@ -793,7 +594,7 @@ void UFluidInteractionComponent::CheckBoneImpacts()
 			FVector ImpactDirection = GetFluidImpactDirectionForBone(BoneName);
 
 			// [디버깅] 이벤트 발생 로그
-			UE_LOG(LogTemp, Warning, TEXT("[BoneImpact] 이벤트 발생 - BoneName: %s, Speed: %.1f, Force: %.1f"), *BoneName.ToString(), ImpactSpeed, ImpactForce);
+			//UE_LOG(LogTemp, Warning, TEXT("[BoneImpact] 이벤트 발생 - BoneName: %s, Speed: %.1f, Force: %.1f"), *BoneName.ToString(), ImpactSpeed, ImpactForce);
 
 			// 이벤트 브로드캐스트
 			OnBoneFluidImpact.Broadcast(BoneName, ImpactSpeed, ImpactForce, ImpactDirection);
@@ -1189,7 +990,7 @@ void UFluidInteractionComponent::InitializeBoneNameCache()
 	bBoneNameCacheInitialized = true;
 }
 
-void UFluidInteractionComponent::ProcessPerBoneForces(float DeltaTime, const TArray<FGPUCollisionFeedback>& AllFeedback, int32 FeedbackCount)
+void UFluidInteractionComponent::ProcessPerBoneForces(float DeltaTime, const TArray<FGPUCollisionFeedback>& AllFeedback, int32 FeedbackCount, float ParticleRadius)
 {
 	AActor* Owner = GetOwner();
 	const int32 MyOwnerID = Owner ? Owner->GetUniqueID() : 0;
@@ -1220,7 +1021,6 @@ void UFluidInteractionComponent::ProcessPerBoneForces(float DeltaTime, const TAr
 	const FVector BodyVelocityInMS = BodyVelocity * 0.01f;  // cm/s → m/s
 
 	// 항력 계산 파라미터
-	const float ParticleRadius = 3.0f;  // cm (기본값)
 	const float ParticleArea = PI * ParticleRadius * ParticleRadius;  // cm²
 	const float AreaInM2 = ParticleArea * 0.0001f;  // m² (cm² → m²)
 

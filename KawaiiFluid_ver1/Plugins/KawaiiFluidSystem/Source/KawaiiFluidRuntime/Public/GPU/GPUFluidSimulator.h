@@ -8,7 +8,6 @@
 #include "RenderResource.h"
 #include "GPU/GPUFluidParticle.h"
 #include "GPU/Managers/GPUSpawnManager.h"
-#include "GPU/Managers/GPUStreamCompactionManager.h"
 #include "GPU/Managers/GPUCollisionManager.h"
 #include "GPU/Managers/GPUZOrderSortManager.h"
 #include "GPU/Managers/GPUBoundarySkinningManager.h"
@@ -518,50 +517,6 @@ public:
 	}
 
 	//=============================================================================
-	// Stream Compaction (Phase 2 - Per-Polygon Collision)
-	// GPU AABB filtering using parallel prefix sum
-	//=============================================================================
-
-	/**
-	 * Execute AABB filtering on GPU
-	 * Filters particles inside any of the provided AABBs using Stream Compaction
-	 * @param FilterAABBs - Array of AABBs to filter against
-	 */
-	void ExecuteAABBFiltering(const TArray<FGPUFilterAABB>& FilterAABBs);
-
-	/**
-	 * Get filtered candidate particles (GPU→CPU readback)
-	 * Call after ExecuteAABBFiltering to get results
-	 * @param OutCandidates - Output array of candidate particles
-	 * @return true if candidates are available
-	 */
-	bool GetFilteredCandidates(TArray<FGPUCandidateParticle>& OutCandidates);
-
-	/**
-	 * Get count of filtered candidates
-	 */
-	int32 GetFilteredCandidateCount() const { return StreamCompactionManager.IsValid() ? StreamCompactionManager->GetFilteredCandidateCount() : 0; }
-
-	/**
-	 * Check if filtered candidates are available
-	 */
-	bool HasFilteredCandidates() const { return StreamCompactionManager.IsValid() && StreamCompactionManager->HasFilteredCandidates(); }
-
-	/**
-	 * Apply particle corrections from CPU Per-Polygon collision processing
-	 * Uploads corrections to GPU and applies them via compute shader
-	 * @param Corrections - Array of position corrections from Per-Polygon collision
-	 */
-	void ApplyCorrections(const TArray<FParticleCorrection>& Corrections);
-
-	/**
-	 * Apply attached particle position updates
-	 * Updates positions for particles attached to skeletal mesh surfaces
-	 * Also handles detachment with velocity setting
-	 * @param Updates - Array of position updates from attachment system
-	 */
-	void ApplyAttachmentUpdates(const TArray<FAttachedParticleUpdate>& Updates);
-
 	//=============================================================================
 	// Collision Feedback (Delegated to FGPUCollisionManager)
 	//=============================================================================
@@ -1078,14 +1033,6 @@ private:
 
 	// GPU Counter buffer for atomic particle count (used during spawn pass)
 	TRefCountPtr<FRDGPooledBuffer> ParticleCounterBuffer;
-
-	//=============================================================================
-	// Stream Compaction (Delegated to FGPUStreamCompactionManager)
-	// GPU AABB filtering using parallel prefix sum for per-polygon collision
-	//=============================================================================
-
-	// StreamCompactionManager handles all AABB filtering and correction functionality
-	TUniquePtr<FGPUStreamCompactionManager> StreamCompactionManager;
 
 	//=============================================================================
 	// Collision System (Delegated to FGPUCollisionManager)

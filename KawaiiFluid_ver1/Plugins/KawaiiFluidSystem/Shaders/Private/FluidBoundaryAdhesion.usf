@@ -61,6 +61,7 @@ float AdhesionForceStrength;
 float AdhesionRadius;
 float CohesionStrength;
 float SmoothingRadius;
+float3 Gravity;
 float DeltaTime;
 float RestDensity;
 float Poly6Coeff;
@@ -196,8 +197,9 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	float3 adhesionForce = float3(0, 0, 0);
 	float3 cohesionForce = float3(0, 0, 0);
+	float3 normalAccum = float3(0, 0, 0);
+	float normalWeightSum = 0.0f;
 	float h = AdhesionRadius;  // Use AdhesionRadius for tighter adhesion range
-	float weightSum = 0.0f;  // For normalization
 
 	if (bUseBoundaryZOrder)
 	{
@@ -249,8 +251,10 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							float C = CohesionKernel(r, h);
 							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
 
-							// Accumulate weight for normalization
-							weightSum += A;
+							// Accumulate weighted normal for gravity cancellation
+							float normalWeight = A * closeFactor;
+							normalAccum += boundary.Normal * normalWeight;
+							normalWeightSum += normalWeight;
 						}
 					}
 				}
@@ -304,8 +308,10 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							float C = CohesionKernel(r, h);
 							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
 
-							// Accumulate weight for normalization
-							weightSum += A;
+							// Accumulate weighted normal for gravity cancellation
+							float normalWeight = A * closeFactor;
+							normalAccum += boundary.Normal * normalWeight;
+							normalWeightSum += normalWeight;
 						}
 					}
 				}
@@ -314,7 +320,7 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	// Note: Force normalization removed to allow proper force accumulation
-	// Previously divided by weightSum which caused weak adhesion with many boundary particles
+	// Previously divided by a weight sum which caused weak adhesion with many boundary particles
 	// Now forces accumulate naturally - more neighbors = stronger adhesion
 
 	// Apply forces to velocity
@@ -330,6 +336,20 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	// Apply as velocity change (F = ma, dv = F/m * dt)
 	particle.Velocity += totalForce / particle.Mass * DeltaTime;
+
+	// Cancel gravity normal component using adhesion strength (no extra parameter)
+	// This keeps particles from dropping straight down while still allowing tangential sliding.
+	if (normalWeightSum > SMALL_NUMBER)
+	{
+		float3 avgNormal = normalize(normalAccum / normalWeightSum);
+		float gravityNormal = dot(Gravity, avgNormal);
+		if (gravityNormal < 0.0f)
+		{
+			float cancelScale = saturate(AdhesionForceStrength / 50.0f);
+			float3 gravityCancel = -gravityNormal * avgNormal * cancelScale;
+			particle.Velocity += gravityCancel * DeltaTime;
+		}
+	}
 
 	Particles[idx] = particle;
 }

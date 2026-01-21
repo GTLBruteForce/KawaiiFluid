@@ -104,50 +104,6 @@ IMPLEMENT_GLOBAL_SHADER(FWriteTotalCountCS_RDG,
 	"/Plugin/KawaiiFluidSystem/Private/FluidDespawnParticles.usf",
 	"WriteTotalCountCS", SF_Compute);
 //=============================================================================
-// Stream Compaction Shaders (Phase 2 - Per-Polygon Collision)
-//=============================================================================
-
-IMPLEMENT_GLOBAL_SHADER(FAABBMarkCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidAABBMark.usf",
-	"AABBMarkCS", SF_Compute);
-
-IMPLEMENT_GLOBAL_SHADER(FPrefixSumBlockCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidPrefixSum.usf",
-	"PrefixSumBlockCS", SF_Compute);
-
-IMPLEMENT_GLOBAL_SHADER(FScanBlockSumsCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidPrefixSum.usf",
-	"ScanBlockSumsCS", SF_Compute);
-
-IMPLEMENT_GLOBAL_SHADER(FAddBlockOffsetsCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidPrefixSum.usf",
-	"AddBlockOffsetsCS", SF_Compute);
-
-IMPLEMENT_GLOBAL_SHADER(FCompactCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidCompact.usf",
-	"CompactCS", SF_Compute);
-
-IMPLEMENT_GLOBAL_SHADER(FWriteTotalCountCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidCompact.usf",
-	"WriteTotalCountCS", SF_Compute);
-
-//=============================================================================
-// Per-Polygon Collision Correction Shader
-//=============================================================================
-
-IMPLEMENT_GLOBAL_SHADER(FApplyCorrectionsCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidApplyCorrections.usf",
-	"ApplyCorrectionsCS", SF_Compute);
-
-//=============================================================================
-// Attachment Updates Shader
-//=============================================================================
-
-IMPLEMENT_GLOBAL_SHADER(FApplyAttachmentUpdatesCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidApplyAttachmentUpdates.usf",
-	"ApplyAttachmentUpdatesCS", SF_Compute);
-
-//=============================================================================
 // GPU Adhesion Shaders (Bone-based attachment)
 //=============================================================================
 

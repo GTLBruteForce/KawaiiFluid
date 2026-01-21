@@ -202,8 +202,7 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 
 			// [디버깅] 캐시 시점의 BoneIndex 확인
 			int32 CachedIndex = CachedCapsules.Num();
-			UE_LOG(LogTemp, Warning, TEXT("[CapsuleCache] Idx=%d, BoneName='%s', BoneIndex=%d"),
-				CachedIndex, *BodySetup->BoneName.ToString(), BoneIndex);
+			//UE_LOG(LogTemp, Warning, TEXT("[CapsuleCache] Idx=%d, BoneName='%s', BoneIndex=%d"),CachedIndex, *BodySetup->BoneName.ToString(), BoneIndex);
 
 			CachedCapsules.Add(CachedCap);
 

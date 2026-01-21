@@ -1012,6 +1012,7 @@ void FGPUBoundarySkinningManager::AddBoundaryAdhesionPass(
 		PassParameters->AdhesionRadius = CachedBoundaryAdhesionParams.AdhesionRadius;
 		PassParameters->CohesionStrength = CachedBoundaryAdhesionParams.CohesionStrength;
 		PassParameters->SmoothingRadius = Params.SmoothingRadius;
+		PassParameters->Gravity = Params.Gravity;
 		PassParameters->DeltaTime = Params.DeltaTime;
 		PassParameters->RestDensity = Params.RestDensity;
 		PassParameters->Poly6Coeff = Params.Poly6Coeff;

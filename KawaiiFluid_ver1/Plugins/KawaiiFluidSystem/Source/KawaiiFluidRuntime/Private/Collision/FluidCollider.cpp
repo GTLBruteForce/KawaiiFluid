@@ -10,8 +10,8 @@ UFluidCollider::UFluidCollider()
 	bColliderEnabled = true;
 	Friction = 0.3f;
 	Restitution = 0.2f;
-	bAllowAdhesion = true;
-	AdhesionMultiplier = 1.0f;
+	//bAllowAdhesion = true;
+	//AdhesionMultiplier = 1.0f;
 }
 
 void UFluidCollider::BeginPlay()
