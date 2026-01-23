@@ -1925,6 +1925,88 @@ public:
 };
 
 //=============================================================================
+// ParticleID Radix Sort Shaders
+// Sort particles by ParticleID for CPU readback optimization.
+// Reads ParticleID directly from Particles buffer (first pass only).
+//=============================================================================
+
+/**
+ * ParticleID Histogram Compute Shader
+ * Reads ParticleID directly from Particles buffer instead of KeysIn
+ */
+class FRadixSortHistogramParticleIDCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FRadixSortHistogramParticleIDCS);
+	SHADER_USE_PARAMETER_STRUCT(FRadixSortHistogramParticleIDCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, Histogram)
+		SHADER_PARAMETER(int32, ElementCount)
+		SHADER_PARAMETER(int32, BitOffset)
+		SHADER_PARAMETER(int32, NumGroups)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("RADIX_BITS"), GPU_RADIX_BITS);
+		OutEnvironment.SetDefine(TEXT("RADIX_SIZE"), GPU_RADIX_SIZE);
+		OutEnvironment.SetDefine(TEXT("ELEMENTS_PER_THREAD"), GPU_RADIX_ELEMENTS_PER_THREAD);
+	}
+};
+
+/**
+ * ParticleID Scatter Compute Shader
+ * Reads ParticleID directly from Particles buffer, outputs to Keys/Values
+ */
+class FRadixSortScatterParticleIDCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FRadixSortScatterParticleIDCS);
+	SHADER_USE_PARAMETER_STRUCT(FRadixSortScatterParticleIDCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, KeysOut)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ValuesOut)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, HistogramSRV)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, GlobalOffsetsSRV)
+		SHADER_PARAMETER(int32, ElementCount)
+		SHADER_PARAMETER(int32, BitOffset)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(
+		const FGlobalShaderPermutationParameters& Parameters,
+		FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("RADIX_BITS"), GPU_RADIX_BITS);
+		OutEnvironment.SetDefine(TEXT("RADIX_SIZE"), GPU_RADIX_SIZE);
+		OutEnvironment.SetDefine(TEXT("ELEMENTS_PER_THREAD"), GPU_RADIX_ELEMENTS_PER_THREAD);
+	}
+};
+
+//=============================================================================
 // Particle Reordering Shaders
 // Physically reorder particle data based on sorted indices
 //=============================================================================

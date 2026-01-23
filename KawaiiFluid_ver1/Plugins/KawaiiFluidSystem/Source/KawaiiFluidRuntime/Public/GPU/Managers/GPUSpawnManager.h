@@ -105,10 +105,9 @@ public:
 	void AddDespawnByIDRequest(int32 ParticleID);
 
 	/**
-	 * Cleanup AlreadyRequestedIDs based on currently alive particles (Pull 방식).
-	 * AliveParticleIDs를 순회하며 AlreadyRequestedIDs에서 검색 (Set lookup O(1)).
-	 * Array 순회 + 작은 Set에서 lookup이 TSet 생성 + 큰 Set에서 lookup보다 효율적.
-	 * @param AliveParticleIDs - Array of IDs currently alive on GPU
+	 * Cleanup AlreadyRequestedIDs based on currently alive particles.
+	 * 두 배열 모두 ParticleID로 정렬되어 있으므로 std::set_intersection 사용 O(n+m).
+	 * @param AliveParticleIDs - Sorted array of IDs currently alive on GPU
 	 */
 	void CleanupCompletedRequests(const TArray<int32>& AliveParticleIDs);
 
@@ -295,7 +294,7 @@ private:
 	//=========================================================================
 	TArray<int32> PendingDespawnByIDs;
 	TArray<int32> ActiveDespawnByIDs;
-	TSet<int32> AlreadyRequestedIDs;  // 이미 제거 요청한 ID 추적 (중복 방지)
+	TArray<int32> AlreadyRequestedIDs;  // 정렬된 상태로 유지, std::set_* 연산 사용
 	mutable FCriticalSection DespawnByIDLock;
 
 	// Lock-free flag for quick pending check

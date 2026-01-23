@@ -671,13 +671,28 @@ void FGPUFluidSimulator::EndFrame()
 			// Only enqueue readbacks if we have particles
 			if (Self->CurrentParticleCount > 0 && Self->PersistentParticleBuffer.IsValid())
 			{
-				// Stats readback
-				const bool bNeedReadback = GetFluidStatsCollector().IsAnyReadbackNeeded();
-				if (bNeedReadback)
+				// ParticleID 정렬 후 Stats Readback (RemoveOldestParticles O(1) 최적화)
 				{
-					Self->EnqueueStatsReadback(RHICmdList,
-						Self->PersistentParticleBuffer->GetRHI(),
-						Self->CurrentParticleCount);
+					FRDGBuilder GraphBuilder(RHICmdList);
+
+					// PersistentParticleBuffer를 RDG에 등록
+					FRDGBufferRef ParticleBuffer = GraphBuilder.RegisterExternalBuffer(Self->PersistentParticleBuffer);
+
+					// ParticleID로 정렬
+					FRDGBufferRef SortedBuffer = Self->ExecuteParticleIDSortPipeline(
+						GraphBuilder, ParticleBuffer, Self->CurrentParticleCount);
+
+					// Readback 패스 추가 (AddReadbackBufferPass 사용 - 버퍼 의존성 자동 처리)
+					const int32 ParticleCount = Self->CurrentParticleCount;
+					AddReadbackBufferPass(GraphBuilder,
+						RDG_EVENT_NAME("GPUFluid::ParticleIDSortedReadback"),
+						SortedBuffer,
+						[Self, SortedBuffer, ParticleCount](FRHICommandListImmediate& InRHICmdList)
+						{
+							Self->EnqueueStatsReadback(InRHICmdList, SortedBuffer->GetRHI(), ParticleCount);
+						});
+
+					GraphBuilder.Execute();
 				}
 
 				// Collision feedback readback
@@ -1338,6 +1353,195 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 	}
 }
 
+//=============================================================================
+// ParticleID Sort Pipeline - Sorts particles by ParticleID for O(1) oldest removal
+//=============================================================================
+
+FRDGBufferRef FGPUFluidSimulator::ExecuteParticleIDSortPipeline(
+	FRDGBuilder& GraphBuilder,
+	FRDGBufferRef InParticleBuffer,
+	int32 ParticleCount)
+{
+	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid::ParticleIDSort");
+
+	if (ParticleCount <= 0)
+	{
+		return InParticleBuffer;
+	}
+
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+
+	// ParticleID is 32-bit, 4 bits per pass = 8 passes total
+	const int32 RadixSortPasses = 8;
+	const int32 NumBlocks = FMath::DivideAndRoundUp(ParticleCount, GPU_RADIX_ELEMENTS_PER_GROUP);
+	const int32 RequiredHistogramSize = GPU_RADIX_SIZE * NumBlocks;
+
+	// Create transient buffers for sorting
+	FRDGBufferDesc KeysDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ParticleCount);
+	FRDGBufferRef Keys[2] = {
+		GraphBuilder.CreateBuffer(KeysDesc, TEXT("ParticleIDSort.Keys0")),
+		GraphBuilder.CreateBuffer(KeysDesc, TEXT("ParticleIDSort.Keys1"))
+	};
+
+	FRDGBufferDesc ValuesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ParticleCount);
+	FRDGBufferRef Values[2] = {
+		GraphBuilder.CreateBuffer(ValuesDesc, TEXT("ParticleIDSort.Values0")),
+		GraphBuilder.CreateBuffer(ValuesDesc, TEXT("ParticleIDSort.Values1"))
+	};
+
+	FRDGBufferDesc HistogramDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), RequiredHistogramSize);
+	FRDGBufferRef Histogram = GraphBuilder.CreateBuffer(HistogramDesc, TEXT("ParticleIDSort.Histogram"));
+
+	FRDGBufferDesc BucketOffsetsDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_RADIX_SIZE);
+	FRDGBufferRef BucketOffsets = GraphBuilder.CreateBuffer(BucketOffsetsDesc, TEXT("ParticleIDSort.BucketOffsets"));
+
+	int32 BufferIndex = 0;
+
+	for (int32 Pass = 0; Pass < RadixSortPasses; ++Pass)
+	{
+		const int32 BitOffset = Pass * GPU_RADIX_BITS;
+		const int32 SrcIndex = BufferIndex;
+		const int32 DstIndex = BufferIndex ^ 1;
+
+		RDG_EVENT_SCOPE(GraphBuilder, "ParticleIDSort Pass %d (bits %d-%d)", Pass, BitOffset, BitOffset + 3);
+
+		if (Pass == 0)
+		{
+			// First pass: Read directly from Particles[].ParticleID
+			// Histogram pass
+			{
+				TShaderMapRef<FRadixSortHistogramParticleIDCS> HistogramShader(ShaderMap);
+				FRadixSortHistogramParticleIDCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortHistogramParticleIDCS::FParameters>();
+				Params->Particles = GraphBuilder.CreateSRV(InParticleBuffer);
+				Params->Histogram = GraphBuilder.CreateUAV(Histogram);
+				Params->ElementCount = ParticleCount;
+				Params->BitOffset = BitOffset;
+				Params->NumGroups = NumBlocks;
+
+				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("ParticleID_Histogram"), HistogramShader, Params, FIntVector(NumBlocks, 1, 1));
+			}
+
+			// Global Prefix Sum
+			{
+				TShaderMapRef<FRadixSortGlobalPrefixSumCS> PrefixSumShader(ShaderMap);
+				FRadixSortGlobalPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortGlobalPrefixSumCS::FParameters>();
+				Params->Histogram = GraphBuilder.CreateUAV(Histogram);
+				Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
+				Params->NumGroups = NumBlocks;
+
+				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("GlobalPrefixSum"), PrefixSumShader, Params, FIntVector(1, 1, 1));
+			}
+
+			// Bucket Prefix Sum
+			{
+				TShaderMapRef<FRadixSortBucketPrefixSumCS> BucketSumShader(ShaderMap);
+				FRadixSortBucketPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortBucketPrefixSumCS::FParameters>();
+				Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
+
+				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("BucketPrefixSum"), BucketSumShader, Params, FIntVector(1, 1, 1));
+			}
+
+			// Scatter pass - reads from Particles, writes to Keys/Values
+			{
+				TShaderMapRef<FRadixSortScatterParticleIDCS> ScatterShader(ShaderMap);
+				FRadixSortScatterParticleIDCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortScatterParticleIDCS::FParameters>();
+				Params->Particles = GraphBuilder.CreateSRV(InParticleBuffer);
+				Params->KeysOut = GraphBuilder.CreateUAV(Keys[DstIndex]);
+				Params->ValuesOut = GraphBuilder.CreateUAV(Values[DstIndex]);
+				Params->HistogramSRV = GraphBuilder.CreateSRV(Histogram);
+				Params->GlobalOffsetsSRV = GraphBuilder.CreateSRV(BucketOffsets);
+				Params->ElementCount = ParticleCount;
+				Params->BitOffset = BitOffset;
+
+				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("ParticleID_Scatter"), ScatterShader, Params, FIntVector(NumBlocks, 1, 1));
+			}
+		}
+		else
+		{
+			// Subsequent passes: Read from Keys/Values buffers (standard radix sort)
+			// Histogram pass
+			{
+				TShaderMapRef<FRadixSortHistogramCS> HistogramShader(ShaderMap);
+				FRadixSortHistogramCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortHistogramCS::FParameters>();
+				Params->KeysIn = GraphBuilder.CreateSRV(Keys[SrcIndex]);
+				Params->ValuesIn = GraphBuilder.CreateSRV(Values[SrcIndex]);
+				Params->Histogram = GraphBuilder.CreateUAV(Histogram);
+				Params->ElementCount = ParticleCount;
+				Params->BitOffset = BitOffset;
+				Params->NumGroups = NumBlocks;
+
+				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Histogram"), HistogramShader, Params, FIntVector(NumBlocks, 1, 1));
+			}
+
+			// Global Prefix Sum
+			{
+				TShaderMapRef<FRadixSortGlobalPrefixSumCS> PrefixSumShader(ShaderMap);
+				FRadixSortGlobalPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortGlobalPrefixSumCS::FParameters>();
+				Params->Histogram = GraphBuilder.CreateUAV(Histogram);
+				Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
+				Params->NumGroups = NumBlocks;
+
+				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("GlobalPrefixSum"), PrefixSumShader, Params, FIntVector(1, 1, 1));
+			}
+
+			// Bucket Prefix Sum
+			{
+				TShaderMapRef<FRadixSortBucketPrefixSumCS> BucketSumShader(ShaderMap);
+				FRadixSortBucketPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortBucketPrefixSumCS::FParameters>();
+				Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
+
+				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("BucketPrefixSum"), BucketSumShader, Params, FIntVector(1, 1, 1));
+			}
+
+			// Scatter pass
+			{
+				TShaderMapRef<FRadixSortScatterCS> ScatterShader(ShaderMap);
+				FRadixSortScatterCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortScatterCS::FParameters>();
+				Params->KeysIn = GraphBuilder.CreateSRV(Keys[SrcIndex]);
+				Params->ValuesIn = GraphBuilder.CreateSRV(Values[SrcIndex]);
+				Params->KeysOut = GraphBuilder.CreateUAV(Keys[DstIndex]);
+				Params->ValuesOut = GraphBuilder.CreateUAV(Values[DstIndex]);
+				Params->HistogramSRV = GraphBuilder.CreateSRV(Histogram);
+				Params->GlobalOffsetsSRV = GraphBuilder.CreateSRV(BucketOffsets);
+				Params->ElementCount = ParticleCount;
+				Params->BitOffset = BitOffset;
+
+				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Scatter"), ScatterShader, Params, FIntVector(NumBlocks, 1, 1));
+			}
+		}
+
+		BufferIndex ^= 1;
+	}
+
+	// Final sorted indices are in Values[BufferIndex]
+	FRDGBufferRef SortedIndices = Values[BufferIndex];
+
+	// Reorder particle data based on sorted indices
+	FRDGBufferDesc SortedParticlesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), ParticleCount);
+	FRDGBufferRef SortedParticleBuffer = GraphBuilder.CreateBuffer(SortedParticlesDesc, TEXT("ParticleIDSort.SortedParticles"));
+
+	{
+		TShaderMapRef<FReorderParticlesCS> ComputeShader(ShaderMap);
+		FReorderParticlesCS::FParameters* Params = GraphBuilder.AllocParameters<FReorderParticlesCS::FParameters>();
+		Params->OldParticles = GraphBuilder.CreateSRV(InParticleBuffer);
+		Params->SortedIndices = GraphBuilder.CreateSRV(SortedIndices);
+		Params->SortedParticles = GraphBuilder.CreateUAV(SortedParticleBuffer);
+		Params->ParticleCount = ParticleCount;
+
+		const int32 NumGroups = FMath::DivideAndRoundUp(ParticleCount, FReorderParticlesCS::ThreadGroupSize);
+
+		FComputeShaderUtils::AddPass(
+			GraphBuilder,
+			RDG_EVENT_NAME("ParticleIDSort::ReorderParticles(%d)", ParticleCount),
+			ComputeShader,
+			Params,
+			FIntVector(NumGroups, 1, 1)
+		);
+	}
+
+	return SortedParticleBuffer;
+}
+
 void FGPUFluidSimulator::ExtractPersistentBuffers(
 	FRDGBuilder& GraphBuilder,
 	FRDGBufferRef ParticleBuffer,
@@ -1345,6 +1549,7 @@ void FGPUFluidSimulator::ExtractPersistentBuffers(
 {
 	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_ExtractPersistentBuffers");
 
+	// Z-Order 버퍼 추출 (디버그/렌더링용)
 	GraphBuilder.QueueBufferExtraction(ParticleBuffer, &PersistentParticleBuffer, ERHIAccess::UAVCompute);
 
 	// Only extract legacy hash table buffers when Z-Order sorting is NOT enabled

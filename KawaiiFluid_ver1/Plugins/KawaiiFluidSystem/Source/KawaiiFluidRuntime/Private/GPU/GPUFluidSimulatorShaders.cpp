@@ -182,6 +182,18 @@ IMPLEMENT_GLOBAL_SHADER(FRadixSortSmallCS,
 	"RadixSortSmallCS", SF_Compute);
 
 //=============================================================================
+// ParticleID Radix Sort Shaders
+//=============================================================================
+
+IMPLEMENT_GLOBAL_SHADER(FRadixSortHistogramParticleIDCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
+	"RadixSortHistogramParticleIDCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FRadixSortScatterParticleIDCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
+	"RadixSortScatterParticleIDCS", SF_Compute);
+
+//=============================================================================
 // Particle Reordering Shaders
 //=============================================================================
 

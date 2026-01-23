@@ -6,6 +6,7 @@
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "RHIGPUReadback.h"
+#include <algorithm>  // std::set_intersection, std::set_difference, std::merge, std::lower_bound
 
 DECLARE_LOG_CATEGORY_EXTERN(LogGPUSpawnManager, Log, All);
 DEFINE_LOG_CATEGORY(LogGPUSpawnManager);
@@ -156,6 +157,20 @@ int32 FGPUSpawnManager::GetPendingSpawnCount() const
 void FGPUSpawnManager::AddDespawnByIDRequest(int32 ParticleID)
 {
 	FScopeLock Lock(&DespawnByIDLock);
+
+	// 중복 체크 (binary search O(log n))
+	auto It = std::lower_bound(AlreadyRequestedIDs.GetData(),
+		AlreadyRequestedIDs.GetData() + AlreadyRequestedIDs.Num(), ParticleID);
+
+	if (It != AlreadyRequestedIDs.GetData() + AlreadyRequestedIDs.Num() && *It == ParticleID)
+	{
+		return;  // 이미 요청됨
+	}
+
+	// 정렬 위치에 삽입
+	const int32 InsertIdx = It - AlreadyRequestedIDs.GetData();
+	AlreadyRequestedIDs.Insert(ParticleID, InsertIdx);
+
 	PendingDespawnByIDs.Add(ParticleID);
 	bHasPendingDespawnByIDRequests.store(true);
 }
@@ -164,60 +179,37 @@ void FGPUSpawnManager::CleanupCompletedRequests(const TArray<int32>& AlivePartic
 {
 	FScopeLock Lock(&DespawnByIDLock);
 
-	// AlreadyRequestedIDs가 비어있으면 할 일 없음
 	if (AlreadyRequestedIDs.Num() == 0)
 	{
 		return;
 	}
 
-	const int32 ParticleCount = AliveParticleIDs.Num();
-	if (ParticleCount == 0)
+	if (AliveParticleIDs.Num() == 0)
 	{
 		// 파티클이 없으면 모든 요청이 완료된 것
 		AlreadyRequestedIDs.Empty();
 		return;
 	}
 
-	// 병렬 처리: 청크별 로컬 Set → merge
-	const int32 NumChunks = FMath::Clamp(FPlatformMisc::NumberOfCoresIncludingHyperthreads(), 1, ParticleCount);
-	const int32 ChunkSize = (ParticleCount + NumChunks - 1) / NumChunks;
+	// 두 배열 모두 정렬됨 → std::set_intersection O(n+m)
+	// AlreadyRequestedIDs ∩ AliveParticleIDs = 아직 살아있는 요청 ID
+	TArray<int32> StillPending;
+	StillPending.SetNumUninitialized(AlreadyRequestedIDs.Num());  // 최대 크기 할당
 
-	TArray<TSet<int32>> ChunkSets;
-	ChunkSets.SetNum(NumChunks);
+	int32* OutEnd = std::set_intersection(
+		AlreadyRequestedIDs.GetData(), AlreadyRequestedIDs.GetData() + AlreadyRequestedIDs.Num(),
+		AliveParticleIDs.GetData(), AliveParticleIDs.GetData() + AliveParticleIDs.Num(),
+		StillPending.GetData());
 
-	// 각 청크에서 AlreadyRequestedIDs에 있는 ID만 수집 (읽기 전용이므로 thread-safe)
-	ParallelFor(NumChunks, [&](int32 ChunkIndex)
-	{
-		const int32 StartIdx = ChunkIndex * ChunkSize;
-		const int32 EndIdx = FMath::Min(StartIdx + ChunkSize, ParticleCount);
-		if (StartIdx >= EndIdx) return;  // 안전 체크
+	const int32 ResultCount = OutEnd - StillPending.GetData();
+	StillPending.SetNum(ResultCount);  // 실제 크기로 조정
 
-		auto& LocalSet = ChunkSets[ChunkIndex];
-
-		for (int32 i = StartIdx; i < EndIdx; ++i)
-		{
-			const int32 ID = AliveParticleIDs[i];
-			if (AlreadyRequestedIDs.Contains(ID))
-			{
-				LocalSet.Add(ID);
-			}
-		}
-	});
-
-	// Merge
-	TSet<int32> StillPending;
-	StillPending.Reserve(AlreadyRequestedIDs.Num());
-	for (int32 c = 0; c < NumChunks; ++c)
-	{
-		StillPending.Append(ChunkSets[c]);
-	}
-
-	const int32 RemovedCount = AlreadyRequestedIDs.Num() - StillPending.Num();
+	const int32 RemovedCount = AlreadyRequestedIDs.Num() - ResultCount;
 	AlreadyRequestedIDs = MoveTemp(StillPending);
 
 	if (RemovedCount > 0)
 	{
-		UE_LOG(LogGPUSpawnManager, Verbose, TEXT("CleanupCompletedRequests: Cleared %d IDs from tracking"), RemovedCount);
+		UE_LOG(LogGPUSpawnManager, Verbose, TEXT("CleanupCompletedRequests: Cleared %d IDs"), RemovedCount);
 	}
 }
 
@@ -229,27 +221,41 @@ void FGPUSpawnManager::AddDespawnByIDRequests(const TArray<int32>& ParticleIDs)
 	}
 
 	FScopeLock Lock(&DespawnByIDLock);
-	
 
-	// 중복 필터링: 이미 제거 요청한 ID는 제외
-	int32 OriginalCount = ParticleIDs.Num();
-	int32 FilteredCount = 0;
-	for (int32 ID : ParticleIDs)
-	{
-		if (!AlreadyRequestedIDs.Contains(ID))
-		{
-			PendingDespawnByIDs.Add(ID);
-			AlreadyRequestedIDs.Add(ID);
-			FilteredCount++;
-		}
-	}
+	const int32 OriginalCount = ParticleIDs.Num();
+
+	// ParticleIDs는 이미 정렬됨 (RemoveOldestParticles에서 정렬된 readback 사용)
+	// std::set_difference로 새로운 ID만 추출 O(n+m)
+	TArray<int32> NewIDs;
+	NewIDs.SetNumUninitialized(OriginalCount);  // 최대 크기 할당
+
+	int32* DiffEnd = std::set_difference(
+		ParticleIDs.GetData(), ParticleIDs.GetData() + ParticleIDs.Num(),
+		AlreadyRequestedIDs.GetData(), AlreadyRequestedIDs.GetData() + AlreadyRequestedIDs.Num(),
+		NewIDs.GetData());
+
+	const int32 FilteredCount = DiffEnd - NewIDs.GetData();
+	NewIDs.SetNum(FilteredCount);  // 실제 크기로 조정
 
 	if (FilteredCount > 0)
 	{
+		// 새 ID들을 PendingDespawnByIDs에 추가
+		PendingDespawnByIDs.Append(NewIDs);
+
+		// AlreadyRequestedIDs에 merge (정렬 유지)
+		TArray<int32> Merged;
+		Merged.SetNumUninitialized(AlreadyRequestedIDs.Num() + FilteredCount);
+
+		std::merge(
+			AlreadyRequestedIDs.GetData(), AlreadyRequestedIDs.GetData() + AlreadyRequestedIDs.Num(),
+			NewIDs.GetData(), NewIDs.GetData() + FilteredCount,
+			Merged.GetData());
+
+		AlreadyRequestedIDs = MoveTemp(Merged);
 		bHasPendingDespawnByIDRequests.store(true);
 	}
 
-	UE_LOG(LogGPUSpawnManager, Log, TEXT("AddDespawnByIDRequests: %d requested, %d new, %d duplicates (total pending: %d)"),
+	UE_LOG(LogGPUSpawnManager, Log, TEXT("AddDespawnByIDRequests: %d requested, %d new, %d duplicates (pending: %d)"),
 		OriginalCount, FilteredCount, OriginalCount - FilteredCount, PendingDespawnByIDs.Num());
 }
 

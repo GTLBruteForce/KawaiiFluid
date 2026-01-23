@@ -438,3 +438,151 @@ void RadixSortSmallCS(uint3 GroupThreadId : SV_GroupThreadID)
         }
     }
 }
+
+//=============================================================================
+// ParticleID Sorting - Direct read from Particles buffer
+// Used for sorting particles by ParticleID before CPU readback.
+// Lower ParticleID = older particle (spawned earlier).
+//=============================================================================
+
+#include "FluidGPUPhysics.ush"
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+
+// Histogram pass - reads ParticleID directly from Particles buffer
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void RadixSortHistogramParticleIDCS(
+    uint3 GroupId : SV_GroupID,
+    uint3 GroupThreadId : SV_GroupThreadID,
+    uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint localIdx = GroupThreadId.x;
+    uint groupIdx = GroupId.x;
+    uint globalBase = groupIdx * ELEMENTS_PER_GROUP;
+
+    // Initialize local histogram
+    if (localIdx < RADIX_SIZE)
+    {
+        LocalHistogram[localIdx] = 0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // Load elements and count - read ParticleID directly from Particles
+    [unroll]
+    for (uint i = 0; i < ELEMENTS_PER_THREAD; ++i)
+    {
+        uint elementIdx = globalBase + localIdx * ELEMENTS_PER_THREAD + i;
+
+        if (elementIdx < (uint)ElementCount)
+        {
+            uint key = (uint)Particles[elementIdx].ParticleID;
+            uint digit = (key >> BitOffset) & RADIX_MASK;
+            InterlockedAdd(LocalHistogram[digit], 1);
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // Write local histogram to global histogram
+    if (localIdx < RADIX_SIZE)
+    {
+        Histogram[groupIdx * RADIX_SIZE + localIdx] = LocalHistogram[localIdx];
+    }
+}
+
+// Scatter pass - reads ParticleID directly from Particles buffer
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void RadixSortScatterParticleIDCS(
+    uint3 GroupId : SV_GroupID,
+    uint3 GroupThreadId : SV_GroupThreadID)
+{
+    uint localIdx = GroupThreadId.x;
+    uint groupIdx = GroupId.x;
+    uint globalBase = groupIdx * ELEMENTS_PER_GROUP;
+
+    // Thread-local storage
+    uint myKeys[ELEMENTS_PER_THREAD];
+    uint myValues[ELEMENTS_PER_THREAD];
+    uint myDigits[ELEMENTS_PER_THREAD];
+    uint myValid[ELEMENTS_PER_THREAD];
+
+    // Initialize per-thread digit counts
+    for (uint d = 0; d < RADIX_SIZE; ++d)
+    {
+        ThreadDigitCounts[d * THREAD_GROUP_SIZE + localIdx] = 0;
+    }
+
+    // Load elements - read ParticleID from Particles
+    [unroll]
+    for (uint i = 0; i < ELEMENTS_PER_THREAD; ++i)
+    {
+        uint elementIdx = globalBase + localIdx * ELEMENTS_PER_THREAD + i;
+
+        if (elementIdx < (uint)ElementCount)
+        {
+            myKeys[i] = (uint)Particles[elementIdx].ParticleID;
+            myValues[i] = elementIdx;  // Index as value for reordering
+            myDigits[i] = (myKeys[i] >> BitOffset) & RADIX_MASK;
+            myValid[i] = 1;
+            ThreadDigitCounts[myDigits[i] * THREAD_GROUP_SIZE + localIdx]++;
+        }
+        else
+        {
+            myKeys[i] = 0xFFFFFFFF;
+            myValues[i] = 0;
+            myDigits[i] = RADIX_SIZE - 1;
+            myValid[i] = 0;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // Compute per-digit prefix sums within thread group
+    for (uint digit = 0; digit < RADIX_SIZE; ++digit)
+    {
+        uint offset = digit * THREAD_GROUP_SIZE;
+
+        // Parallel prefix sum
+        for (uint stride = 1; stride < THREAD_GROUP_SIZE; stride *= 2)
+        {
+            uint val = 0;
+            if (localIdx >= stride)
+            {
+                val = ThreadDigitCounts[offset + localIdx - stride];
+            }
+            GroupMemoryBarrierWithGroupSync();
+            ThreadDigitCounts[offset + localIdx] += val;
+            GroupMemoryBarrierWithGroupSync();
+        }
+    }
+
+    // Load global and histogram offsets to shared memory
+    if (localIdx < RADIX_SIZE)
+    {
+        LocalHistogram[localIdx] = GlobalOffsetsSRV[localIdx] + HistogramSRV[groupIdx * RADIX_SIZE + localIdx];
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // Scatter elements to output
+    [unroll]
+    for (uint j = 0; j < ELEMENTS_PER_THREAD; ++j)
+    {
+        if (myValid[j])
+        {
+            uint digit = myDigits[j];
+            uint localOffset = (localIdx > 0) ? ThreadDigitCounts[digit * THREAD_GROUP_SIZE + localIdx - 1] : 0;
+
+            // Count how many elements with same digit came before this one in this thread
+            uint countBefore = 0;
+            for (uint k = 0; k < j; ++k)
+            {
+                if (myValid[k] && myDigits[k] == digit)
+                {
+                    countBefore++;
+                }
+            }
+
+            uint globalPos = LocalHistogram[digit] + localOffset + countBefore;
+            KeysOut[globalPos] = myKeys[j];
+            ValuesOut[globalPos] = myValues[j];
+        }
+    }
+}

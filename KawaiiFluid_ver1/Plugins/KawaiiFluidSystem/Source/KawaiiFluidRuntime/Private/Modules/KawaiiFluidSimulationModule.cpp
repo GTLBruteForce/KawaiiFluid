@@ -1,7 +1,6 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 
 #include "Modules/KawaiiFluidSimulationModule.h"
-#include <algorithm>  // For std::nth_element
 #include "Core/SpatialHash.h"
 #include "Collision/FluidCollider.h"
 #include "Components/FluidInteractionComponent.h"
@@ -1404,7 +1403,7 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticles(int32 Count)
 	// GPU 모드
 	if (bGPUSimulationActive && CachedGPUSimulator)
 	{
-		// 캐시된 SourceID별 ParticleIDs 참조 (복사 없음, O(1) lookup)
+		// 캐시된 SourceID별 ParticleIDs 참조 (이미 ParticleID로 정렬됨)
 		const TArray<int32>* MyParticleIDsPtr = CachedGPUSimulator->GetParticleIDsBySourceID(CachedSourceID);
 		if (!MyParticleIDsPtr || MyParticleIDsPtr->Num() == 0)
 		{
@@ -1412,29 +1411,16 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticles(int32 Count)
 		}
 
 		const int32 MyCount = MyParticleIDsPtr->Num();
-
-		// 제거할 개수 결정 (내 파티클 수 기준)
 		const int32 RemoveCount = FMath::Min(Count, MyCount);
 
-		// nth_element는 원본 수정하므로 복사 필요 (내 파티클만, 전체 아님)
-		TArray<int32> MyParticleIDs = *MyParticleIDsPtr;
-
-		// nth_element로 가장 작은 ID N개 찾기 O(n)
-		if (RemoveCount < MyCount)
-		{
-			std::nth_element(MyParticleIDs.GetData(), MyParticleIDs.GetData() + RemoveCount,
-				MyParticleIDs.GetData() + MyCount);
-		}
-
-		// 앞쪽 RemoveCount개 추출
+		// GPU에서 ParticleID로 정렬된 상태로 readback됨 - 앞쪽 N개가 가장 오래된 파티클 O(1)
 		TArray<int32> IDsToRemove;
 		IDsToRemove.SetNumUninitialized(RemoveCount);
-		FMemory::Memcpy(IDsToRemove.GetData(), MyParticleIDs.GetData(), RemoveCount * sizeof(int32));
+		FMemory::Memcpy(IDsToRemove.GetData(), MyParticleIDsPtr->GetData(), RemoveCount * sizeof(int32));
 
-		// Despawn 요청 (CleanupCompletedRequests는 Readback 시 1회 호출됨)
 		CachedGPUSimulator->AddDespawnByIDRequests(IDsToRemove);
 
-		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticles: SourceID=%d, Removing %d particles (IDs: %d ~ %d), MyCount=%d"),
+		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticles: SourceID=%d, Removing %d (IDs: %d~%d), Total=%d"),
 			CachedSourceID, RemoveCount, IDsToRemove[0], IDsToRemove.Last(), MyCount);
 
 		return RemoveCount;
@@ -1453,7 +1439,7 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticlesForSource(int32 SourceI
 	// GPU 모드
 	if (bGPUSimulationActive && CachedGPUSimulator)
 	{
-		// 지정된 SourceID의 ParticleIDs 참조
+		// 지정된 SourceID의 ParticleIDs 참조 (이미 ParticleID로 정렬됨)
 		const TArray<int32>* ParticleIDsPtr = CachedGPUSimulator->GetParticleIDsBySourceID(SourceID);
 		if (!ParticleIDsPtr || ParticleIDsPtr->Num() == 0)
 		{
@@ -1461,28 +1447,16 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticlesForSource(int32 SourceI
 		}
 
 		const int32 SourceCount = ParticleIDsPtr->Num();
-
-		// 제거할 개수 결정
 		const int32 RemoveCount = FMath::Min(Count, SourceCount);
 
-		// 복사 후 nth_element로 가장 작은 ID N개 찾기
-		TArray<int32> ParticleIDs = *ParticleIDsPtr;
-
-		if (RemoveCount < SourceCount)
-		{
-			std::nth_element(ParticleIDs.GetData(), ParticleIDs.GetData() + RemoveCount,
-				ParticleIDs.GetData() + SourceCount);
-		}
-
-		// 앞쪽 RemoveCount개 추출
+		// GPU에서 ParticleID로 정렬된 상태로 readback됨 - 앞쪽 N개가 가장 오래된 파티클 O(1)
 		TArray<int32> IDsToRemove;
 		IDsToRemove.SetNumUninitialized(RemoveCount);
-		FMemory::Memcpy(IDsToRemove.GetData(), ParticleIDs.GetData(), RemoveCount * sizeof(int32));
+		FMemory::Memcpy(IDsToRemove.GetData(), ParticleIDsPtr->GetData(), RemoveCount * sizeof(int32));
 
-		// Despawn 요청
 		CachedGPUSimulator->AddDespawnByIDRequests(IDsToRemove);
 
-		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticlesForSource: SourceID=%d, Removing %d particles (IDs: %d ~ %d), SourceCount=%d"),
+		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticlesForSource: SourceID=%d, Removing %d (IDs: %d~%d), Total=%d"),
 			SourceID, RemoveCount, IDsToRemove[0], IDsToRemove.Last(), SourceCount);
 
 		return RemoveCount;

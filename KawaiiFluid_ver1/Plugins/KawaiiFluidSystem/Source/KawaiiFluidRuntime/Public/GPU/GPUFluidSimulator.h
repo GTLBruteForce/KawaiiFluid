@@ -924,6 +924,23 @@ private:
 		FRDGBufferRef& OutCellEndBuffer,
 		const FGPUFluidSimulationParams& Params);
 
+	//=============================================================================
+	// ParticleID Sorting for Readback Optimization
+	//=============================================================================
+
+	/**
+	 * Execute ParticleID sort pipeline - sorts particles by ParticleID (oldest first)
+	 * Used for CPU readback optimization: enables O(1) oldest particle removal
+	 * @param GraphBuilder - RDG builder
+	 * @param InParticleBuffer - Input particle buffer (Z-Order sorted)
+	 * @param ParticleCount - Number of particles
+	 * @return Sorted particle buffer (transient, valid within RDG scope)
+	 */
+	FRDGBufferRef ExecuteParticleIDSortPipeline(
+		FRDGBuilder& GraphBuilder,
+		FRDGBufferRef InParticleBuffer,
+		int32 ParticleCount);
+
 private:
 	//=============================================================================
 	// GPU Buffers
