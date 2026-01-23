@@ -105,10 +105,10 @@ void UKawaiiFluidComponent::OnRegister()
 	{
 		RenderingModule->Initialize(World, this, SimulationModule, Preset);
 
-		// Apply ISM debug settings from Component properties
+		// Apply debug draw settings from Component properties
 		if (UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer())
 		{
-			ISMRenderer->bEnabled = bEnableISMDebugView;
+			ISMRenderer->bEnabled = (DebugDrawMode == EFluidDebugDrawMode::ISM);
 			ISMRenderer->SetFluidColor(ISMDebugColor);
 		}
 	}
@@ -168,11 +168,12 @@ void UKawaiiFluidComponent::BeginPlay()
 		UWorld* World = GetWorld();
 		RenderingModule->Initialize(World, this, SimulationModule, Preset);
 
-		// Apply ISM debug settings
+		// Apply debug draw settings
+		bool bISMMode = (DebugDrawMode == EFluidDebugDrawMode::ISM);
 		if (UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer())
 		{
-			ISMRenderer->bEnabled = bEnableISMDebugView;
-			if (bEnableISMDebugView)
+			ISMRenderer->bEnabled = bISMMode;
+			if (bISMMode)
 			{
 				ISMRenderer->SetFluidColor(ISMDebugColor);
 			}
@@ -181,7 +182,7 @@ void UKawaiiFluidComponent::BeginPlay()
 		// Ensure Metaball is disabled if ISM debug is enabled
 		if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
 		{
-			MetaballRenderer->SetEnabled(!bEnableISMDebugView);
+			MetaballRenderer->SetEnabled(!bISMMode);
 		}
 	}
 
@@ -210,7 +211,11 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 
 	// Readback 요청 설정 (GPU 시뮬레이션 전에 호출 필요)
 	// Debug Draw, ISM Debug View, 브러시 모드, Recycle 모드에서 readback 필요
-	GetFluidStatsCollector().SetReadbackRequested(bEnableDebugDraw || bEnableISMDebugView || bBrushModeActive || SpawnSettings.bRecycleOldestParticles);
+	bool bNeedReadback = (DebugDrawMode == EFluidDebugDrawMode::DebugDraw) ||
+	                     (DebugDrawMode == EFluidDebugDrawMode::ISM) ||
+	                     bBrushModeActive ||
+	                     SpawnSettings.bRecycleOldestParticles;
+	GetFluidStatsCollector().SetReadbackRequested(bNeedReadback);
 
 #if WITH_EDITOR
 	{
@@ -369,20 +374,24 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 		UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer();
 		UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer();
 
-		// Sync ISM debug settings from Component properties
+		bool bISMMode = (DebugDrawMode == EFluidDebugDrawMode::ISM);
+		bool bDebugDrawMode = (DebugDrawMode == EFluidDebugDrawMode::DebugDraw);
+
+		// Sync debug draw settings from Component properties
 		if (ISMRenderer)
 		{
-			bool bEnabledChanged = (ISMRenderer->bEnabled != bEnableISMDebugView);
+			bool bModeChanged = (CachedDebugDrawMode != DebugDrawMode);
 			bool bColorChanged = !CachedISMDebugColor.Equals(ISMDebugColor, 0.001f);
 
 			// Update enabled state
-			if (bEnabledChanged)
+			if (bModeChanged)
 			{
-				ISMRenderer->bEnabled = bEnableISMDebugView;
+				ISMRenderer->bEnabled = bISMMode;
+				CachedDebugDrawMode = DebugDrawMode;
 			}
 
-			// Update color if enabled and (enabled changed OR color changed)
-			if (bEnableISMDebugView && (bEnabledChanged || bColorChanged))
+			// Update color if ISM mode and (mode changed OR color changed)
+			if (bISMMode && (bModeChanged || bColorChanged))
 			{
 				ISMRenderer->SetFluidColor(ISMDebugColor);
 				CachedISMDebugColor = ISMDebugColor;
@@ -400,23 +409,15 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 				(MetaballRenderer && MetaballRenderer->IsEnabled()) ? TEXT("Yes") : TEXT("No"));
 		}
 
-		// ISM이 켜져 있으면 Metaball 끄기 (상호 배타적)
-		if (ISMRenderer && ISMRenderer->IsEnabled())
+		// Disable metaball if ISM or Debug Draw is enabled (mutually exclusive)
+		if (bISMMode || bDebugDrawMode)
 		{
 			if (MetaballRenderer)
 			{
 				MetaballRenderer->SetEnabled(false);
 			}
 		}
-		// Debug Draw가 켜져 있으면 Metaball 끄기
-		else if (bEnableDebugDraw)
-		{
-			if (MetaballRenderer)
-			{
-				MetaballRenderer->SetEnabled(false);
-			}
-		}
-		// ISM과 Debug Draw가 모두 꺼져 있으면 Metaball 켜기
+		// Enable metaball if both are disabled
 		else
 		{
 			if (MetaballRenderer)
@@ -429,7 +430,7 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 	}
 
 	// Debug Draw: DrawDebugPoint 기반 Z-Order 시각화
-	if (bEnableDebugDraw)
+	if (DebugDrawMode == EFluidDebugDrawMode::DebugDraw)
 	{
 		DrawDebugParticles();
 	}
@@ -1475,54 +1476,37 @@ void UKawaiiFluidComponent::ClearAllParticles()
 }
 
 //========================================
-// Debug Visualization (Z-Order Sorting)
+// Debug Visualization API
 //========================================
 
-void UKawaiiFluidComponent::SetDebugVisualization(EFluidDebugVisualization Mode)
+void UKawaiiFluidComponent::SetDebugDrawMode(EFluidDebugDrawMode Mode)
 {
-	// Debug visualization now uses DrawDebugPoint system
-	if (Mode != EFluidDebugVisualization::None)
-	{
-		EnableDebugDraw(Mode, DebugPointSize);
-	}
-	else
-	{
-		DisableDebugDraw();
-	}
-}
-
-EFluidDebugVisualization UKawaiiFluidComponent::GetDebugVisualization() const
-{
-	// Debug visualization now uses DrawDebugPoint system
-	return bEnableDebugDraw ? DebugDrawMode : EFluidDebugVisualization::None;
-}
-
-//========================================
-// DrawDebugPoint Visualization
-//========================================
-
-void UKawaiiFluidComponent::EnableDebugDraw(EFluidDebugVisualization Mode, float PointSize)
-{
-	bEnableDebugDraw = true;
 	DebugDrawMode = Mode;
-	DebugPointSize = PointSize;
+
+	// Reset bounds for recomputation when enabling DebugDraw mode
+	if (Mode == EFluidDebugDrawMode::DebugDraw)
+	{
+		DebugDrawBoundsMin = FVector::ZeroVector;
+		DebugDrawBoundsMax = FVector::ZeroVector;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("Debug Draw Mode changed: %d"), (int32)Mode);
+}
+
+void UKawaiiFluidComponent::SetDebugVisualizationType(EFluidDebugVisualization Type)
+{
+	DebugVisualizationType = Type;
 
 	// Reset bounds for recomputation
 	DebugDrawBoundsMin = FVector::ZeroVector;
 	DebugDrawBoundsMax = FVector::ZeroVector;
 
-	UE_LOG(LogTemp, Log, TEXT("Debug Draw enabled: Mode=%d, PointSize=%.1f"), (int32)Mode, PointSize);
-}
-
-void UKawaiiFluidComponent::DisableDebugDraw()
-{
-	bEnableDebugDraw = false;
-	UE_LOG(LogTemp, Log, TEXT("Debug Draw disabled"));
+	UE_LOG(LogTemp, Log, TEXT("Debug Visualization Type changed: %d"), (int32)Type);
 }
 
 void UKawaiiFluidComponent::DrawDebugParticles()
 {
-	if (!bEnableDebugDraw || !SimulationModule)
+	if (DebugDrawMode != EFluidDebugDrawMode::DebugDraw || !SimulationModule)
 	{
 		return;
 	}
@@ -1531,6 +1515,13 @@ void UKawaiiFluidComponent::DrawDebugParticles()
 	if (!World)
 	{
 		return;
+	}
+
+	// Get point size from ParticleRadius (in Preset)
+	float PointSize = 8.0f;  // Default fallback
+	if (Preset && Preset->ParticleRadius > 0.0f)
+	{
+		PointSize = Preset->ParticleRadius;
 	}
 
 	// Get particle data (GPU or CPU)
@@ -1672,13 +1663,13 @@ void UKawaiiFluidComponent::DrawDebugParticles()
 		const FFluidParticle& Particle = Particles[i];
 		FColor Color = ComputeDebugDrawColor(i, NumParticles, Particle.Position, Particle.Density);
 
-		DrawDebugPoint(World, Particle.Position, DebugPointSize, Color, false, -1.0f, 0);
+		DrawDebugPoint(World, Particle.Position, PointSize, Color, false, -1.0f, 0);
 	}
 }
 
 FColor UKawaiiFluidComponent::ComputeDebugDrawColor(int32 ParticleIndex, int32 TotalCount, const FVector& Position, float Density) const
 {
-	switch (DebugDrawMode)
+	switch (DebugVisualizationType)
 	{
 	case EFluidDebugVisualization::ZOrderArrayIndex:
 	case EFluidDebugVisualization::ArrayIndex:  // Legacy

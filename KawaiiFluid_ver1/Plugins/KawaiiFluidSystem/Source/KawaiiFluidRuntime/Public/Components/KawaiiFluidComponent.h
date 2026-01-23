@@ -110,6 +110,17 @@ enum class ESplashConditionMode : uint8
 };
 
 /**
+ * Debug draw mode for particle visualization
+ */
+UENUM(BlueprintType)
+enum class EFluidDebugDrawMode : uint8
+{
+	None        UMETA(DisplayName = "None", ToolTip = "No debug visualization"),
+	ISM         UMETA(DisplayName = "ISM Sphere", ToolTip = "Render particles as instanced spheres (disables Metaball)"),
+	DebugDraw   UMETA(DisplayName = "Debug Point", ToolTip = "Draw particles as debug points (no GPU cost)"),
+};
+
+/**
  * Fluid spawn settings
  */
 USTRUCT(BlueprintType)
@@ -434,15 +445,17 @@ public:
 	// Debug Visualization
 	//========================================
 
-	/** Enable ISM debug view (renders particles as simple spheres, disables Metaball) */
+	/** Debug visualization mode (None, ISM Sphere, or Debug Point) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug")
-	bool bEnableISMDebugView = false;
+	EFluidDebugDrawMode DebugDrawMode = EFluidDebugDrawMode::None;
 
-	/** Debug particle color for ISM view */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (EditCondition = "bEnableISMDebugView"))
+	/** Debug particle color (ISM mode only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (EditCondition = "DebugDrawMode == EFluidDebugDrawMode::ISM", EditConditionHides))
 	FLinearColor ISMDebugColor = FLinearColor(0.2f, 0.5f, 1.0f, 0.8f);
 
-	// Note: Metaball rendering parameters are in Preset->RenderingParameters (ensures batching)
+	/** Debug visualization type (DebugDraw mode only) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (EditCondition = "DebugDrawMode == EFluidDebugDrawMode::DebugDraw", EditConditionHides))
+	EFluidDebugVisualization DebugVisualizationType = EFluidDebugVisualization::ZOrderArrayIndex;
 
 	//========================================
 	// Spawn Settings
@@ -492,49 +505,30 @@ public:
 	void ClearAllParticles();
 
 	//========================================
-	// Debug Visualization (Z-Order Sorting)
+	// Debug Visualization API (Blueprint)
 	//========================================
 
 	/**
-	 * Set debug visualization mode for verifying Z-Order sorting
-	 *
-	 * Use ArrayIndex mode to check if particles are spatially sorted:
-	 * - If Z-Order sorted correctly: particles close in space will have similar colors
-	 * - If NOT sorted: colors will be random/scattered regardless of position
-	 *
-	 * @param Mode Debug visualization mode (None to disable)
+	 * Set debug visualization mode (None, ISM, or DebugDraw)
+	 * @param Mode Debug draw mode to use
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Debug")
-	void SetDebugVisualization(EFluidDebugVisualization Mode);
+	void SetDebugDrawMode(EFluidDebugDrawMode Mode);
 
-	/** Get current debug visualization mode */
+	/** Get current debug draw mode */
 	UFUNCTION(BlueprintPure, Category = "Fluid|Debug")
-	EFluidDebugVisualization GetDebugVisualization() const;
+	EFluidDebugDrawMode GetDebugDrawMode() const { return DebugDrawMode; }
 
-	//========================================
-	// DrawDebugPoint Visualization
-	// (Works with GPU simulation, no material needed)
-	//========================================
-
-	/** Enable debug drawing using DrawDebugPoint (works with GPU simulation) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug")
-	bool bEnableDebugDraw = false;
-
-	/** Debug draw visualization mode */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (EditCondition = "bEnableDebugDraw"))
-	EFluidDebugVisualization DebugDrawMode = EFluidDebugVisualization::ZOrderArrayIndex;
-
-	/** Debug point size */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Debug", meta = (EditCondition = "bEnableDebugDraw", ClampMin = "1.0", ClampMax = "50.0"))
-	float DebugPointSize = 8.0f;
-
-	/** Enable debug drawing with specified mode */
+	/**
+	 * Set debug visualization type (for DebugDraw mode)
+	 * @param Type Visualization type (ZOrderArrayIndex, Density, etc.)
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Debug")
-	void EnableDebugDraw(EFluidDebugVisualization Mode, float PointSize = 8.0f);
+	void SetDebugVisualizationType(EFluidDebugVisualization Type);
 
-	/** Disable debug drawing */
-	UFUNCTION(BlueprintCallable, Category = "Fluid|Debug")
-	void DisableDebugDraw();
+	/** Get current debug visualization type */
+	UFUNCTION(BlueprintPure, Category = "Fluid|Debug")
+	EFluidDebugVisualization GetDebugVisualizationType() const { return DebugVisualizationType; }
 
 	//========================================
 	// Static Boundary Debug Visualization
@@ -603,8 +597,11 @@ private:
 	void ProcessContinuousSpawn(float DeltaTime);
 
 	//========================================
-	// ISM Debug State Cache
+	// Debug State Cache
 	//========================================
+
+	/** Cached debug draw mode (for change detection) */
+	EFluidDebugDrawMode CachedDebugDrawMode = EFluidDebugDrawMode::None;
 
 	/** Cached ISM debug color (for change detection) */
 	FLinearColor CachedISMDebugColor = FLinearColor(0.2f, 0.5f, 1.0f, 0.8f);
