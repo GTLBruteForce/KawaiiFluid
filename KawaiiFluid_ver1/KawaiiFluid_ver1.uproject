@@ -17,13 +17,6 @@
 	],
 	"Plugins": [
 		{
-			"Name": "ModelingToolsEditorMode",
-			"Enabled": true,
-			"TargetAllowList": [
-				"Editor"
-			]
-		},
-		{
 			"Name": "StateTree",
 			"Enabled": true
 		},
@@ -37,14 +30,6 @@
 		},
 		{
 			"Name": "KawaiiFluidSystem",
-			"Enabled": true
-		},
-		{
-			"Name": "ExampleCustomDataInterface",
-			"Enabled": true
-		},
-		{
-			"Name": "NiagaraFluids",
 			"Enabled": true
 		}
 	]
