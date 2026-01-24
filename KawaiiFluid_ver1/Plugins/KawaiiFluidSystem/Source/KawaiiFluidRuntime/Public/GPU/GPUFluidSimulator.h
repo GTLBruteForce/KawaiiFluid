@@ -1,4 +1,4 @@
-﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
+// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
 #pragma once
 
@@ -874,6 +874,15 @@ private:
 	 * UploadParticles 후 Simulate() 호출 전에도 렌더링할 수 있게 함
 	 */
 	void CreateImmediatePersistentBuffer();
+
+	/**
+	 * 복사본으로부터 즉시 PersistentParticleBuffer 생성
+	 * Deadlock 방지: BufferLock 없이 호출 가능 (이미 복사된 데이터 사용)
+	 * FinalizeUpload()에서 Lock 범위 밖에서 호출됨
+	 * @param InParticles - 파티클 데이터 복사본 (const ref, 내부에서 필요시 복사)
+	 * @param InParticleCount - 파티클 수
+	 */
+	void CreateImmediatePersistentBufferFromCopy(const TArray<FGPUFluidParticle>& InParticles, int32 InParticleCount);
 
 	/** Process collision feedback readback (non-blocking) */
 	void ProcessCollisionFeedbackReadback(FRHICommandListImmediate& RHICmdList);

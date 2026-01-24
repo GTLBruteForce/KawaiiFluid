@@ -1,4 +1,4 @@
-﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
+// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
 #include "Actors/KawaiiFluidVolume.h"
 #include "Actors/KawaiiFluidEmitter.h"
@@ -28,6 +28,10 @@ AKawaiiFluidVolume::AKawaiiFluidVolume()
 	VolumeComponent = CreateDefaultSubobject<UKawaiiFluidVolumeComponent>(TEXT("VolumeComponent"));
 	RootComponent = VolumeComponent;
 
+	// Create simulation module (like UKawaiiFluidComponent pattern)
+	// This ensures SimulationModule exists in editor mode for Brush functionality
+	SimulationModule = CreateDefaultSubobject<UKawaiiFluidSimulationModule>(TEXT("SimulationModule"));
+
 	// Create the rendering module
 	RenderingModule = CreateDefaultSubobject<UKawaiiFluidRenderingModule>(TEXT("RenderingModule"));
 
@@ -36,12 +40,40 @@ AKawaiiFluidVolume::AKawaiiFluidVolume()
 	PrimaryActorTick.bStartWithTickEnabled = true;
 }
 
+void AKawaiiFluidVolume::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+
+	// Initialize simulation module (called in editor when actor is placed/loaded)
+	// This enables Brush functionality in editor mode
+	InitializeSimulation();
+
+	// Register with Subsystem for GPU setup (needed for editor brush functionality)
+	// This sets up SimulationContext and GPU simulator
+	RegisterSimulationWithSubsystem();
+
+#if WITH_EDITOR
+	// Initialize rendering in editor mode for brush visualization
+	// This enables ISM rendering to show particles in editor
+	InitializeEditorRendering();
+#endif
+}
+
+void AKawaiiFluidVolume::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	// Ensure simulation is initialized (for newly spawned actors)
+	InitializeSimulation();
+	RegisterSimulationWithSubsystem();
+}
+
 void AKawaiiFluidVolume::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Initialize simulation
-	InitializeSimulation();
+	// Register simulation module with Subsystem for GPU setup (runtime only)
+	RegisterSimulationWithSubsystem();
 
 	// Initialize rendering
 	InitializeRendering();
@@ -74,6 +106,8 @@ void AKawaiiFluidVolume::Tick(float DeltaSeconds)
 		return;
 	}
 
+	const bool bIsGameWorld = World->IsGameWorld();
+
 	// Process pending spawn requests from emitters
 	ProcessPendingSpawnRequests();
 
@@ -81,12 +115,91 @@ void AKawaiiFluidVolume::Tick(float DeltaSeconds)
 	// Without this, ISM renderer won't get updated particle data
 	{
 		const bool bNeedReadback = (VolumeComponent->DebugDrawMode == EKawaiiFluidDebugDrawMode::DebugDraw) ||
-		                           (VolumeComponent->DebugDrawMode == EKawaiiFluidDebugDrawMode::ISM);
+		                           (VolumeComponent->DebugDrawMode == EKawaiiFluidDebugDrawMode::ISM)
+#if WITH_EDITORONLY_DATA
+		                           || VolumeComponent->bBrushModeActive
+#endif
+		                           ;
 		GetFluidStatsCollector().SetReadbackRequested(bNeedReadback);
 	}
 
+#if WITH_EDITOR
+	// Editor-specific: Run GPU simulation for brush mode (like UKawaiiFluidComponent)
+	if (!bIsGameWorld && SimulationModule && SimulationModule->GetSpatialHash())
+	{
+		if (UKawaiiFluidSimulationContext* Context = SimulationModule->GetSimulationContext())
+		{
+			// Initialize GPU simulator if not ready
+			UKawaiiFluidPresetDataAsset* Preset = VolumeComponent->GetPreset();
+			if (Preset && !Context->IsGPUSimulatorReady())
+			{
+				Context->InitializeGPUSimulator(Preset->MaxParticles);
+			}
+
+			// Set GPU simulator reference (like UKawaiiFluidComponent)
+			if (Context->IsGPUSimulatorReady())
+			{
+				SimulationModule->SetGPUSimulator(Context->GetGPUSimulatorShared());
+				SimulationModule->SetGPUSimulationActive(true);
+			}
+
+			// Process simulation OR pending ops (OUTSIDE GPU ready check - like UKawaiiFluidComponent)
+			// This ensures pending despawn requests are processed even when GPU state changes
+			if (VolumeComponent->bBrushModeActive)
+			{
+				// Brush mode: Run full simulation
+				FKawaiiFluidSimulationParams Params = SimulationModule->BuildSimulationParams();
+				Params.ExternalForce += SimulationModule->GetAccumulatedExternalForce();
+
+				if (UKawaiiFluidSimulatorSubsystem* Subsystem = World->GetSubsystem<UKawaiiFluidSimulatorSubsystem>())
+				{
+					Params.Colliders.Append(Subsystem->GetGlobalColliders());
+					Params.InteractionComponents.Append(Subsystem->GetGlobalInteractionComponents());
+				}
+
+				Params.bEnableStaticBoundaryParticles = false;
+				if (Preset)
+				{
+					Params.CollisionChannel = Preset->CollisionChannel;
+				}
+
+				float AccumulatedTime = SimulationModule->GetAccumulatedTime();
+				Context->Simulate(
+					SimulationModule->GetParticlesMutable(),
+					Preset,
+					Params,
+					*SimulationModule->GetSpatialHash(),
+					DeltaSeconds,
+					AccumulatedTime
+				);
+				SimulationModule->SetAccumulatedTime(AccumulatedTime);
+				SimulationModule->ResetExternalForce();
+			}
+			else
+			{
+				// Not brush mode: Process pending spawn/despawn only (no physics simulation)
+				FGPUFluidSimulator* GPUSim = Context->GetGPUSimulator();
+				if (GPUSim && GPUSim->IsReady())
+				{
+					GPUSim->BeginFrame();
+					GPUSim->EndFrame();
+				}
+			}
+		}
+	}
+#endif
+
 	// Renderer mutual exclusion management (like KawaiiFluidComponent)
-	if (RenderingModule && RenderingModule->IsInitialized())
+	// Check IsInitialized() for game world, but in editor mode we handle it separately
+	const bool bRenderingReady = RenderingModule && RenderingModule->IsInitialized();
+#if WITH_EDITOR
+	// Editor rendering is ready if we initialized it (even without BeginPlay)
+	const bool bEditorRenderingReady = !bIsGameWorld && RenderingModule && bEditorRenderingInitialized;
+#else
+	const bool bEditorRenderingReady = false;
+#endif
+
+	if (bRenderingReady || bEditorRenderingReady)
 	{
 		UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer();
 		UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer();
@@ -95,7 +208,7 @@ void AKawaiiFluidVolume::Tick(float DeltaSeconds)
 		const bool bISMMode = (CurrentMode == EKawaiiFluidDebugDrawMode::ISM);
 		const bool bDebugDrawMode = (CurrentMode == EKawaiiFluidDebugDrawMode::DebugDraw);
 
-		// Sync ISM state (only when changed)
+		// Sync ISM state based on DebugDrawMode (same logic for editor and runtime)
 		if (ISMRenderer)
 		{
 			bool bModeChanged = (CachedDebugDrawMode != CurrentMode);
@@ -121,14 +234,14 @@ void AKawaiiFluidVolume::Tick(float DeltaSeconds)
 			}
 		}
 
-		// Metaball is disabled when ISM or DebugDraw mode is active
+		// Metaball is enabled when rendering is enabled AND not in ISM/DebugDraw mode
+		// Same logic for editor and runtime - respects user's DebugDrawMode setting
 		if (MetaballRenderer)
 		{
 			MetaballRenderer->SetEnabled(VolumeComponent->bEnableRendering && !bISMMode && !bDebugDrawMode);
 		}
 
 		// UpdateRenderers must be called when rendering is enabled OR ISM debug mode is active
-		// (ISM debug works independently of bEnableRendering)
 		if (VolumeComponent->bEnableRendering || bISMMode)
 		{
 			RenderingModule->UpdateRenderers();
@@ -606,8 +719,13 @@ void AKawaiiFluidVolume::DisableDebugDraw()
 
 void AKawaiiFluidVolume::InitializeSimulation()
 {
-	UWorld* World = GetWorld();
-	if (!World || !VolumeComponent)
+	if (!VolumeComponent || !SimulationModule)
+	{
+		return;
+	}
+
+	// Skip if already initialized (handles re-initialization cases)
+	if (SimulationModule->IsInitialized())
 	{
 		return;
 	}
@@ -623,8 +741,7 @@ void AKawaiiFluidVolume::InitializeSimulation()
 		UE_LOG(LogTemp, Warning, TEXT("AKawaiiFluidVolume [%s]: No Preset assigned, using default values"), *GetName());
 	}
 
-	// Create SimulationModule
-	SimulationModule = NewObject<UKawaiiFluidSimulationModule>(this);
+	// Initialize SimulationModule (module was created in constructor via CreateDefaultSubobject)
 	SimulationModule->Initialize(Preset);
 
 	// Forward VolumeComponent properties to SimulationModule
@@ -641,6 +758,26 @@ void AKawaiiFluidVolume::InitializeSimulation()
 	// Register module with VolumeComponent
 	VolumeComponent->RegisterModule(SimulationModule);
 
+	UE_LOG(LogTemp, Log, TEXT("AKawaiiFluidVolume [%s]: Simulation module initialized with Preset [%s]"),
+		*GetName(), Preset ? *Preset->GetName() : TEXT("Default"));
+}
+
+void AKawaiiFluidVolume::RegisterSimulationWithSubsystem()
+{
+	UWorld* World = GetWorld();
+	if (!World || !SimulationModule || !VolumeComponent)
+	{
+		return;
+	}
+
+	// Skip if already registered (has valid SimulationContext)
+	if (SimulationContext != nullptr)
+	{
+		return;
+	}
+
+	UKawaiiFluidPresetDataAsset* Preset = VolumeComponent->GetPreset();
+
 	// Get or create SimulationContext from Subsystem
 	UKawaiiFluidSimulatorSubsystem* Subsystem = World->GetSubsystem<UKawaiiFluidSimulatorSubsystem>();
 	if (Subsystem)
@@ -653,12 +790,12 @@ void AKawaiiFluidVolume::InitializeSimulation()
 	}
 
 	// Debug: Verify GPU initialization status
-	const bool bGPUReady = SimulationModule && SimulationModule->GetGPUSimulator() != nullptr;
-	const bool bGPUActive = SimulationModule && SimulationModule->IsGPUSimulationActive();
+	const bool bGPUReady = SimulationModule->GetGPUSimulator() != nullptr;
+	const bool bGPUActive = SimulationModule->IsGPUSimulationActive();
 	const bool bContextReady = SimulationContext && SimulationContext->IsGPUSimulatorReady();
 
-	UE_LOG(LogTemp, Log, TEXT("AKawaiiFluidVolume [%s]: Simulation initialized with Preset [%s]"),
-		*GetName(), Preset ? *Preset->GetName() : TEXT("Default"));
+	UE_LOG(LogTemp, Log, TEXT("AKawaiiFluidVolume [%s]: Registered with Subsystem"),
+		*GetName());
 	UE_LOG(LogTemp, Log, TEXT("  - GPU Simulator: %s, Active: %s, Context Ready: %s"),
 		bGPUReady ? TEXT("Ready") : TEXT("NOT Ready"),
 		bGPUActive ? TEXT("Yes") : TEXT("No"),
@@ -687,11 +824,11 @@ void AKawaiiFluidVolume::CleanupSimulation()
 		}
 	}
 
-	// Shutdown SimulationModule
+	// Shutdown SimulationModule (don't set to nullptr - it's a CreateDefaultSubobject)
 	if (SimulationModule)
 	{
 		SimulationModule->Shutdown();
-		SimulationModule = nullptr;
+		// Note: SimulationModule is created via CreateDefaultSubobject, so we don't null it
 	}
 
 	// Clear context reference (context is owned by Subsystem)
@@ -773,6 +910,92 @@ void AKawaiiFluidVolume::InitializeRendering()
 
 	UE_LOG(LogTemp, Log, TEXT("AKawaiiFluidVolume [%s]: Rendering initialized"), *GetName());
 }
+
+#if WITH_EDITOR
+void AKawaiiFluidVolume::InitializeEditorRendering()
+{
+	// Skip if already initialized
+	if (bEditorRenderingInitialized)
+	{
+		return;
+	}
+
+	if (!VolumeComponent || !RenderingModule || !SimulationModule)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// Skip if this is a game world (BeginPlay will handle it)
+	if (World->IsGameWorld())
+	{
+		return;
+	}
+
+	// Get Preset from VolumeComponent
+	UKawaiiFluidPresetDataAsset* Preset = VolumeComponent->GetPreset();
+
+	// Initialize RenderingModule with SimulationModule as data provider
+	// This is the same initialization as BeginPlay does for runtime
+	RenderingModule->Initialize(World, VolumeComponent, SimulationModule, Preset);
+
+	// Configure renderers based on DebugDrawMode (same as runtime behavior)
+	// Respect the user's setting - don't force ISM
+	const EKawaiiFluidDebugDrawMode CurrentMode = VolumeComponent->DebugDrawMode;
+	const bool bISMMode = (CurrentMode == EKawaiiFluidDebugDrawMode::ISM);
+	const bool bDebugDrawMode = (CurrentMode == EKawaiiFluidDebugDrawMode::DebugDraw);
+
+	if (UKawaiiFluidISMRenderer* ISMRenderer = RenderingModule->GetISMRenderer())
+	{
+		ISMRenderer->SetEnabled(bISMMode);
+		ISMRenderer->SetMaxRenderParticles(VolumeComponent->ISMMaxRenderParticles);
+		if (bISMMode)
+		{
+			ISMRenderer->SetFluidColor(VolumeComponent->ISMDebugColor);
+		}
+		UE_LOG(LogTemp, Log, TEXT("AKawaiiFluidVolume [%s]: Editor ISMRenderer %s"), 
+			*GetName(), bISMMode ? TEXT("enabled") : TEXT("disabled"));
+	}
+
+	// Metaball is enabled when rendering is enabled AND not in ISM/DebugDraw mode
+	if (UKawaiiFluidMetaballRenderer* MetaballRenderer = RenderingModule->GetMetaballRenderer())
+	{
+		const bool bEnableMetaball = VolumeComponent->bEnableRendering && !bISMMode && !bDebugDrawMode;
+		MetaballRenderer->SetEnabled(bEnableMetaball);
+		
+		if (bEnableMetaball && Preset)
+		{
+			MetaballRenderer->UpdatePipeline();
+		}
+		
+		// Connect to SimulationContext for GPU rendering
+		if (SimulationContext)
+		{
+			MetaballRenderer->SetSimulationContext(SimulationContext);
+		}
+		
+		UE_LOG(LogTemp, Log, TEXT("AKawaiiFluidVolume [%s]: Editor MetaballRenderer %s"), 
+			*GetName(), bEnableMetaball ? TEXT("enabled") : TEXT("disabled"));
+	}
+
+	// Register RenderingModule with FluidRendererSubsystem (CRITICAL for SSFR rendering pipeline)
+	// This is what actually triggers the Metaball rendering - same as InitializeRendering() does for runtime
+	if (UFluidRendererSubsystem* RendererSubsystem = World->GetSubsystem<UFluidRendererSubsystem>())
+	{
+		RendererSubsystem->RegisterRenderingModule(RenderingModule);
+		UE_LOG(LogTemp, Log, TEXT("AKawaiiFluidVolume [%s]: Editor RenderingModule registered with FluidRendererSubsystem"), *GetName());
+	}
+
+	bEditorRenderingInitialized = true;
+	UE_LOG(LogTemp, Log, TEXT("AKawaiiFluidVolume [%s]: Editor rendering initialized (DebugDrawMode=%d)"), 
+		*GetName(), static_cast<int32>(CurrentMode));
+}
+#endif
 
 void AKawaiiFluidVolume::CleanupRendering()
 {
@@ -1387,9 +1610,21 @@ void AKawaiiFluidVolume::ClearAllParticles()
 		SimulationModule->ClearAllParticles();
 	}
 
+	// Clear cached shadow data (like UKawaiiFluidComponent does)
+	CachedShadowPositions.Empty();
+	CachedShadowVelocities.Empty();
+	CachedNeighborCounts.Empty();
+	CachedAnisotropyAxis1.Empty();
+	CachedAnisotropyAxis2.Empty();
+	CachedAnisotropyAxis3.Empty();
+	PrevNeighborCounts.Empty();
+
+	// Just update rendering - will show 0 particles
+	// DO NOT call Cleanup() - that destroys the rendering infrastructure
+	// and prevents re-initialization due to guard checks
 	if (RenderingModule)
 	{
-		RenderingModule->Cleanup();
+		RenderingModule->UpdateRenderers();
 	}
 }
 

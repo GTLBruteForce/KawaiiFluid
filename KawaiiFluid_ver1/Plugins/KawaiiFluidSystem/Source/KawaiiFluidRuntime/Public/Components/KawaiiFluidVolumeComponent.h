@@ -1,4 +1,4 @@
-﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
+// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
 #pragma once
 
@@ -275,11 +275,11 @@ public:
 	//========================================
 
 #if WITH_EDITORONLY_DATA
-	/** Brush settings */
-	UPROPERTY(EditAnywhere, Category = "Fluid Volume|Brush")
+	/** Brush settings for particle painting in editor */
+	UPROPERTY(EditAnywhere, Category = "Brush Editor")
 	FFluidBrushSettings BrushSettings;
 
-	/** Brush mode active state (set in editor mode) */
+	/** Brush mode active state (set by editor mode) */
 	bool bBrushModeActive = false;
 #endif
 

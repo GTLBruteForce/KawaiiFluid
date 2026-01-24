@@ -2071,18 +2071,36 @@ void FGPUFluidSimulator::UploadParticles(const TArray<FFluidParticle>& CPUPartic
 
 void FGPUFluidSimulator::FinalizeUpload()
 {
-	FScopeLock Lock(&BufferLock);
+	TArray<FGPUFluidParticle> ParticlesCopy;
+	int32 ParticleCount = 0;
 
-	if (CachedGPUParticles.Num() == 0)
+	// ═══════════════════════════════════════════════════
+	// Lock 범위 1: 공유 데이터 읽기/복사 (최소 범위)
+	// Deadlock 방지: FlushRenderingCommands() 호출 전에 Lock 해제
+	// ═══════════════════════════════════════════════════
 	{
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("FinalizeUpload: No particles to upload"));
-		return;
+		FScopeLock Lock(&BufferLock);
+
+		if (CachedGPUParticles.Num() == 0)
+		{
+			UE_LOG(LogGPUFluidSimulator, Log, TEXT("FinalizeUpload: No particles to upload"));
+			return;
+		}
+
+		// Deep copy (Lock 범위 내에서 - RenderThread의 ResizeBuffers와 race condition 방지)
+		ParticlesCopy = CachedGPUParticles;
+		ParticleCount = CachedGPUParticles.Num();
+		CurrentParticleCount = ParticleCount;
+		bNeedsFullUpload = false;
 	}
+	// ═══════════════════════════════════════════════════
+	// Lock 해제됨 - 이제 FlushRenderingCommands 안전
+	// ═══════════════════════════════════════════════════
 
-	UE_LOG(LogGPUFluidSimulator, Log, TEXT("FinalizeUpload: Creating persistent buffer for %d particles"), CachedGPUParticles.Num());
+	UE_LOG(LogGPUFluidSimulator, Log, TEXT("FinalizeUpload: Creating persistent buffer for %d particles"), ParticleCount);
 
-	// GPU 버퍼 생성
-	CreateImmediatePersistentBuffer();
+	// GPU 버퍼 생성 (복사본 사용, Lock 불필요)
+	CreateImmediatePersistentBufferFromCopy(ParticlesCopy, ParticleCount);
 
 	// Despawn 추적 상태만 클리어 (업로드된 파티클은 새 ID이므로 기존 추적 무효)
 	// NextParticleID는 AllocateParticleIDs에서 atomic하게 관리되므로 건드리지 않음
@@ -2090,9 +2108,6 @@ void FGPUFluidSimulator::FinalizeUpload()
 	{
 		SpawnManager->ClearDespawnTracking();
 	}
-
-	// 플래그 설정
-	bNeedsFullUpload = false;
 }
 
 void FGPUFluidSimulator::ClearCachedParticles()
@@ -2167,6 +2182,67 @@ void FGPUFluidSimulator::CreateImmediatePersistentBuffer()
 	}
 	
 	// 렌더 스레드 완료까지 대기 (레벨 로드 시 한 번만 호출되므로 성능 영향 적음)
+	FlushRenderingCommands();
+}
+
+void FGPUFluidSimulator::CreateImmediatePersistentBufferFromCopy(const TArray<FGPUFluidParticle>& InParticles, int32 InParticleCount)
+{
+	if (InParticleCount == 0)
+	{
+		return;
+	}
+
+	FGPUFluidSimulator* Self = this;
+	const int32 ParticleCount = InParticleCount;
+
+	// Lambda에서 사용할 복사본 (const ref에서 복사)
+	ENQUEUE_RENDER_COMMAND(CreateImmediatePersistentBufferFromCopy)(
+		[Self, ParticlesCopy = InParticles, ParticleCount](FRHICommandListImmediate& RHICmdList)
+		{
+			// RDG를 통해 버퍼 생성 및 즉시 추출
+			FRDGBuilder GraphBuilder(RHICmdList, RDG_EVENT_NAME("ImmediateBufferCreate"));
+
+			// 버퍼 생성
+			FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), ParticleCount);
+			FRDGBufferRef Buffer = GraphBuilder.CreateBuffer(Desc, TEXT("ImmediatePersistentParticles"));
+
+			// CPU → GPU 업로드
+			GraphBuilder.QueueBufferUpload(
+				Buffer,
+				ParticlesCopy.GetData(),
+				ParticleCount * sizeof(FGPUFluidParticle));
+
+			// PersistentParticleBuffer로 추출
+			GraphBuilder.QueueBufferExtraction(
+				Buffer,
+				&Self->PersistentParticleBuffer,
+				ERHIAccess::SRVMask);
+
+			// 즉시 실행
+			GraphBuilder.Execute();
+			
+			UE_LOG(LogGPUFluidSimulator, Log,
+				TEXT("CreateImmediatePersistentBufferFromCopy: Created buffer with %d particles"), ParticleCount);
+		}
+	);
+
+	// Readback 데이터 설정 (Lock 필요 - 다른 스레드가 읽을 수 있음)
+	// InParticles는 아직 유효 (const ref)
+	{
+		FScopeLock Lock(&BufferLock);
+		ReadbackGPUParticles = InParticles;
+		bHasValidGPUResults.store(true);
+	}
+
+	// SourceCounter 초기화 (레벨 로드 시 스폰 셰이더를 거치지 않으므로 직접 초기화)
+	// InParticles는 아직 유효 (const ref)
+	if (SpawnManager.IsValid())
+	{
+		SpawnManager->InitializeSourceCountersFromParticles(InParticles);
+	}
+	
+	// 렌더 스레드 완료까지 대기 (레벨 로드 시 한 번만 호출되므로 성능 영향 적음)
+	// Deadlock 방지: 이 시점에서는 BufferLock을 보유하지 않음
 	FlushRenderingCommands();
 }
 

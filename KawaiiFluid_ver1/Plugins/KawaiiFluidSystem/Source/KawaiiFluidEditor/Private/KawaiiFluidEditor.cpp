@@ -1,11 +1,13 @@
-﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
+// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
 #include "KawaiiFluidEditor.h"
 #include "Style/FluidEditorStyle.h"
 #include "AssetTypeActions/AssetTypeActions_FluidPreset.h"
 #include "Brush/FluidBrushEditorMode.h"
 #include "Details/FluidComponentDetails.h"
+#include "Details/FluidVolumeComponentDetails.h"
 #include "Components/KawaiiFluidComponent.h"
+#include "Components/KawaiiFluidVolumeComponent.h"
 
 #include "IAssetTools.h"
 #include "AssetToolsModule.h"
@@ -138,6 +140,12 @@ void FKawaiiFluidEditorModule::RegisterPropertyCustomizations()
 		UKawaiiFluidComponent::StaticClass()->GetFName(),
 		FOnGetDetailCustomizationInstance::CreateStatic(&FFluidComponentDetails::MakeInstance)
 	);
+
+	// Register KawaiiFluidVolumeComponent detail customization
+	PropertyModule.RegisterCustomClassLayout(
+		UKawaiiFluidVolumeComponent::StaticClass()->GetFName(),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FFluidVolumeComponentDetails::MakeInstance)
+	);
 }
 
 void FKawaiiFluidEditorModule::UnregisterPropertyCustomizations()
@@ -146,6 +154,7 @@ void FKawaiiFluidEditorModule::UnregisterPropertyCustomizations()
 	{
 		FPropertyEditorModule& PropertyModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
 		PropertyModule.UnregisterCustomClassLayout(UKawaiiFluidComponent::StaticClass()->GetFName());
+		PropertyModule.UnregisterCustomClassLayout(UKawaiiFluidVolumeComponent::StaticClass()->GetFName());
 	}
 }
 

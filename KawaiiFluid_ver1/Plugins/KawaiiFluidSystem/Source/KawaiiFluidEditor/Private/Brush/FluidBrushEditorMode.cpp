@@ -1,7 +1,10 @@
-﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
+// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
 #include "Brush/FluidBrushEditorMode.h"
 #include "Components/KawaiiFluidComponent.h"
+#include "Components/KawaiiFluidVolumeComponent.h"
+#include "Actors/KawaiiFluidVolume.h"
+#include "Modules/KawaiiFluidSimulationModule.h"
 #include "EditorViewportClient.h"
 #include "EngineUtils.h"
 #include "Engine/Engine.h"
@@ -57,11 +60,21 @@ void FFluidBrushEditorMode::Exit()
 		SelectionChangedHandle.Reset();
 	}
 
+	// Component 모드 정리
 	if (TargetComponent.IsValid())
 	{
 		TargetComponent->bBrushModeActive = false;
 	}
 	TargetComponent.Reset();
+
+	// Volume 모드 정리
+	if (TargetVolumeComponent.IsValid())
+	{
+		TargetVolumeComponent->bBrushModeActive = false;
+	}
+	TargetVolume.Reset();
+	TargetVolumeComponent.Reset();
+
 	TargetOwnerActor.Reset();
 	bPainting = false;
 
@@ -71,6 +84,10 @@ void FFluidBrushEditorMode::Exit()
 
 void FFluidBrushEditorMode::SetTargetComponent(UKawaiiFluidComponent* Component)
 {
+	// 기존 Volume 타겟 클리어
+	TargetVolume.Reset();
+	TargetVolumeComponent.Reset();
+
 	TargetComponent = Component;
 	if (Component)
 	{
@@ -83,15 +100,44 @@ void FFluidBrushEditorMode::SetTargetComponent(UKawaiiFluidComponent* Component)
 	}
 }
 
+void FFluidBrushEditorMode::SetTargetVolume(AKawaiiFluidVolume* Volume)
+{
+	// 기존 Component 타겟 클리어
+	TargetComponent.Reset();
+
+	TargetVolume = Volume;
+	if (Volume)
+	{
+		TargetVolumeComponent = Volume->GetVolumeComponent();
+		if (TargetVolumeComponent.IsValid())
+		{
+			TargetVolumeComponent->bBrushModeActive = true;
+		}
+		TargetOwnerActor = Volume;
+	}
+	else
+	{
+		TargetVolumeComponent.Reset();
+		TargetOwnerActor.Reset();
+	}
+}
+
 bool FFluidBrushEditorMode::InputKey(FEditorViewportClient* ViewportClient, FViewport* Viewport,
                                       FKey Key, EInputEvent Event)
 {
-	if (!TargetComponent.IsValid())
+	// Component 또는 Volume 중 하나가 유효해야 함
+	const bool bHasComponent = TargetComponent.IsValid();
+	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
+
+	if (!bHasComponent && !bHasVolume)
 	{
 		return false;
 	}
 
-	FFluidBrushSettings& Settings = TargetComponent->BrushSettings;
+	// BrushSettings 참조 (분기 처리)
+	FFluidBrushSettings& Settings = bHasVolume 
+		? TargetVolumeComponent->BrushSettings 
+		: TargetComponent->BrushSettings;
 
 	// 좌클릭: 페인팅
 	if (Key == EKeys::LeftMouseButton)
@@ -252,12 +298,24 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 
 void FFluidBrushEditorMode::ApplyBrush()
 {
-	if (!TargetComponent.IsValid() || !bValidLocation)
+	if (!bValidLocation)
 	{
 		return;
 	}
 
-	const FFluidBrushSettings& Settings = TargetComponent->BrushSettings;
+	// Component 또는 Volume 중 하나가 유효해야 함
+	const bool bHasComponent = TargetComponent.IsValid();
+	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
+
+	if (!bHasComponent && !bHasVolume)
+	{
+		return;
+	}
+
+	// BrushSettings 참조 (분기 처리)
+	const FFluidBrushSettings& Settings = bHasVolume 
+		? TargetVolumeComponent->BrushSettings 
+		: TargetComponent->BrushSettings;
 
 	// 스트로크 간격
 	double Now = FPlatformTime::Seconds();
@@ -267,22 +325,47 @@ void FFluidBrushEditorMode::ApplyBrush()
 	}
 	LastStrokeTime = Now;
 
-	switch (Settings.Mode)
+	// Volume 모드
+	if (bHasVolume)
 	{
-		case EFluidBrushMode::Add:
-			TargetComponent->AddParticlesInRadius(
-				BrushLocation,
-				Settings.Radius,
-				Settings.ParticlesPerStroke,
-				Settings.InitialVelocity,
-				Settings.Randomness,
-				BrushNormal
-			);
-			break;
+		switch (Settings.Mode)
+		{
+			case EFluidBrushMode::Add:
+				TargetVolume->AddParticlesInRadius(
+					BrushLocation,
+					Settings.Radius,
+					Settings.ParticlesPerStroke,
+					Settings.InitialVelocity,
+					Settings.Randomness,
+					BrushNormal
+				);
+				break;
 
-		case EFluidBrushMode::Remove:
-			TargetComponent->RemoveParticlesInRadius(BrushLocation, Settings.Radius);
-			break;
+			case EFluidBrushMode::Remove:
+				TargetVolume->RemoveParticlesInRadius(BrushLocation, Settings.Radius);
+				break;
+		}
+	}
+	// Component 모드
+	else
+	{
+		switch (Settings.Mode)
+		{
+			case EFluidBrushMode::Add:
+				TargetComponent->AddParticlesInRadius(
+					BrushLocation,
+					Settings.Radius,
+					Settings.ParticlesPerStroke,
+					Settings.InitialVelocity,
+					Settings.Randomness,
+					BrushNormal
+				);
+				break;
+
+			case EFluidBrushMode::Remove:
+				TargetComponent->RemoveParticlesInRadius(BrushLocation, Settings.Radius);
+				break;
+		}
 	}
 }
 
@@ -290,7 +373,8 @@ void FFluidBrushEditorMode::Render(const FSceneView* View, FViewport* Viewport, 
 {
 	FEdMode::Render(View, Viewport, PDI);
 
-	if (bValidLocation && TargetComponent.IsValid())
+	const bool bHasTarget = TargetComponent.IsValid() || (TargetVolume.IsValid() && TargetVolumeComponent.IsValid());
+	if (bValidLocation && bHasTarget)
 	{
 		DrawBrushPreview(PDI);
 	}
@@ -298,12 +382,19 @@ void FFluidBrushEditorMode::Render(const FSceneView* View, FViewport* Viewport, 
 
 void FFluidBrushEditorMode::DrawBrushPreview(FPrimitiveDrawInterface* PDI)
 {
-	if (!TargetComponent.IsValid())
+	// Component 또는 Volume 중 하나가 유효해야 함
+	const bool bHasComponent = TargetComponent.IsValid();
+	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
+
+	if (!bHasComponent && !bHasVolume)
 	{
 		return;
 	}
 
-	const FFluidBrushSettings& Settings = TargetComponent->BrushSettings;
+	// BrushSettings 참조 (분기 처리)
+	const FFluidBrushSettings& Settings = bHasVolume 
+		? TargetVolumeComponent->BrushSettings 
+		: TargetComponent->BrushSettings;
 	FColor Color = GetBrushColor().ToFColor(true);
 
 	// 노말 기준 원 (실제 스폰 영역 - 반구의 바닥면)
@@ -327,12 +418,21 @@ void FFluidBrushEditorMode::DrawBrushPreview(FPrimitiveDrawInterface* PDI)
 
 FLinearColor FFluidBrushEditorMode::GetBrushColor() const
 {
-	if (!TargetComponent.IsValid())
+	// Component 또는 Volume 중 하나가 유효해야 함
+	const bool bHasComponent = TargetComponent.IsValid();
+	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
+
+	if (!bHasComponent && !bHasVolume)
 	{
 		return FLinearColor::White;
 	}
 
-	switch (TargetComponent->BrushSettings.Mode)
+	// BrushSettings 참조 (분기 처리)
+	EFluidBrushMode Mode = bHasVolume 
+		? TargetVolumeComponent->BrushSettings.Mode 
+		: TargetComponent->BrushSettings.Mode;
+
+	switch (Mode)
 	{
 		case EFluidBrushMode::Add:
 			return FLinearColor(0.2f, 0.9f, 0.3f, 0.8f);  // Green
@@ -348,25 +448,45 @@ void FFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FView
 {
 	FEdMode::DrawHUD(ViewportClient, Viewport, View, Canvas);
 
-	if (!Canvas || !TargetComponent.IsValid() || !GEngine)
+	// Component 또는 Volume 중 하나가 유효해야 함
+	const bool bHasComponent = TargetComponent.IsValid();
+	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
+
+	if (!Canvas || (!bHasComponent && !bHasVolume) || !GEngine)
 	{
 		return;
 	}
 
-	const FFluidBrushSettings& Settings = TargetComponent->BrushSettings;
+	// BrushSettings 참조 (분기 처리)
+	const FFluidBrushSettings& Settings = bHasVolume 
+		? TargetVolumeComponent->BrushSettings 
+		: TargetComponent->BrushSettings;
 	FString ModeStr = (Settings.Mode == EFluidBrushMode::Add) ? TEXT("ADD") : TEXT("REMOVE");
 
-	// 파티클 개수 (per-source count: 이 컴포넌트가 소유한 파티클 수)
+	// 파티클 개수 (분기 처리)
 	int32 ParticleCount = -1;
-	if (TargetComponent->GetSimulationModule()) 
+	if (bHasVolume)
 	{
-		const int32 SourceID = TargetComponent->GetSimulationModule()->GetSourceID();
-		ParticleCount = TargetComponent->GetSimulationModule()->GetParticleCountForSource(SourceID);
+		// Volume 모드: Volume의 SimulationModule에서 전체 파티클 수
+		if (UKawaiiFluidSimulationModule* SimModule = TargetVolume->GetSimulationModule())
+		{
+			ParticleCount = SimModule->GetParticleCount();
+		}
+	}
+	else
+	{
+		// Component 모드: 이 컴포넌트가 소유한 파티클 수 (per-source count)
+		if (TargetComponent->GetSimulationModule()) 
+		{
+			const int32 SourceID = TargetComponent->GetSimulationModule()->GetSourceID();
+			ParticleCount = TargetComponent->GetSimulationModule()->GetParticleCountForSource(SourceID);
+		}
 	}
 
 	FString ParticleStr = (ParticleCount >= 0) ? FString::FromInt(ParticleCount) : TEXT("-");
-	FString InfoText = FString::Printf(TEXT("Brush: %s | Radius: %.0f | Particles: %s | [ ] Size | 1/2 Mode | ESC Exit"),
-	                               *ModeStr, Settings.Radius, *ParticleStr);
+	FString TargetTypeStr = bHasVolume ? TEXT("Volume") : TEXT("Component");
+	FString InfoText = FString::Printf(TEXT("[%s] Brush: %s | Radius: %.0f | Particles: %s | [ ] Size | 1/2 Mode | ESC Exit"),
+	                               *TargetTypeStr, *ModeStr, Settings.Radius, *ParticleStr);
 
 	FCanvasTextItem Text(FVector2D(10, 40), FText::FromString(InfoText),
 	                     GEngine->GetSmallFont(), GetBrushColor());
@@ -375,7 +495,11 @@ void FFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FView
 
 bool FFluidBrushEditorMode::DisallowMouseDeltaTracking() const
 {
-	if (!TargetComponent.IsValid())
+	// Component 또는 Volume 중 하나가 유효해야 함
+	const bool bHasComponent = TargetComponent.IsValid();
+	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
+
+	if (!bHasComponent && !bHasVolume)
 	{
 		return false;
 	}
@@ -401,10 +525,14 @@ void FFluidBrushEditorMode::Tick(FEditorViewportClient* ViewportClient, float De
 {
 	FEdMode::Tick(ViewportClient, DeltaTime);
 
-	// 조건 2: 타겟 컴포넌트 삭제됨
-	if (!TargetComponent.IsValid())
+	// Component 또는 Volume 중 하나가 유효해야 함
+	const bool bHasComponent = TargetComponent.IsValid();
+	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
+
+	// 타겟이 삭제됨
+	if (!bHasComponent && !bHasVolume)
 	{
-		UE_LOG(LogTemp, Log, TEXT("Fluid Brush Mode: Target component destroyed, exiting"));
+		UE_LOG(LogTemp, Log, TEXT("Fluid Brush Mode: Target destroyed, exiting"));
 		GetModeManager()->DeactivateMode(EM_FluidBrush);
 		return;
 	}

@@ -1,4 +1,4 @@
-﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
+// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
 #pragma once
 
@@ -6,6 +6,8 @@
 #include "EdMode.h"
 
 class UKawaiiFluidComponent;
+class AKawaiiFluidVolume;
+class UKawaiiFluidVolumeComponent;
 
 /**
  * 플루이드 파티클 브러시 에디터 모드
@@ -43,15 +45,30 @@ public:
 	virtual void Tick(FEditorViewportClient* ViewportClient, float DeltaTime) override;
 	//~ End FEdMode Interface
 
-	/** 타겟 컴포넌트 설정 */
+	/** 타겟 컴포넌트 설정 (KawaiiFluidComponent용) */
 	void SetTargetComponent(UKawaiiFluidComponent* Component);
+
+	/** 타겟 볼륨 설정 (KawaiiFluidVolume용) */
+	void SetTargetVolume(AKawaiiFluidVolume* Volume);
 
 	/** 타겟 컴포넌트 반환 */
 	UKawaiiFluidComponent* GetTargetComponent() const { return TargetComponent.Get(); }
 
+	/** 타겟 볼륨 반환 */
+	AKawaiiFluidVolume* GetTargetVolume() const { return TargetVolume.Get(); }
+
+	/** 현재 타겟이 Volume인지 확인 */
+	bool IsTargetingVolume() const { return TargetVolume.IsValid(); }
+
 private:
-	/** 타겟 플루이드 컴포넌트 */
+	/** 타겟 플루이드 컴포넌트 (KawaiiFluidComponent 모드) */
 	TWeakObjectPtr<UKawaiiFluidComponent> TargetComponent;
+
+	/** 타겟 볼륨 (KawaiiFluidVolume 모드) */
+	TWeakObjectPtr<AKawaiiFluidVolume> TargetVolume;
+
+	/** 타겟 볼륨 컴포넌트 (BrushSettings 접근용) */
+	TWeakObjectPtr<UKawaiiFluidVolumeComponent> TargetVolumeComponent;
 
 	/** 현재 브러시 위치 */
 	FVector BrushLocation {};

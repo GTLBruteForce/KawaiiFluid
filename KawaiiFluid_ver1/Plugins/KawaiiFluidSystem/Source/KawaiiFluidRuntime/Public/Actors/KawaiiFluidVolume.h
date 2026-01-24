@@ -1,4 +1,4 @@
-﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
+// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
 #pragma once
 
@@ -51,6 +51,8 @@ public:
 	// AActor Interface
 	//========================================
 
+	virtual void OnConstruction(const FTransform& Transform) override;
+	virtual void PostInitializeComponents() override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -220,8 +222,11 @@ protected:
 	UPROPERTY()
 	TObjectPtr<UKawaiiFluidSimulationModule> SimulationModule;
 
-	/** Simulation context - owns solver and GPU simulator */
-	UPROPERTY()
+	/** Simulation context - owns solver and GPU simulator
+	 *  Transient: This is created at runtime by the Subsystem and is world-specific.
+	 *  Must not be serialized or copied between editor and PIE worlds.
+	 */
+	UPROPERTY(Transient)
 	TObjectPtr<UKawaiiFluidSimulationContext> SimulationContext;
 
 	/** Rendering module - manages ISM and Metaball renderers */
@@ -247,8 +252,11 @@ protected:
 	// Internal
 	//========================================
 
-	/** Initialize simulation module and context */
+	/** Initialize simulation module (basic setup, called in PostInitializeComponents) */
 	void InitializeSimulation();
+
+	/** Register simulation module with Subsystem for GPU (called in BeginPlay) */
+	void RegisterSimulationWithSubsystem();
 
 	/** Cleanup simulation resources */
 	void CleanupSimulation();
@@ -293,6 +301,9 @@ private:
 	int32 CachedISMMaxRenderParticles = 100000;
 
 #if WITH_EDITOR
+	/** Initialize rendering for editor mode (ISM only for brush visualization) */
+	void InitializeEditorRendering();
+
 	/** Generate boundary particles for editor preview (without GPU simulation) */
 	void GenerateEditorBoundaryParticlesPreview();
 
@@ -302,6 +313,9 @@ private:
 
 	/** Last frame editor preview was generated */
 	uint64 LastEditorPreviewFrame = 0;
+
+	/** Flag to track if editor rendering is initialized */
+	bool bEditorRenderingInitialized = false;
 #endif
 
 	/** Compute debug color for a particle */
