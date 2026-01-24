@@ -26,7 +26,7 @@ struct FGPUBoundaryParticle
 	float3 Normal;        // 12 bytes - Surface normal
 	int OwnerID;          // 4 bytes  - Owner component ID
 	float3 Velocity;      // 12 bytes - World velocity (for moving boundaries)
-	float Padding;        // 4 bytes  - Alignment padding
+	float FrictionCoeff;  // 4 bytes  - Coulomb friction coefficient (0~2)
 };
 
 //=============================================================================
@@ -199,6 +199,7 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3 cohesionForce = float3(0, 0, 0);
 	float3 normalAccum = float3(0, 0, 0);
 	float normalWeightSum = 0.0f;
+	float frictionWeightSum = 0.0f;  // Coulomb friction coefficient weighted sum
 	float h = AdhesionRadius;  // Use AdhesionRadius for tighter adhesion range
 
 	if (bUseBoundaryZOrder)
@@ -237,8 +238,8 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							float3 r_normalized = r_vec / r;
 
 							// Distance-based strength: exponential decay
-							// r=0 → closeFactor=10.0, very strong at close range
-							// r=h → closeFactor≈3.68, still has significant influence at boundary
+							// r=0 → closeFactor=50.0, very strong at close range
+							// r=h → closeFactor≈18.4, still has significant influence at boundary
 							float closeFactor = 50.0 * exp(-r / h);
 
 							// Adhesion force (Akinci 2013)
@@ -251,10 +252,11 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							float C = CohesionKernel(r, h);
 							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
 
-							// Accumulate weighted normal for gravity cancellation
+							// Accumulate weighted normal and friction for Coulomb friction
 							float normalWeight = A * closeFactor;
 							normalAccum += boundary.Normal * normalWeight;
 							normalWeightSum += normalWeight;
+							frictionWeightSum += boundary.FrictionCoeff * normalWeight;
 						}
 					}
 				}
@@ -294,9 +296,9 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							float3 r_normalized = r_vec / r;
 
 							// Distance-based strength: exponential decay
-							// r=0 → closeFactor=10.0, very strong at close range
-							// r=h → closeFactor≈3.68, still has significant influence at boundary
-							float closeFactor = 10.0 * exp(-r / h);
+							// r=0 → closeFactor=50.0, very strong at close range
+							// r=h → closeFactor≈18.4, still has significant influence at boundary
+							float closeFactor = 50.0 * exp(-r / h);
 
 							// Adhesion force (Akinci 2013)
 							// F_adhesion = -beta * m_i * psi_b * A(r,h) * r_normalized
@@ -308,10 +310,11 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							float C = CohesionKernel(r, h);
 							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
 
-							// Accumulate weighted normal for gravity cancellation
+							// Accumulate weighted normal and friction for Coulomb friction
 							float normalWeight = A * closeFactor;
 							normalAccum += boundary.Normal * normalWeight;
 							normalWeightSum += normalWeight;
+							frictionWeightSum += boundary.FrictionCoeff * normalWeight;
 						}
 					}
 				}
@@ -323,8 +326,54 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Previously divided by a weight sum which caused weak adhesion with many boundary particles
 	// Now forces accumulate naturally - more neighbors = stronger adhesion
 
-	// Apply forces to velocity
-	float3 totalForce = adhesionForce + cohesionForce;
+	//=========================================================================
+	// Ceiling Detection: Reduce adhesion when boundary normal points down
+	// (e.g., bottom of capsule, underside of objects)
+	//=========================================================================
+	float ceilingFactor = 1.0f;
+	float3 avgNormal = float3(0, 0, 1);
+	float avgFrictionCoeff = 0.6f;
+
+	if (normalWeightSum > SMALL_NUMBER)
+	{
+		avgNormal = normalize(normalAccum / normalWeightSum);
+		avgFrictionCoeff = frictionWeightSum / normalWeightSum;
+
+		// Surface angle detection: vary adhesion based on surface orientation
+		// z > 0.7: top (floor-like) → 100%
+		// 0.3 < z <= 0.7: upper slope → 70%
+		// -0.3 <= z <= 0.3: side wall → 50%
+		// -0.7 <= z < -0.3: lower slope → 30%
+		// z < -0.7: bottom (ceiling-like) → 10%
+		if (avgNormal.z < -0.7f)
+		{
+			// Bottom (ceiling): particles should fall
+			ceilingFactor = 0.1f;
+			avgFrictionCoeff *= 0.1f;
+		}
+		else if (avgNormal.z < -0.3f)
+		{
+			// Lower slope: particles slide down
+			ceilingFactor = 0.3f;
+			avgFrictionCoeff *= 0.3f;
+		}
+		else if (avgNormal.z < 0.3f)
+		{
+			// Side wall: particles slide down
+			ceilingFactor = 0.5f;
+			avgFrictionCoeff *= 0.5f;
+		}
+		else if (avgNormal.z < 0.7f)
+		{
+			// Upper slope: particles slide slowly
+			ceilingFactor = 0.7f;
+			avgFrictionCoeff *= 0.7f;
+		}
+		// else: top (floor-like) → ceilingFactor = 1.0 (default)
+	}
+
+	// Apply forces to velocity (with ceiling factor applied to adhesion)
+	float3 totalForce = (adhesionForce + cohesionForce) * ceilingFactor;
 
 	// Clamp force magnitude to prevent instability
 	float forceMag = length(totalForce);
@@ -337,17 +386,39 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Apply as velocity change (F = ma, dv = F/m * dt)
 	particle.Velocity += totalForce / particle.Mass * DeltaTime;
 
-	// Cancel gravity normal component using adhesion strength (no extra parameter)
-	// This keeps particles from dropping straight down while still allowing tangential sliding.
+	//=========================================================================
+	// Coulomb Friction Model (replaces old gravity cancellation)
+	// Slows down tangential velocity based on friction coefficient
+	//=========================================================================
 	if (normalWeightSum > SMALL_NUMBER)
 	{
-		float3 avgNormal = normalize(normalAccum / normalWeightSum);
-		float gravityNormal = dot(Gravity, avgNormal);
-		if (gravityNormal < 0.0f)
+		// Decompose velocity into normal and tangential components
+		float3 vel = particle.Velocity;
+		float velNormalMag = dot(vel, avgNormal);
+		float3 velNormal = velNormalMag * avgNormal;
+		float3 velTangential = vel - velNormal;
+		float tangentialSpeed = length(velTangential);
+
+		// Apply Coulomb friction to tangential velocity
+		if (tangentialSpeed > 0.01f)
 		{
-			float cancelScale = saturate(AdhesionForceStrength / 50.0f);
-			float3 gravityCancel = -gravityNormal * avgNormal * cancelScale;
-			particle.Velocity += gravityCancel * DeltaTime;
+			// Friction direction: opposite to sliding
+			float3 frictionDir = -velTangential / tangentialSpeed;
+
+			// Normal force: independent of adhesion force magnitude
+			// Uses normalWeightSum (contact strength) instead of forceMag
+			float normalForce = normalWeightSum * 100.0f * ceilingFactor;
+
+			// Coulomb friction: F = μ × N
+			float maxFrictionForce = avgFrictionCoeff * normalForce;
+
+			// Force required to stop (80% safety factor to prevent oscillation)
+			float requiredForce = tangentialSpeed * particle.Mass / DeltaTime * 0.8f;
+			float frictionForceMag = min(maxFrictionForce, requiredForce);
+
+			// Apply friction as velocity change
+			float3 frictionAccel = frictionDir * frictionForceMag / particle.Mass;
+			particle.Velocity += frictionAccel * DeltaTime;
 		}
 	}
 

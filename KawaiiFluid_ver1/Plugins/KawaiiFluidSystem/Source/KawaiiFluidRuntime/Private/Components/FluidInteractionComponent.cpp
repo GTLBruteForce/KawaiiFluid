@@ -1822,11 +1822,11 @@ void UFluidInteractionComponent::CollectGPUBoundaryParticles(FGPUBoundaryParticl
 		// 낮을수록 밀려나는 힘 감소, 높을수록 강하게 밀려남
 		float Psi = 0.1f;
 
-		OutBoundaryParticles.Add(Position, Normal, OwnerID, Psi);
+		OutBoundaryParticles.Add(Position, Normal, OwnerID, Psi, BoundaryFrictionCoefficient);
 	}
 }
 
-void UFluidInteractionComponent::CollectLocalBoundaryParticles(TArray<FGPUBoundaryParticleLocal>& OutLocalParticles) const
+void UFluidInteractionComponent::CollectLocalBoundaryParticles(TArray<FGPUBoundaryParticleLocal>& OutLocalParticles, float Psi, float Friction) const
 {
 	if (!bBoundaryParticlesInitialized || BoundaryParticleLocalPositions.Num() == 0)
 	{
@@ -1844,10 +1844,7 @@ void UFluidInteractionComponent::CollectLocalBoundaryParticles(TArray<FGPUBounda
 			: FVector3f(0.0f, 0.0f, 1.0f);
 		int32 BoneIndex = (i < BoundaryParticleBoneIndices.Num()) ? BoundaryParticleBoneIndices[i] : -1;
 
-		// Psi는 경계 입자의 볼륨 기여도
-		float Psi = 0.1f;
-
-		OutLocalParticles.Add(FGPUBoundaryParticleLocal(LocalPosition, BoneIndex, LocalNormal, Psi));
+		OutLocalParticles.Add(FGPUBoundaryParticleLocal(LocalPosition, BoneIndex, LocalNormal, Psi, Friction));
 	}
 }
 

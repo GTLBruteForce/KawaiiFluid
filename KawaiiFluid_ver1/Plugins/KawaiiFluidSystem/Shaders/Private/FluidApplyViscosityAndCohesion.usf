@@ -58,7 +58,7 @@ struct FGPUBoundaryParticle
 	float3 Normal;
 	int OwnerID;
 	float3 Velocity;
-	float Padding;
+	float FrictionCoeff;  // Coulomb friction coefficient (0~2)
 };
 
 StructuredBuffer<FGPUBoundaryParticle> BoundaryParticles;

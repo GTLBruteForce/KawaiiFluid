@@ -13,20 +13,22 @@
 
 struct FGPUBoundaryParticleLocal
 {
-	float3 LocalPosition;   // Bone-local position
-	int BoneIndex;          // Skeleton bone index (-1 for static mesh)
-	float3 LocalNormal;     // Bone-local surface normal
-	float Psi;              // Volume contribution
+	float3 LocalPosition;   // 12 bytes - Bone-local position
+	float Psi;              // 4 bytes  - Volume contribution
+	float3 LocalNormal;     // 12 bytes - Bone-local surface normal
+	float FrictionCoeff;    // 4 bytes  - Coulomb friction coefficient (0~2)
+	int BoneIndex;          // 4 bytes  - Skeleton bone index (-1 for static mesh)
+	float3 Padding;         // 12 bytes - Alignment padding
 };
 
 struct FGPUBoundaryParticle
 {
-	float3 Position;        // World position
-	float Psi;              // Volume contribution
-	float3 Normal;          // World normal
-	int OwnerID;            // Owner component ID
-	float3 Velocity;        // World velocity (for moving boundaries)
-	float Padding;          // Alignment padding
+	float3 Position;        // 12 bytes - World position
+	float Psi;              // 4 bytes  - Volume contribution
+	float3 Normal;          // 12 bytes - World normal
+	int OwnerID;            // 4 bytes  - Owner component ID
+	float3 Velocity;        // 12 bytes - World velocity (for moving boundaries)
+	float FrictionCoeff;    // 4 bytes  - Coulomb friction coefficient (0~2)
 };
 
 //=============================================================================
@@ -109,7 +111,7 @@ void BoundarySkinningCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	output.Normal = worldNormal;
 	output.OwnerID = OwnerID;
 	output.Velocity = velocity;
-	output.Padding = 0.0f;
+	output.FrictionCoeff = local.FrictionCoeff;  // Copy friction coefficient from local
 
 	WorldBoundaryParticles[idx] = output;
 }

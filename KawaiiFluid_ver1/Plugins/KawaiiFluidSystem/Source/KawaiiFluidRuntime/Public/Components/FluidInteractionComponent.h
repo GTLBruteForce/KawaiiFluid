@@ -571,6 +571,16 @@ public:
 	float BoundaryParticleSpacing = 5.0f;
 
 	/**
+	 * Coulomb friction coefficient for boundary particles.
+	 * Controls how much fluid slows down when sliding on the surface.
+	 * 0.0 = frictionless (ice), 0.6 = default, 1.0+ = sticky surface
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Interaction|Boundary Particles",
+	          meta = (EditCondition = "bEnableBoundaryParticles", ClampMin = "0.0", ClampMax = "2.0",
+	                  ToolTip = "Coulomb friction coefficient.\n0.0 = frictionless (ice)\n0.6 = default\n1.0+ = sticky surface (honey, slime)"))
+	float BoundaryFrictionCoefficient = 0.6f;
+
+	/**
 	 * Show boundary particles for debug.
 	 * Visualizes boundary particles in the viewport.
 	 */
@@ -618,8 +628,12 @@ public:
 	/** Collect boundary particle data for GPU (legacy - CPU world-space upload). */
 	void CollectGPUBoundaryParticles(struct FGPUBoundaryParticles& OutBoundaryParticles) const;
 
-	/** Collect local boundary particle data for GPU skinning (one-time upload). */
-	void CollectLocalBoundaryParticles(TArray<struct FGPUBoundaryParticleLocal>& OutLocalParticles) const;
+	/** Collect local boundary particle data for GPU skinning (one-time upload).
+	 * @param OutLocalParticles - Output array for local boundary particles
+	 * @param Psi - Boundary particle volume contribution (calculated from Preset)
+	 * @param Friction - Friction coefficient (from Preset)
+	 */
+	void CollectLocalBoundaryParticles(TArray<struct FGPUBoundaryParticleLocal>& OutLocalParticles, float Psi, float Friction) const;
 
 	/** Collect bone transforms for GPU skinning (per-frame upload). */
 	void CollectBoneTransformsForBoundary(TArray<FMatrix>& OutBoneTransforms, FMatrix& OutComponentTransform) const;

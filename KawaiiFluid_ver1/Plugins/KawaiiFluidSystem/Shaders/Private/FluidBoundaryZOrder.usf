@@ -18,7 +18,7 @@ struct FGPUBoundaryParticle
 	float3 Normal;        // 12 bytes - Surface normal
 	int OwnerID;          // 4 bytes  - Owner component ID
 	float3 Velocity;      // 12 bytes - World velocity (for moving boundaries)
-	float Padding;        // 4 bytes  - Alignment padding
+	float FrictionCoeff;  // 4 bytes  - Coulomb friction coefficient (0~2)
 };
 
 //=============================================================================

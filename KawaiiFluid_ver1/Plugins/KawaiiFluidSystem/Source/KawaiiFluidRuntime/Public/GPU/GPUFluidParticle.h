@@ -825,7 +825,7 @@ struct FGPUBoundaryParticle
 	FVector3f Normal;         // 12 bytes - Surface normal at this position
 	int32 OwnerID;            // 4 bytes  - Owner FluidInteractionComponent ID
 	FVector3f Velocity;       // 12 bytes - World velocity (for moving boundaries)
-	float Padding;            // 4 bytes  - Alignment padding
+	float FrictionCoeff;      // 4 bytes  - Coulomb friction coefficient (0~2)
 
 	FGPUBoundaryParticle()
 		: Position(FVector3f::ZeroVector)
@@ -833,51 +833,57 @@ struct FGPUBoundaryParticle
 		, Normal(FVector3f(0.0f, 0.0f, 1.0f))
 		, OwnerID(-1)
 		, Velocity(FVector3f::ZeroVector)
-		, Padding(0.0f)
+		, FrictionCoeff(0.6f)
 	{
 	}
 
-	FGPUBoundaryParticle(const FVector3f& InPosition, const FVector3f& InNormal, int32 InOwnerID, float InPsi = 1.0f, const FVector3f& InVelocity = FVector3f::ZeroVector)
+	FGPUBoundaryParticle(const FVector3f& InPosition, const FVector3f& InNormal, int32 InOwnerID, float InPsi = 1.0f, const FVector3f& InVelocity = FVector3f::ZeroVector, float InFrictionCoeff = 0.6f)
 		: Position(InPosition)
 		, Psi(InPsi)
 		, Normal(InNormal)
 		, OwnerID(InOwnerID)
 		, Velocity(InVelocity)
-		, Padding(0.0f)
+		, FrictionCoeff(InFrictionCoeff)
 	{
 	}
 };
 static_assert(sizeof(FGPUBoundaryParticle) == 48, "FGPUBoundaryParticle must be 48 bytes");
 
 /**
- * GPU Boundary Particle Local Structure (32 bytes)
+ * GPU Boundary Particle Local Structure (48 bytes)
  * Stores bone-local coordinates for GPU skinning
  * Uploaded once at initialization, persistent on GPU
  */
 struct FGPUBoundaryParticleLocal
 {
 	FVector3f LocalPosition;  // 12 bytes - Bone-local position
-	int32 BoneIndex;          // 4 bytes  - Skeleton bone index (-1 for static mesh)
-	FVector3f LocalNormal;    // 12 bytes - Bone-local surface normal
 	float Psi;                // 4 bytes  - Volume contribution
+	FVector3f LocalNormal;    // 12 bytes - Bone-local surface normal
+	float FrictionCoeff;      // 4 bytes  - Coulomb friction coefficient (0~2)
+	int32 BoneIndex;          // 4 bytes  - Skeleton bone index (-1 for static mesh)
+	float Padding[3];         // 12 bytes - Alignment padding
 
 	FGPUBoundaryParticleLocal()
 		: LocalPosition(FVector3f::ZeroVector)
-		, BoneIndex(-1)
-		, LocalNormal(FVector3f(0.0f, 0.0f, 1.0f))
 		, Psi(0.1f)
+		, LocalNormal(FVector3f(0.0f, 0.0f, 1.0f))
+		, FrictionCoeff(0.6f)
+		, BoneIndex(-1)
+		, Padding{0.0f, 0.0f, 0.0f}
 	{
 	}
 
-	FGPUBoundaryParticleLocal(const FVector3f& InLocalPos, int32 InBoneIndex, const FVector3f& InLocalNormal, float InPsi)
+	FGPUBoundaryParticleLocal(const FVector3f& InLocalPos, int32 InBoneIndex, const FVector3f& InLocalNormal, float InPsi, float InFrictionCoeff = 0.6f)
 		: LocalPosition(InLocalPos)
-		, BoneIndex(InBoneIndex)
-		, LocalNormal(InLocalNormal)
 		, Psi(InPsi)
+		, LocalNormal(InLocalNormal)
+		, FrictionCoeff(InFrictionCoeff)
+		, BoneIndex(InBoneIndex)
+		, Padding{0.0f, 0.0f, 0.0f}
 	{
 	}
 };
-static_assert(sizeof(FGPUBoundaryParticleLocal) == 32, "FGPUBoundaryParticleLocal must be 32 bytes");
+static_assert(sizeof(FGPUBoundaryParticleLocal) == 48, "FGPUBoundaryParticleLocal must be 48 bytes");
 
 /**
  * GPU Boundary Adhesion Parameters
@@ -1067,8 +1073,8 @@ struct FGPUBoundaryParticles
 		return Particles.Num();
 	}
 
-	void Add(const FVector3f& Position, const FVector3f& Normal, int32 OwnerID, float Psi = 1.0f)
+	void Add(const FVector3f& Position, const FVector3f& Normal, int32 OwnerID, float Psi = 1.0f, float FrictionCoeff = 0.6f)
 	{
-		Particles.Emplace(Position, Normal, OwnerID, Psi);
+		Particles.Emplace(Position, Normal, OwnerID, Psi, FVector3f::ZeroVector, FrictionCoeff);
 	}
 };

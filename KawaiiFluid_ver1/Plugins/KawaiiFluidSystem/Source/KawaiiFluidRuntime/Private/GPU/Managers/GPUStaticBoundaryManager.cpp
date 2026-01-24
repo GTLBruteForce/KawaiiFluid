@@ -183,19 +183,18 @@ float FGPUStaticBoundaryManager::CalculatePsi(float Spacing, float RestDensity) 
 	// Using particle radius as thickness gives reasonable density contribution
 	// without the over-estimation that causes "wall climbing" artifacts.
 	//
-	// The factor 0.1 is empirically tuned to:
-	// 1. Provide enough density contribution to prevent penetration
-	// 2. Not create artificial suction/pressure at boundaries
+	// Convert cm to m for proper unit consistency with RestDensity (kg/m³)
 
-	const float ParticleRadius = Spacing * 0.5f;  // Approximate particle radius
-	const float SurfaceArea = Spacing * Spacing;
-	const float EffectiveVolume = SurfaceArea * ParticleRadius;
+	const float Spacing_m = Spacing * 0.01f;  // cm → m
+	const float ParticleRadius_m = Spacing_m * 0.5f;
+	const float SurfaceArea_m = Spacing_m * Spacing_m;
+	const float EffectiveVolume_m = SurfaceArea_m * ParticleRadius_m;
 
 	// Scaling factor tuned for proper density contribution at boundaries
 	// - Too high (0.5): causes "wall climbing" due to artificial suction
 	// - Too low (0.05): insufficient density contribution, doesn't fix deficit
 	// - 0.2~0.3: balanced - fills density deficit without over-contribution
-	return RestDensity * EffectiveVolume * 0.3f;
+	return RestDensity * EffectiveVolume_m * 0.3f;
 }
 
 void FGPUStaticBoundaryManager::GenerateSphereBoundaryParticles(

@@ -171,13 +171,9 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float penetration = max(0.0f, -effectiveDist);
 			float3 impactWorld = pos - normal * sdf;
 
-			// BoneIndex >= 0: Bone Collider -> Detection only (Boundary Particle handles response)
-			// BoneIndex < 0: Static Collider -> Apply collision response
-			if (sphere.BoneIndex < 0)
-			{
-				ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, sphere.Friction, sphere.Restitution);
-				originalPos = pos;  // Update for subsequent collisions
-			}
+			// Apply collision response for all colliders (both bone and static)
+			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, sphere.Friction, sphere.Restitution);
+			originalPos = pos;  // Update for subsequent collisions
 			bCollided = true;
 
 			// Record feedback for particle -> player interaction (includes velocity for drag calculation)
@@ -198,13 +194,9 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float penetration = max(0.0f, -effectiveDist);
 			float3 impactWorld = pos - normal * sdf;
 
-			// BoneIndex >= 0: Bone Collider -> Detection only (Boundary Particle handles response)
-			// BoneIndex < 0: Static Collider -> Apply collision response
-			if (capsule.BoneIndex < 0)
-			{
-				ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, capsule.Friction, capsule.Restitution);
-				originalPos = pos;
-			}
+			// Apply collision response for all colliders (both bone and static)
+			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, capsule.Friction, capsule.Restitution);
+			originalPos = pos;
 			bCollided = true;
 
 			// Record feedback for particle -> player interaction (includes velocity for drag calculation)
@@ -225,18 +217,14 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float penetration = max(0.0f, -effectiveDist);
 			float3 impactWorld = pos - normal * sdf;
 
-			// BoneIndex >= 0: Bone Collider -> Detection only (Boundary Particle handles response)
-			// BoneIndex < 0: Static Collider -> Apply collision response
-			if (box.BoneIndex < 0)
-			{
-				ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, box.Friction, box.Restitution);
-				originalPos = pos;
+			// Apply collision response for all colliders (both bone and static)
+			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, box.Friction, box.Restitution);
+			originalPos = pos;
 
-				// Mark as near ground if collision normal is mostly upward (static colliders only)
-				if (normal.z > 0.5f)
-				{
-					particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
-				}
+			// Mark as near ground if collision normal is mostly upward
+			if (normal.z > 0.5f)
+			{
+				particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
 			}
 			bCollided = true;
 
@@ -280,18 +268,14 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float penetration = max(0.0f, -effectiveDist);
 			float3 impactWorld = pos - normal * sdf;
 
-			// BoneIndex >= 0: Bone Collider -> Detection only (Boundary Particle handles response)
-			// BoneIndex < 0: Static Collider -> Apply collision response
-			if (convex.BoneIndex < 0)
-			{
-				ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, convex.Friction, convex.Restitution);
-				originalPos = pos;
+			// Apply collision response for all colliders (both bone and static)
+			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, convex.Friction, convex.Restitution);
+			originalPos = pos;
 
-				// Mark as near ground if collision normal is mostly upward (static colliders only)
-				if (normal.z > 0.5f)
-				{
-					particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
-				}
+			// Mark as near ground if collision normal is mostly upward
+			if (normal.z > 0.5f)
+			{
+				particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_GROUND);
 			}
 			bCollided = true;
 

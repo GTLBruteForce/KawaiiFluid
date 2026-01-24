@@ -887,8 +887,20 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 				if (!GPUSimulator->IsGPUBoundarySkinningEnabled() ||
 				    GPUSimulator->GetTotalLocalBoundaryParticleCount() == 0)
 				{
+					// Calculate Psi from Preset and Interaction spacing (Akinci 2012)
+					// Psi = RestDensity * EffectiveVolume * ScalingFactor
+					// For surface sampling: EffectiveVolume = Spacing² × (Spacing/2)
+					// Convert cm to m for proper unit consistency
+					const float Spacing_m = Interaction->BoundaryParticleSpacing * 0.01f;  // cm → m
+					const float RestDensity = Preset->RestDensity;  // kg/m³
+					const float ParticleRadius_m = Spacing_m * 0.5f;
+					const float SurfaceArea_m = Spacing_m * Spacing_m;
+					const float EffectiveVolume_m = SurfaceArea_m * ParticleRadius_m;
+					const float Psi = RestDensity * EffectiveVolume_m * 0.3f;
+					const float Friction = Preset->Friction;
+
 					TArray<FGPUBoundaryParticleLocal> LocalParticles;
-					Interaction->CollectLocalBoundaryParticles(LocalParticles);
+					Interaction->CollectLocalBoundaryParticles(LocalParticles, Psi, Friction);
 
 					if (LocalParticles.Num() > 0)
 					{
