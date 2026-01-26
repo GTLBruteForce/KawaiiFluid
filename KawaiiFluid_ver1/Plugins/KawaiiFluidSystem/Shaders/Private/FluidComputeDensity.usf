@@ -43,9 +43,9 @@ void ComputeDensityCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	FGPUFluidParticle particle = Particles[idx];
 
-	// Skip attached particles (both regular and boundary attachment)
-	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED) ||
-		HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED))
+	// Skip CPU-attached particles only (they follow bone position directly)
+	// Boundary-attached particles still need density calculation for physics
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 	{
 		particle.Density = RestDensity;
 		particle.Lambda = 0.0f;

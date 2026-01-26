@@ -31,12 +31,11 @@ void FinalizePositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	FGPUFluidParticle particle = Particles[idx];
 
-	// Skip attached particles (CPU attachment or GPU boundary attachment)
-	// Check both IS_ATTACHED and IS_BOUNDARY_ATTACHED flags
-	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED) || 
-		HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED))
+	// Skip CPU-attached particles only (they follow bone position directly)
+	// Boundary-attached particles need velocity recalculation for physics
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 	{
-		// For attached particles, just sync position
+		// For CPU-attached particles, just sync position
 		particle.Position = particle.PredictedPosition;
 		Particles[idx] = particle;
 		return;

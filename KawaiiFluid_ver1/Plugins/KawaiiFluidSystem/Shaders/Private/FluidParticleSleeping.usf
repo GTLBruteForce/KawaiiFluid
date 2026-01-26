@@ -46,11 +46,11 @@ void UpdateParticleSleepingCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	FGPUFluidParticle particle = Particles[idx];
 
-	// Skip attached particles - they follow bone movement, not physics
-	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED) ||
-		HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED))
+	// Skip CPU-attached particles only (they follow bone position directly)
+	// Boundary-attached particles participate in sleeping logic normally
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 	{
-		// Clear sleeping flag for attached particles
+		// Clear sleeping flag for CPU-attached particles
 		particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_SLEEPING);
 		SleepCounters[idx] = 0;
 		Particles[idx] = particle;

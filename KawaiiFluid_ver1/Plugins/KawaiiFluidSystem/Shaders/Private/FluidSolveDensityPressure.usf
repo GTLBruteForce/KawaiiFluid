@@ -236,9 +236,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	FGPUFluidParticle particle = Particles[idx];
 
-	// Check if this particle is attached to boundary (bone)
-	bool bIsAttached = HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED) ||
-					   HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED);
+	// Check if this particle is CPU-attached (follows bone position directly)
+	// Boundary-attached particles still receive physics
+	bool bIsAttached = HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED);
 
 	// Skip sleeping particles - they are excluded from constraint solving
 	// This reduces micro-jitter and improves performance (NVIDIA Flex technique)

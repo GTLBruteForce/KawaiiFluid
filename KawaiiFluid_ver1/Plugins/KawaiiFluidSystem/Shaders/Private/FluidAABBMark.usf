@@ -57,9 +57,9 @@ void AABBMarkCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	FGPUFluidParticle particle = Particles[idx];
 	float3 pos = particle.Position;
 
-	// Skip already attached particles (they're handled differently)
-	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED) ||
-		HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED))
+	// Skip CPU-attached particles only (they follow bone position directly)
+	// Boundary-attached particles can still be marked for AABB filtering
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 	{
 		MarkedFlags[idx] = 0;
 		MarkedAABBIndex[idx] = -1;

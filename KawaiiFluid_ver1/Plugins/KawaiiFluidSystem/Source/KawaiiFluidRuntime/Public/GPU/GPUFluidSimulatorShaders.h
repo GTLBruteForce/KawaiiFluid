@@ -2386,6 +2386,7 @@ public:
 		SHADER_PARAMETER(float, DetachSpeedThreshold)
 		SHADER_PARAMETER(float, AttachCooldown)
 		SHADER_PARAMETER(float, ConstraintBlend)
+		SHADER_PARAMETER(float, AdhesionStrength)  // For drift-based detach threshold
 		SHADER_PARAMETER(float, CurrentTime)
 		SHADER_PARAMETER(float, DeltaTime)
 		// Z-Order parameters

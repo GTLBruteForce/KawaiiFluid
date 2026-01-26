@@ -865,6 +865,10 @@ void FGPUFluidSimulator::AddBoundaryAttachmentUpdatePass(
 	PassParameters->AttachCooldown = Params.BoundaryAttachCooldown;
 	PassParameters->ConstraintBlend = Params.BoundaryAttachConstraintBlend;
 
+	// AdhesionStrength for drift-based detach threshold
+	// AdhesionParams already declared at function start (line ~721)
+	PassParameters->AdhesionStrength = AdhesionParams.AdhesionForceStrength;
+
 	// Time parameters
 	PassParameters->CurrentTime = Params.CurrentTime;
 	PassParameters->DeltaTime = Params.DeltaTime;

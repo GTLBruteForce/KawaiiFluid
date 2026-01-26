@@ -180,12 +180,9 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
-	// Skip if boundary-attached (position constraint system handles these particles)
-	// Force-based adhesion would conflict with position constraint
-	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED))
-	{
-		return;
-	}
+	// Boundary-attached particles still receive adhesion force
+	// They need adhesion to stay attracted to the boundary surface
+	// The attachment system only handles character movement (bone delta)
 
 	float3 pos = particle.PredictedPosition;
 
