@@ -206,6 +206,10 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float frictionWeightSum = 0.0f;  // Coulomb friction coefficient weighted sum
 	float h = AdhesionRadius;  // Use AdhesionRadius for tighter adhesion range
 
+	// Position-based follow: accumulate bone delta
+	float3 totalBoneDelta = float3(0, 0, 0);
+	float totalDeltaWeight = 0.0f;
+
 	if (bUseBoundaryZOrder)
 	{
 		//=====================================================================
@@ -261,6 +265,12 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							normalAccum += boundary.Normal * normalWeight;
 							normalWeightSum += normalWeight;
 							frictionWeightSum += boundary.FrictionCoeff * normalWeight;
+
+							// Accumulate bone delta for position-based follow
+							float3 boneDelta = boundary.Velocity * DeltaTime;
+							float deltaWeight = 1.0f;  // Full follow within adhesion radius
+							totalBoneDelta += boneDelta * deltaWeight;
+							totalDeltaWeight += deltaWeight;
 						}
 					}
 				}
@@ -319,11 +329,28 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							normalAccum += boundary.Normal * normalWeight;
 							normalWeightSum += normalWeight;
 							frictionWeightSum += boundary.FrictionCoeff * normalWeight;
+
+							// Accumulate bone delta for position-based follow
+							float3 boneDelta = boundary.Velocity * DeltaTime;
+							float deltaWeight = 1.0f;  // Full follow within adhesion radius
+							totalBoneDelta += boneDelta * deltaWeight;
+							totalDeltaWeight += deltaWeight;
 						}
 					}
 				}
 			}
 		}
+	}
+
+	//=========================================================================
+	// Position-Based Follow: Move particles with bone movement
+	// Directly adjusts position by bone delta (not force-based)
+	//=========================================================================
+	if (totalDeltaWeight > SMALL_NUMBER)
+	{
+		float3 avgBoneDelta = totalBoneDelta / totalDeltaWeight;
+		particle.Position += avgBoneDelta;
+		particle.PredictedPosition += avgBoneDelta;
 	}
 
 	// Note: Force normalization removed to allow proper force accumulation
