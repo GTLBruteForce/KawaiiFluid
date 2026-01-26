@@ -1643,6 +1643,15 @@ void AKawaiiFluidVolume::ClearAllParticles()
 	{
 		RenderingModule->UpdateRenderers();
 	}
+
+	// Shadow ISM 클리어
+	if (UWorld* World = GetWorld())
+	{
+		if (UFluidRendererSubsystem* RendererSubsystem = World->GetSubsystem<UFluidRendererSubsystem>())
+		{
+			RendererSubsystem->UpdateShadowInstances(nullptr, 0, 0.0f);
+		}
+	}
 }
 
 //========================================

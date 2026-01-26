@@ -177,6 +177,7 @@ FReply FFluidVolumeComponentDetails::OnClearParticlesClicked()
 	{
 		// Volume의 ClearAllParticles() 사용 - 렌더링도 같이 클리어됨
 		TargetVolume->ClearAllParticles();
+		TargetVolume->Modify();
 	}
 
 	return FReply::Handled(); 

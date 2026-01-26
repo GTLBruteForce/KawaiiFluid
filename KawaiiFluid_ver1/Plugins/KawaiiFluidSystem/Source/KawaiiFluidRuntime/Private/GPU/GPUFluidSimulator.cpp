@@ -2150,6 +2150,21 @@ void FGPUFluidSimulator::FinalizeUpload()
 		ParticleCount = CachedGPUParticles.Num();
 		CurrentParticleCount = ParticleCount;
 		bNeedsFullUpload = false;
+
+		// Upload 시점에 Readback 캐시도 빌드 (ClearAllParticles 등에서 바로 사용 가능)
+		// GPU readback을 기다리지 않고 CPU 데이터로 즉시 캐시 구축
+		CachedSourceIDToParticleIDs.Empty();
+		CachedAllParticleIDs.Empty();
+		CachedAllParticleIDs.Reserve(ParticleCount);
+
+		for (const FGPUFluidParticle& P : CachedGPUParticles)
+		{
+			CachedSourceIDToParticleIDs.FindOrAdd(P.SourceID).Add(P.ParticleID);
+			CachedAllParticleIDs.Add(P.ParticleID);
+		}
+
+		bHasValidGPUResults.store(true);
+		UE_LOG(LogGPUFluidSimulator, Log, TEXT("FinalizeUpload: Built readback cache for %d particles"), ParticleCount);
 	}
 	// ═══════════════════════════════════════════════════
 	// Lock 해제됨 - 이제 FlushRenderingCommands 안전

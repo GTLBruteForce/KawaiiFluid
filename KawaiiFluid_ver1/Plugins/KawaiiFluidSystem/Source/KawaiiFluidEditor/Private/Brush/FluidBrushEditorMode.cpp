@@ -271,7 +271,6 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 	FVector Origin, Direction;
 	View->DeprojectFVector2D(FVector2D(MouseX, MouseY), Origin, Direction);
 
-	// 레이캐스트
 	UWorld* World = GetWorld();
 	if (!World)
 	{
@@ -279,19 +278,145 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 		return false;
 	}
 
+	// Volume 박스 정보 미리 계산
+	FBox VolumeBounds;
+	float tEntry = -1.0f;  // 진입점 (카메라→박스)
+	float tExit = -1.0f;   // 출구점 (박스 반대편)
+	int32 entryAxis = -1;
+	int32 exitAxis = -1;
+	bool bEntryMinSide = false;
+	bool bExitMinSide = false;
+	bool bHasVolumeIntersection = false;
+	bool bCameraInsideBox = false;
+
+	if (TargetVolumeComponent.IsValid())
+	{
+		VolumeBounds = TargetVolumeComponent->Bounds.GetBox();
+		if (VolumeBounds.IsValid)
+		{
+			const FVector BoxMin = VolumeBounds.Min;
+			const FVector BoxMax = VolumeBounds.Max;
+
+			float tMin = -FLT_MAX;
+			float tMax = FLT_MAX;
+
+			for (int32 i = 0; i < 3; ++i)
+			{
+				const float dirComp = Direction[i];
+				const float originComp = Origin[i];
+
+				if (FMath::Abs(dirComp) < KINDA_SMALL_NUMBER)
+				{
+					if (originComp < BoxMin[i] || originComp > BoxMax[i])
+					{
+						tMin = FLT_MAX;
+						break;
+					}
+				}
+				else
+				{
+					float t1 = (BoxMin[i] - originComp) / dirComp;
+					float t2 = (BoxMax[i] - originComp) / dirComp;
+
+					bool bT1IsEntry = (t1 < t2);
+					if (!bT1IsEntry)
+					{
+						float temp = t1;
+						t1 = t2;
+						t2 = temp;
+					}
+
+					if (t1 > tMin)
+					{
+						tMin = t1;
+						entryAxis = i;
+						bEntryMinSide = bT1IsEntry;
+					}
+					if (t2 < tMax)
+					{
+						tMax = t2;
+						exitAxis = i;
+						bExitMinSide = !bT1IsEntry;
+					}
+				}
+			}
+
+			if (tMin <= tMax)
+			{
+				bHasVolumeIntersection = true;
+				tEntry = tMin;
+				tExit = tMax;
+				bCameraInsideBox = (tMin < 0.0f && tMax > 0.0f);
+			}
+		}
+	}
+
+	// 라인트레이스로 스태틱 메시 검사
 	FHitResult Hit;
 	FCollisionQueryParams QueryParams;
 	QueryParams.bTraceComplex = true;
 
 	if (World->LineTraceSingleByChannel(Hit, Origin, Origin + Direction * 50000.0f, ECC_Visibility, QueryParams))
 	{
-		BrushLocation = Hit.Location;
-		BrushNormal = Hit.ImpactNormal;
-		bValidLocation = true;
-		return true;
+		// 히트가 박스 내부에 있는지 확인
+		if (bHasVolumeIntersection && VolumeBounds.IsInsideOrOn(Hit.Location))
+		{
+			BrushLocation = Hit.Location;
+			BrushNormal = Hit.ImpactNormal;
+			bValidLocation = true;
+			return true;
+		}
+		// 히트가 박스 밖이면 fallthrough해서 박스 면 사용
 	}
 
-	// 히트 실패 시 브러시 비활성화 (허공에선 스폰 안 함)
+	// 박스 면에 브러시 위치
+	if (bHasVolumeIntersection)
+	{
+		float tHit;
+		int32 hitAxis;
+		bool bMinSide;
+
+		if (bCameraInsideBox)
+		{
+			// 카메라가 박스 안 → 출구점(반대편 면) 사용
+			tHit = tExit;
+			hitAxis = exitAxis;
+			bMinSide = bExitMinSide;
+		}
+		else if (tEntry >= 0.0f)
+		{
+			// 카메라가 박스 밖 → 진입점 사용
+			tHit = tEntry;
+			hitAxis = entryAxis;
+			bMinSide = bEntryMinSide;
+		}
+		else
+		{
+			bValidLocation = false;
+			return false;
+		}
+
+		if (tHit >= 0.0f && tHit <= 50000.0f)
+		{
+			BrushLocation = Origin + Direction * tHit;
+
+			BrushNormal = FVector::ZeroVector;
+			if (hitAxis >= 0)
+			{
+				// 노말은 카메라를 향해야 함 (박스 안쪽으로 향하는 노말)
+				BrushNormal[hitAxis] = bMinSide ? 1.0f : -1.0f;
+			}
+			else
+			{
+				BrushNormal = FVector::UpVector;
+			}
+
+			bValidLocation = true;
+			return true;
+		}
+	}
+
+	// 히트 실패 시 브러시 비활성화
 	bValidLocation = false;
 	return false;
 }
@@ -328,6 +453,7 @@ void FFluidBrushEditorMode::ApplyBrush()
 	// Volume 모드
 	if (bHasVolume)
 	{
+		TargetVolume->Modify();
 		switch (Settings.Mode)
 		{
 			case EFluidBrushMode::Add:
@@ -349,6 +475,7 @@ void FFluidBrushEditorMode::ApplyBrush()
 	// Component 모드
 	else
 	{
+		TargetComponent->Modify();
 		switch (Settings.Mode)
 		{
 			case EFluidBrushMode::Add:
