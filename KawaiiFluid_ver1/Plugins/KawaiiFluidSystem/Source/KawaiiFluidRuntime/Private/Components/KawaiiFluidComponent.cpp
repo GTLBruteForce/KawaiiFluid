@@ -218,7 +218,7 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 #if WITH_EDITORONLY_DATA
 	                     bBrushModeActive ||
 #endif
-	                     SpawnSettings.bRecycleOldestParticles;
+	                     SpawnSettings.bContinuousSpawn;
 	GetFluidStatsCollector().SetReadbackRequested(bNeedReadback);
 
 #if WITH_EDITOR
@@ -777,11 +777,9 @@ void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 		{
 			return;
 		}
-
-		// 비-Recycle 모드: max 도달 시 스폰 중단 (per-source count 사용)
-		// -1 = 데이터 미준비 → 스폰 허용
+		
 		const int32 SourceCountForStream = SimulationModule->GetParticleCountForSource(SimulationModule->GetSourceID());
-		if (!SpawnSettings.bRecycleOldestParticles && SpawnSettings.MaxParticleCount > 0 &&
+		if (!SpawnSettings.bContinuousSpawn && SpawnSettings.MaxParticleCount > 0 &&
 			SourceCountForStream >= 0 && SourceCountForStream >= SpawnSettings.MaxParticleCount)
 		{
 			return;
@@ -834,7 +832,7 @@ void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 		// 2. Recycle: 스폰 후 초과분 Despawn 요청
 		//    (GPU 순서: Despawn → Spawn 이므로 정상 작동)
 		//========================================
-		if (SpawnSettings.bRecycleOldestParticles && SpawnSettings.MaxParticleCount > 0 && TotalSpawned > 0)
+		if (SpawnSettings.bContinuousSpawn && SpawnSettings.MaxParticleCount > 0 && TotalSpawned > 0)
 		{
 			const int32 CurrentCount = SimulationModule->GetParticleCountForSource(SimulationModule->GetSourceID());
 			// -1 = 데이터 미준비 → Recycle 스킵
@@ -873,7 +871,7 @@ void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 		// 비-Recycle 모드: max 도달 시 스폰 중단 (per-source count 사용)
 		// -1 = 데이터 미준비 → 스폰 허용
 		const int32 SourceCountForSpray = SimulationModule->GetParticleCountForSource(SimulationModule->GetSourceID());
-		if (!SpawnSettings.bRecycleOldestParticles && SpawnSettings.MaxParticleCount > 0 &&
+		if (!SpawnSettings.bContinuousSpawn && SpawnSettings.MaxParticleCount > 0 &&
 			SourceCountForSpray >= 0 && SourceCountForSpray >= SpawnSettings.MaxParticleCount)
 		{
 			return;
@@ -891,7 +889,7 @@ void UKawaiiFluidComponent::ProcessContinuousSpawn(float DeltaTime)
 		//========================================
 		// 2. Recycle: 스폰 후 초과분 Despawn 요청
 		//========================================
-		if (SpawnSettings.bRecycleOldestParticles && SpawnSettings.MaxParticleCount > 0)
+		if (SpawnSettings.bContinuousSpawn && SpawnSettings.MaxParticleCount > 0)
 		{
 			const int32 CurrentCount = SimulationModule->GetParticleCountForSource(SimulationModule->GetSourceID());
 			// -1 = 데이터 미준비 → Recycle 스킵

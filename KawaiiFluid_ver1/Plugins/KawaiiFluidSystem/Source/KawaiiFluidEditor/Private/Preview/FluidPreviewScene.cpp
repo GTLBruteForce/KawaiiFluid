@@ -6,9 +6,9 @@
 #include "Core/SpatialHash.h"
 #include "Core/KawaiiFluidSimulationContext.h"
 #include "Core/KawaiiFluidSimulationTypes.h"
-// SimulationModule removed - using GPU simulation only
+#include "Core/KawaiiFluidSimulationStats.h"
+#include "Modules/KawaiiFluidSimulationModule.h"
 #include "Modules/KawaiiFluidRenderingModule.h"
-#include "Rendering/KawaiiFluidISMRenderer.h"
 #include "Rendering/KawaiiFluidMetaballRenderer.h"
 #include "Rendering/FluidRendererSubsystem.h"
 #include "GPU/GPUFluidSimulator.h"
@@ -22,7 +22,9 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 	, CurrentPreset(nullptr)
 	, PreviewSettingsObject(nullptr)
 	, SimulationContext(nullptr)
-	, SpawnAccumulator(0.0f)
+	, SimulationModule(nullptr)
+	, SpawnAccumulatedTime(0.0f)
+	, TotalSimulationTime(0.0f)
 	, bSimulationActive(false)
 	, RenderingModule(nullptr)
 	, PreviewActor(nullptr)
@@ -33,14 +35,13 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 	PreviewSettingsObject = NewObject<UFluidPreviewSettingsObject>(GetTransientPackage(), NAME_None, RF_Transient);
 
 	// Create simulation context (physics solver)
+	// GPU simulator will be initialized in SetPreset() with preset's MaxParticles
 	SimulationContext = NewObject<UKawaiiFluidSimulationContext>(GetTransientPackage(), NAME_None, RF_Transient);
-
-	// Initialize Context's RenderResource for rendering
 	SimulationContext->InitializeRenderResource();
 
-	// Initialize GPU simulator for Metaball rendering (required!)
-	constexpr int32 PreviewMaxParticles = 10000;
-	SimulationContext->InitializeGPUSimulator(PreviewMaxParticles);
+	// Create simulation module (uses same spawn logic as runtime)
+	SimulationModule = NewObject<UKawaiiFluidSimulationModule>(GetTransientPackage(), NAME_None, RF_Transient);
+	SimulationModule->SetSourceID(0);  // Preview uses fixed source ID
 
 	// Create visualization components (including PreviewActor)
 	CreateVisualizationComponents();
@@ -114,6 +115,7 @@ void FFluidPreviewScene::AddReferencedObjects(FReferenceCollector& Collector)
 	Collector.AddReferencedObject(CurrentPreset);
 	Collector.AddReferencedObject(PreviewSettingsObject);
 	Collector.AddReferencedObject(SimulationContext);
+	Collector.AddReferencedObject(SimulationModule);
 	Collector.AddReferencedObject(RenderingModule);
 	Collector.AddReferencedObject(PreviewActor);
 	Collector.AddReferencedObject(FloorMeshComponent);
@@ -169,11 +171,20 @@ void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 
 	if (CurrentPreset)
 	{
-		// Initialize solvers in context and cache preset for GPU simulation
+		// Initialize GPU simulator with preset's MaxParticles
 		if (SimulationContext)
 		{
+			SimulationContext->InitializeGPUSimulator(CurrentPreset->MaxParticles);
 			SimulationContext->InitializeSolvers(CurrentPreset);
 			SimulationContext->SetCachedPreset(CurrentPreset);
+		}
+
+		// Initialize simulation module with preset and GPU simulator
+		if (SimulationModule)
+		{
+			SimulationModule->Initialize(CurrentPreset);
+			SimulationModule->SetGPUSimulator(SimulationContext->GetGPUSimulatorShared());
+			SimulationModule->SetGPUSimulationActive(true);
 		}
 
 		CachedParticleRadius = CurrentPreset->ParticleRadius;
@@ -203,11 +214,26 @@ void FFluidPreviewScene::RefreshFromPreset()
 		return;
 	}
 
-	// Update simulation context solvers (physics parameters) and cache preset
+	// Reinitialize GPU simulator if MaxParticles changed
 	if (SimulationContext)
 	{
+		FGPUFluidSimulator* GPUSimulator = SimulationContext->GetGPUSimulator();
+		const int32 CurrentMaxParticles = GPUSimulator ? GPUSimulator->GetMaxParticleCount() : 0;
+
+		if (CurrentMaxParticles != CurrentPreset->MaxParticles)
+		{
+			SimulationContext->ReleaseGPUSimulator();
+			SimulationContext->InitializeGPUSimulator(CurrentPreset->MaxParticles);
+		}
+
 		SimulationContext->InitializeSolvers(CurrentPreset);
 		SimulationContext->SetCachedPreset(CurrentPreset);
+	}
+
+	// Update simulation module preset
+	if (SimulationModule)
+	{
+		SimulationModule->SetPreset(CurrentPreset);
 	}
 
 	CachedParticleRadius = CurrentPreset->ParticleRadius;
@@ -247,17 +273,53 @@ void FFluidPreviewScene::ResetSimulation()
 			GPUSimulator->ClearAllParticles();
 		}
 	}
-	SpawnAccumulator = 0.0f;
+	SpawnAccumulatedTime = 0.0f;
+	TotalSimulationTime = 0.0f;
+
+	// Fill mode: spawn particles immediately on reset (like EmitterComponent::SpawnFill)
+	if (SimulationModule && CurrentPreset && PreviewSettingsObject)
+	{
+		const FFluidPreviewSettings& Settings = PreviewSettingsObject->Settings;
+
+		if (Settings.IsFillMode())
+		{
+			const FVector SpawnCenter = Settings.PreviewSpawnOffset;
+			const float Spacing = CurrentPreset->ParticleSpacing;
+			const FVector Velocity = Settings.InitialVelocityDirection.GetSafeNormal() * Settings.InitialSpeed;
+
+			// Use SimulationModule's hexagonal spawn functions (same as EmitterComponent)
+			switch (Settings.ShapeType)
+			{
+			case EPreviewEmitterShapeType::Sphere:
+				SimulationModule->SpawnParticlesSphereHexagonal(
+					SpawnCenter, Settings.SphereRadius, Spacing,
+					true, Settings.JitterAmount, Velocity);
+				break;
+
+			case EPreviewEmitterShapeType::Cube:
+				SimulationModule->SpawnParticlesBoxHexagonal(
+					SpawnCenter, Settings.CubeHalfSize, Spacing,
+					true, Settings.JitterAmount, Velocity);
+				break;
+
+			case EPreviewEmitterShapeType::Cylinder:
+				SimulationModule->SpawnParticlesCylinderHexagonal(
+					SpawnCenter, Settings.CylinderRadius, Settings.CylinderHalfHeight, Spacing,
+					true, Settings.JitterAmount, Velocity);
+				break;
+			}
+		}
+	}
 }
 
-void FFluidPreviewScene::ContinuousSpawn(float DeltaTime)
+void FFluidPreviewScene::SpawnParticles(float DeltaTime)
 {
-	if (!SimulationContext)
+	if (!SimulationModule || !CurrentPreset || !PreviewSettingsObject)
 	{
 		return;
 	}
 
-	FGPUFluidSimulator* GPUSimulator = SimulationContext->GetGPUSimulator();
+	FGPUFluidSimulator* GPUSimulator = SimulationModule->GetGPUSimulator();
 	if (!GPUSimulator)
 	{
 		return;
@@ -265,46 +327,88 @@ void FFluidPreviewScene::ContinuousSpawn(float DeltaTime)
 
 	const FFluidPreviewSettings& Settings = PreviewSettingsObject->Settings;
 
-	// Check if we've reached max particle count (use GPU count)
-	const int32 CurrentCount = GPUSimulator->GetParticleCount();
-	if (CurrentCount >= Settings.MaxParticleCount)
+	// Only process Stream mode (Fill mode spawns on reset)
+	if (!Settings.IsStreamMode())
+	{
+		return;
+	}
+	
+	// Check max particle count (skip if Recycle mode - let recycle handle overflow)
+	if (Settings.MaxParticleCount > 0 && !Settings.bContinuousSpawn)
+	{
+		const int32 CurrentCount = GPUSimulator->GetParticleCount() + GPUSimulator->GetPendingSpawnCount();
+		if (CurrentCount >= Settings.MaxParticleCount)
+		{
+			return;
+		}
+	}
+
+	// === Stream mode: velocity-based layer spawning (matches EmitterComponent::ProcessStreamEmitter) ===
+
+	// Calculate effective spacing
+	float EffectiveSpacing = CurrentPreset->SmoothingRadius * 0.5f;
+	if (EffectiveSpacing <= 0.0f)
+	{
+		EffectiveSpacing = 10.0f;
+	}
+
+	const float LayerSpacing = EffectiveSpacing * Settings.StreamLayerSpacingRatio;
+
+	// Velocity-based layer spawning (accumulate distance traveled)
+	const float DistanceThisFrame = Settings.InitialSpeed * DeltaTime;
+	SpawnAccumulatedTime += DistanceThisFrame;  // Reuse as LayerDistanceAccumulator
+
+	if (SpawnAccumulatedTime < LayerSpacing)
+	{
+		return;  // Not enough distance accumulated for a layer
+	}
+
+	// Calculate number of layers to spawn and residual distance
+	const int32 LayerCount = FMath::FloorToInt(SpawnAccumulatedTime / LayerSpacing);
+	const float ResidualDistance = FMath::Fmod(SpawnAccumulatedTime, LayerSpacing);
+
+	if (LayerCount <= 0)
 	{
 		return;
 	}
 
-	// Accumulate spawn time
-	SpawnAccumulator += DeltaTime * Settings.ParticlesPerSecond;
+	// === Direction calculation ===
+	const FVector BaseLocation = Settings.PreviewSpawnOffset;
+	const FVector VelocityDir = Settings.InitialVelocityDirection.GetSafeNormal();
+	const FVector OffsetDir = VelocityDir;  // Offset along velocity direction
 
-	// Spawn particles based on accumulator
-	const int32 ParticlesToSpawn = FMath::FloorToInt(SpawnAccumulator);
-	if (ParticlesToSpawn <= 0)
+	// === Spawn layers with position offset (reverse order - oldest first) ===
+	// Like EmitterComponent: apply position offset to each layer to prevent overlap
+	for (int32 i = LayerCount - 1; i >= 0; --i)
 	{
-		return;
-	}
+		// Calculate position offset for each layer
+		// i = LayerCount-1: oldest layer (farthest from spawn point)
+		// i = 0: newest layer (closest to spawn point)
+		const float PositionOffset = static_cast<float>(i) * LayerSpacing + ResidualDistance;
+		const FVector OffsetLocation = BaseLocation + OffsetDir * PositionOffset;
 
-	// Subtract spawned particles from accumulator
-	SpawnAccumulator -= ParticlesToSpawn;
-
-	const FVector SpawnLocation = Settings.SpawnLocation;
-	const FVector SpawnVelocity = Settings.SpawnVelocity;
-	const float SpawnRadius = Settings.SpawnRadius;
-
-	// Calculate how many we can actually spawn
-	const int32 RemainingCapacity = Settings.MaxParticleCount - CurrentCount;
-	const int32 ActualSpawnCount = FMath::Min(ParticlesToSpawn, RemainingCapacity);
-
-	// Spawn particles via GPU simulator
-	for (int32 i = 0; i < ActualSpawnCount; ++i)
-	{
-		// Random position within sphere
-		FVector RandomOffset = FMath::VRand() * FMath::FRand() * SpawnRadius;
-		FVector Position = SpawnLocation + RandomOffset;
-
-		GPUSimulator->AddSpawnRequest(
-			FVector3f(Position),
-			FVector3f(SpawnVelocity),
-			1.0f  // Mass
+		SimulationModule->SpawnParticleDirectionalHexLayer(
+			OffsetLocation,
+			VelocityDir,
+			Settings.InitialSpeed,
+			Settings.StreamRadius,
+			EffectiveSpacing,
+			Settings.StreamJitter
 		);
+	}
+
+	// Update accumulator with residual distance
+	SpawnAccumulatedTime = ResidualDistance;
+
+	// Recycle (Stream mode only): After spawning, remove oldest particles if over MaxParticleCount
+	if (Settings.bContinuousSpawn && Settings.MaxParticleCount > 0)
+	{
+		const int32 CurrentCount = GPUSimulator->GetParticleCount();
+		if (CurrentCount > Settings.MaxParticleCount)
+		{
+			const int32 ToRemove = CurrentCount - Settings.MaxParticleCount;
+			SimulationModule->RemoveOldestParticlesForSource(0, ToRemove);
+		}
 	}
 }
 
@@ -321,12 +425,17 @@ void FFluidPreviewScene::TickSimulation(float DeltaTime)
 		return;
 	}
 
-	// Continuous spawn new particles (GPU spawn requests)
-	ContinuousSpawn(DeltaTime);
+	// Accumulate simulation time
+	TotalSimulationTime += DeltaTime;
+
+	// Request stats readback for density display in preview stats overlay
+	GetFluidStatsCollector().SetReadbackRequested(true);
+
+	// Spawn new particles (GPU spawn requests)
+	SpawnParticles(DeltaTime);
 
 	// Build simulation params
 	FKawaiiFluidSimulationParams Params;
-	Params.ExternalForce = CurrentPreset->Gravity;
 	Params.World = GetWorld();
 	Params.bUseWorldCollision = false;
 	Params.ParticleRadius = CurrentPreset->ParticleRadius;
@@ -439,14 +548,38 @@ TArray<FFluidParticle>& FFluidPreviewScene::GetParticlesMutable()
 
 float FFluidPreviewScene::GetSimulationTime() const
 {
-	// GPU simulation doesn't track accumulated time the same way
-	return 0.0f;
+	return TotalSimulationTime;
 }
 
 float FFluidPreviewScene::GetAverageDensity() const
 {
-	// GPU mode - density is computed on GPU, not easily accessible
-	return 0.0f;
+	// Read density from GPU readback data
+	if (!SimulationContext)
+	{
+		return 0.0f;
+	}
+
+	FGPUFluidSimulator* GPUSimulator = SimulationContext->GetGPUSimulator();
+	if (!GPUSimulator)
+	{
+		return 0.0f;
+	}
+
+	// Get readback GPU particles
+	TArray<FGPUFluidParticle> GPUParticles;
+	if (!GPUSimulator->GetReadbackGPUParticles(GPUParticles) || GPUParticles.Num() == 0)
+	{
+		return 0.0f;
+	}
+
+	// Calculate average density
+	double TotalDensity = 0.0;
+	for (const FGPUFluidParticle& Particle : GPUParticles)
+	{
+		TotalDensity += Particle.Density;
+	}
+
+	return static_cast<float>(TotalDensity / GPUParticles.Num());
 }
 
 //========================================

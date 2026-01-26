@@ -9,6 +9,7 @@
 
 class UKawaiiFluidPresetDataAsset;
 class UKawaiiFluidSimulationContext;
+class UKawaiiFluidSimulationModule;
 class UKawaiiFluidRenderingModule;
 struct FFluidParticle;
 
@@ -117,7 +118,7 @@ public:
 
 private:
 	/** Continuous spawn particles */
-	void ContinuousSpawn(float DeltaTime);
+	void SpawnParticles(float DeltaTime);
 
 	/** Create visualization components */
 	void CreateVisualizationComponents();
@@ -146,8 +147,14 @@ private:
 	/** Simulation context - physics solver with GPU simulator */
 	TObjectPtr<UKawaiiFluidSimulationContext> SimulationContext;
 
-	/** Spawn accumulator for fractional particles (continuous spawn) */
-	float SpawnAccumulator;
+	/** Simulation module - uses same spawn logic as runtime */
+	TObjectPtr<UKawaiiFluidSimulationModule> SimulationModule;
+
+	/** Spawn accumulated time for continuous spawn */
+	float SpawnAccumulatedTime;
+
+	/** Total simulation time (accumulated) */
+	float TotalSimulationTime;
 
 	/** Is simulation running */
 	bool bSimulationActive;

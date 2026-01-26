@@ -231,7 +231,7 @@ struct FFluidSpawnSettings
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Particle Spawn|Count",
 	          meta = (EditCondition = "SpawnType == EFluidSpawnType::Emitter && MaxParticleCount > 0"))
-	bool bRecycleOldestParticles = false;
+	bool bContinuousSpawn = false;
 
 	// === Common Settings ===
 	/** Initial velocity (ShapeVolume mode only) */

@@ -342,6 +342,23 @@ void FKawaiiFluidPresetAssetEditor::OnPreviewSettingsPropertyChanged(const FProp
 		return;
 	}
 
+	// Check if spawn-related property changed (requires simulation reset)
+	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
+	const bool bNeedsReset =
+		PropertyName == GET_MEMBER_NAME_CHECKED(FFluidPreviewSettings, EmitterMode) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(FFluidPreviewSettings, ShapeType) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(FFluidPreviewSettings, SphereRadius) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(FFluidPreviewSettings, CubeHalfSize) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(FFluidPreviewSettings, CylinderRadius) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(FFluidPreviewSettings, CylinderHalfHeight) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(FFluidPreviewSettings, PreviewSpawnOffset) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(FFluidPreviewSettings, JitterAmount);
+
+	if (bNeedsReset)
+	{
+		PreviewScene->ResetSimulation();
+	}
+
 	// Apply preview settings (environment, rendering, etc.)
 	PreviewScene->ApplyPreviewSettings();
 
