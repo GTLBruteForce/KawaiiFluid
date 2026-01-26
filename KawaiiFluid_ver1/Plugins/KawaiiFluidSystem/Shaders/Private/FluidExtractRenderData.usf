@@ -27,13 +27,13 @@ RWStructuredBuffer<FRenderParticle> RenderParticles;
 int ParticleCount;
 float ParticleRadius;
 
-// SoA (Structure of Arrays) 출력 버퍼 - 메모리 대역폭 최적화
-RWStructuredBuffer<float3> RenderPositions;   // 12B per particle (SDF 핫패스)
-RWStructuredBuffer<float3> RenderVelocities;  // 12B per particle (모션블러용)
+// SoA (Structure of Arrays) output buffers - Memory bandwidth optimization
+RWStructuredBuffer<float3> RenderPositions;   // 12B per particle (SDF hot path)
+RWStructuredBuffer<float3> RenderVelocities;  // 12B per particle (for motion blur)
 
 
 //=============================================================================
-// Main Compute Shader (Legacy AoS 출력)
+// Main Compute Shader (Legacy AoS output)
 //=============================================================================
 
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
@@ -71,8 +71,8 @@ void ExtractRenderDataCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 }
 
 //=============================================================================
-// SoA Compute Shader (메모리 대역폭 최적화)
-// - 32B/particle → 12B/particle (Position만 사용 시 62% 절감)
+// SoA Compute Shader (Memory bandwidth optimization)
+// - 32B/particle to 12B/particle (62% reduction when using Position only)
 //=============================================================================
 
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
@@ -100,7 +100,7 @@ void ExtractRenderDataSoACS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		vel = float3(0, 0, 0);
 	}
 
-	// SoA 출력 - 각 속성을 별도 버퍼에 저장
+	// SoA output - Store each attribute in separate buffer
 	RenderPositions[idx] = pos;
 	RenderVelocities[idx] = vel;
 }

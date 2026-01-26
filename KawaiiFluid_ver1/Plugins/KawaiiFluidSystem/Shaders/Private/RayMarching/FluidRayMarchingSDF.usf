@@ -90,10 +90,10 @@ float RelaxationFactor;    // Over-relaxation factor for Sphere Tracing (1.0~1.6
 // Translucency Parameters
 //=============================================================================
 
-float TranslucencyDepth;           // 반투명 최대 깊이
-float TranslucencyDensity;         // 내부 밀도 계수
-float SubsurfaceScatterStrength;   // SSS 강도
-float3 SubsurfaceColor;            // SSS 색상
+float TranslucencyDepth;           // Maximum translucency depth
+float TranslucencyDensity;         // Internal density coefficient
+float SubsurfaceScatterStrength;   // SSS strength
+float3 SubsurfaceColor;            // SSS color
 
 //=============================================================================
 // Optimization Flags
@@ -432,9 +432,9 @@ float BlinnPhongSpecular(float3 ViewDir, float3 LightDir, float3 Normal, float S
  */
 float SphereTrace(FRay Ray, float TMin, float TMax, float2 ScreenUV, float3 AABBMin, float3 AABBMax, out float3 HitNormal, out int OutSteps, out float OutHitSDF)
 {
-	// SDF 텍스처는 시뮬레이션 전체 bounds로 빌드됨
-	// SDF 샘플링은 반드시 VolumeBoundsMin/Max 사용 (좌표 일치)
-	// AABBMin/Max는 early-out 용도로만 사용 (AABB 교차 테스트)
+	// SDF texture is built with full simulation bounds
+	// SDF sampling must use VolumeBoundsMin/Max (coordinate matching)
+	// AABBMin/Max only used for early-out (AABB intersection test)
 	float3 VolumeSize = VolumeBoundsMax - VolumeBoundsMin;
 	float VoxelSize = 1.0f / float(VolumeResolution);
 
@@ -443,8 +443,8 @@ float SphereTrace(FRay Ray, float TMin, float TMax, float2 ScreenUV, float3 AABB
 	OutHitSDF = 1e10f;
 
 	// Add per-pixel jitter to break up concentric circle patterns
-	// 버그 수정: Ray.Origin은 카메라 위치로 모든 픽셀에서 동일하므로
-	// ScreenUV를 사용하여 픽셀별로 다른 jitter 값을 생성
+	// Bug fix: Ray.Origin is camera position which is same for all pixels
+	// Use ScreenUV to generate different jitter value per pixel
 	float Jitter = Hash12(ScreenUV * 1000.0f + float(FrameIndex % 16)) * MinStepSize;
 	T += Jitter;
 
@@ -459,7 +459,7 @@ float SphereTrace(FRay Ray, float TMin, float TMax, float2 ScreenUV, float3 AABB
 		OutSteps = i + 1;
 
 		float3 SamplePos = Ray.Origin + Ray.Direction * T;
-		// SDF 샘플링: 시뮬레이션 전체 bounds 사용 (SDF 텍스처와 좌표 일치)
+		// SDF sampling: Use full simulation bounds (coordinate matching with SDF texture)
 		float3 VolumeUV = WorldToVolumeUV(SamplePos, VolumeBoundsMin, VolumeBoundsMax);
 
 		// Check if outside volume
@@ -471,8 +471,8 @@ float SphereTrace(FRay Ray, float TMin, float TMax, float2 ScreenUV, float3 AABB
 
 		//========================================
 		// SDF Volume Sampling (O(1) - fast)
-		// 성능 최적화: 매 스텝에서는 SDF Volume만 사용
-		// Z-Order는 표면 히트 후 Normal 계산에만 사용 (1회)
+		// Performance optimization: Use SDF Volume only for every step
+		// Z-Order only used for Normal calculation after surface hit (1 time)
 		//========================================
 		float SDF = SampleSDF(VolumeUV);
 
@@ -501,14 +501,14 @@ float SphereTrace(FRay Ray, float TMin, float TMax, float2 ScreenUV, float3 AABB
 
 			//========================================
 			// Normal Calculation
-			// Hybrid Mode: Z-Order analytic gradient (더 정밀한 Normal)
+			// Hybrid Mode: Z-Order analytic gradient (more precise normal)
 			// Non-Hybrid: SDF Volume finite difference
 			//========================================
 			float FinalSDF;
 			if (bEnableHybridMode && ParticleCount > 0)
 			{
-				// Z-Order analytic gradient normal (1회만 호출 - O(k))
-				// 매 스텝이 아닌 표면 히트 시에만 호출하여 성능 확보
+				// Z-Order analytic gradient normal (called only once - O(k))
+				// Called only on surface hit (not every step) for performance
 				FinalSDF = EvaluateSDFWithZOrder(FinalPos);
 				if (FinalSDF < 1e9f)
 				{
@@ -559,7 +559,7 @@ float CalculateThickness(float3 SurfacePos, float3 Normal, float3 RayDir)
 	InternalRay.Origin = SurfacePos - Normal * SurfaceEpsilon * 2.0f;  // Step inside
 	InternalRay.Direction = RefractedDir;
 
-	// SDF 샘플링은 시뮬레이션 전체 bounds 사용
+	// SDF sampling uses full simulation bounds
 	float3 VolumeSize = VolumeBoundsMax - VolumeBoundsMin;
 	float MaxThickness = TranslucencyDepth;
 
@@ -747,7 +747,7 @@ void MainPS(
 	float Specular = BlinnPhongSpecular(ViewDir, LightDir, HitNormal, Shininess) * SpecularStrength;
 
 	// Calculate thickness for translucency (Revision 268 style - simple approximation)
-	// 이전 방식: SDF 값 기반 간단한 근사, 최소값 ParticleRadius 보장
+	// Previous method: Simple SDF-based approximation, guaranteed minimum of ParticleRadius
 	float EstimatedThickness = ParticleRadius * 4.0f * (1.0f - saturate(abs(HitSDF) / ParticleRadius));
 	float Thickness = max(EstimatedThickness, ParticleRadius);
 
@@ -788,17 +788,17 @@ void MainPS(
 	// OutColor = float4(ParticleRadius / 10.0f, 0, 0, 1); return;  // Red = ParticleRadius (expected ~0.5 for 5cm)
 
 	// Alpha calculation
-	// 문제: Thickness가 작으면 Alpha가 너무 낮아짐
-	// 해결: 기본 Alpha를 높이고, Thickness 영향을 줄임
+	// Problem: When Thickness is small, Alpha becomes too low
+	// Solution: Increase base Alpha and reduce Thickness influence
 	float ThicknessAlpha = saturate(Thickness / TranslucencyDepth);
 
-	// 기존: lerp(0.7, 0.95, ThicknessAlpha) - Thickness=0이면 Alpha=0.7
-	// 수정: 기본 0.85, Thickness가 크면 0.98까지
+	// Previous: lerp(0.7, 0.95, ThicknessAlpha) - When Thickness=0, Alpha=0.7
+	// Modified: Base 0.85, up to 0.98 when Thickness is large
 	float BaseAlpha = 0.85f;
 	float MaxAlpha = 0.98f;
 	float Alpha = lerp(BaseAlpha, MaxAlpha, ThicknessAlpha);
 
-	// Fresnel로 가장자리만 살짝 투명하게 (기존 0.3 -> 0.15로 줄임)
+	// Make edges slightly transparent with Fresnel (reduced from 0.3 to 0.15)
 	Alpha *= (1.0f - Fresnel * 0.15f);
 
 	// DEBUG: Force full opacity to test if transparency is the issue

@@ -20,7 +20,7 @@ Texture2D<float> FullResTexture;
 float2 FullResTextureSize;
 float2 HalfResTextureSize;
 
-// Narrow-Range Filter 파라미터 (에디터에서 설정)
+// Narrow-Range Filter parameters (set in editor)
 float NarrowRangeThresholdRatio;  // threshold = ParticleRadius * ThresholdRatio
 float NarrowRangeClampRatio;      // clamp = ParticleRadius * ClampRatio
 float NarrowRangeGrazingBoost;    // Grazing angle boost (0 = none, 1 = 2x at grazing)

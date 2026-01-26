@@ -384,17 +384,17 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// 0 = normal detach behavior
 	// 1 = never detach
 	// Formula: EffectiveThreshold = BaseThreshold / (1.0 - AdhesionStrength)
-	const float ClampedStrength = saturate(attachment.AdhesionStrength);  // 0~1로 clamp
+	const float ClampedStrength = saturate(attachment.AdhesionStrength);  // Clamp to 0~1
 	bool bShouldDetach = false;
 
 	if (ClampedStrength >= 0.999f)
 	{
-		// AdhesionStrength = 1 → 절대 안 떨어짐
+		// AdhesionStrength = 1 → never detach
 		bShouldDetach = false;
 	}
 	else
 	{
-		// 0~0.999: 점진적으로 떨어지기 어려워짐
+		// 0~0.999: progressively harder to detach
 		const float StrengthMultiplier = 1.0f / (1.0f - ClampedStrength);
 		const float EffectiveAccelThreshold = DetachAccelThreshold * StrengthMultiplier;
 		const float EffectiveDistThreshold = EffectiveDetachThreshold * StrengthMultiplier;

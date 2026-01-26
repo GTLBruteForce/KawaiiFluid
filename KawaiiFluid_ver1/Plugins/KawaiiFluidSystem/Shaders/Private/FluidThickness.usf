@@ -5,30 +5,30 @@
 #include "FluidCommon.ush"
 
 //-----------------------------------------------------------------------------
-// 파라미터
+// Parameters
 //-----------------------------------------------------------------------------
 
-// 파티클 데이터 버퍼
+// Particle data buffer
 StructuredBuffer<float3> ParticlePositions;
 
-// 렌더링 파라미터
+// Rendering parameters
 float ParticleRadius;
 float4x4 ViewMatrix;
 float4x4 ProjectionMatrix;
 
-// 두께 스케일
+// Thickness scale
 float ThicknessScale;
 
-// Occlusion test용 Scene Depth
+// Scene Depth for occlusion test
 Texture2D SceneDepthTexture;
 SamplerState SceneDepthSampler;
 
-// SceneDepth UV 변환용 파라미터
-float2 SceneViewRect;    // SceneDepth 유효 영역 크기 (Screen Percentage 적용됨)
-float2 SceneTextureSize; // SceneDepth 텍스처 전체 크기
+// Parameters for SceneDepth UV transformation
+float2 SceneViewRect;    // SceneDepth valid area size (Screen Percentage applied)
+float2 SceneTextureSize; // SceneDepth texture total size
 
 //-----------------------------------------------------------------------------
-// 버텍스 셰이더 (Vertex Shader)
+// Vertex Shader
 //-----------------------------------------------------------------------------
 
 struct FVertexInput
@@ -44,10 +44,10 @@ struct FVertexOutput
 	float3 ViewSpacePosition : TEXCOORD1;
 	float3 ParticleViewCenter : TEXCOORD2;
 	float ParticleRadius : TEXCOORD3;
-	float4 ScreenPosition : TEXCOORD4; // Occlusion test를 위한 Screen space position
+	float4 ScreenPosition : TEXCOORD4; // Screen space position for occlusion test
 };
 
-// 빌보드 쿼드 정점
+// Billboard quad vertices
 static const float2 QuadVertices[4] =
 {
 	float2(-1.0, -1.0),
@@ -56,7 +56,7 @@ static const float2 QuadVertices[4] =
 	float2( 1.0,  1.0)
 };
 
-// 빌보드 UV
+// Billboard UV
 static const float2 QuadUVs[4] =
 {
 	float2(0.0, 1.0),
@@ -69,77 +69,77 @@ FVertexOutput MainVS(FVertexInput Input)
 {
 	FVertexOutput Output;
 
-	// 파티클 월드 위치 가져오기
+	// Get particle world position
 	float3 ParticleWorldPosition = ParticlePositions[Input.InstanceId];
 
-	// 뷰 공간(View space)으로 변환
+	// Transform to view space
 	float4 ParticleViewPosition = mul(float4(ParticleWorldPosition, 1.0), ViewMatrix);
 
-	// 빌보드 쿼드 오프셋 생성
+	// Generate billboard quad offset
 	float2 QuadOffset = QuadVertices[Input.VertexId] * ParticleRadius;
 
-	// 뷰 공간에서 쿼드 오프셋 적용
+	// Apply quad offset in view space
 	float3 ViewSpacePosition = ParticleViewPosition.xyz;
 	ViewSpacePosition.xy += QuadOffset;
 
-	// 투영 (Projection)
+	// Projection
 	Output.Position = mul(float4(ViewSpacePosition, 1.0), ProjectionMatrix);
 	Output.UV = QuadUVs[Input.VertexId];
 	Output.ViewSpacePosition = ViewSpacePosition;
 	Output.ParticleViewCenter = ParticleViewPosition.xyz;
 	Output.ParticleRadius = ParticleRadius;
-	Output.ScreenPosition = Output.Position; // Occlusion test를 위한 Screen position
+	Output.ScreenPosition = Output.Position; // Screen position for occlusion test
 
 	return Output;
 }
 
 //-----------------------------------------------------------------------------
-// 픽셀 셰이더 (Pixel Shader)
+// Pixel Shader
 //-----------------------------------------------------------------------------
 
 float MainPS(FVertexOutput Input) : SV_Target0
 {
 	// =========================================================================
-	// Occlusion Test: 씬 지오메트리에 가려진 파티클 제거
+	// Occlusion Test: Remove particles occluded by scene geometry
 	// =========================================================================
 
-	// Screen UV 계산
+	// Calculate Screen UV
 	float2 ScreenUV = Input.ScreenPosition.xy / Input.ScreenPosition.w;
 	ScreenUV = ScreenUV * 0.5 + 0.5;
 	ScreenUV.y = 1.0 - ScreenUV.y;
 
-	// SceneDepth UV 변환: ScreenUV를 SceneDepth의 유효 영역에 매핑
+	// SceneDepth UV transformation: Map ScreenUV to SceneDepth valid area
 	float2 SceneUV = ScreenUV * (SceneViewRect / SceneTextureSize);
 
-	// Scene Depth 샘플링 및 Occlusion test
+	// Sample Scene Depth and perform occlusion test
 	float SceneDeviceDepth = SceneDepthTexture.Sample(SceneDepthSampler, SceneUV).r;
 
 	// Reversed-Z: 0.0 = far, 1.0 = near
-	// 빌보드 쿼드가 씬 지오메트리 뒤에 있으면 제거
+	// Discard if billboard quad is behind scene geometry
 	if (Input.Position.z < SceneDeviceDepth)
 	{
 		discard;
 	}
 
 	// =========================================================================
-	// Thickness 계산
+	// Thickness Calculation
 	// =========================================================================
 
-	// 빌보드 내의 단위 위치 (UV에서 -1 ~ 1 범위로 변환)
+	// Unit position within billboard (transform UV to -1~1 range)
 	float2 UnitPosition = Input.UV * 2.0 - 1.0;
 	float DistanceSquared = dot(UnitPosition, UnitPosition);
 
-	// 구 형태를 벗어나면 제거
+	// Discard if outside sphere shape
 	if (DistanceSquared > 1.0)
 	{
 		discard;
 	}
 
-	// 구의 두께 계산 (2 * sqrt(r^2 - dist^2))
-	// 정규화 계산한 뒤 반경 연산 처리
+	// Calculate sphere thickness (2 * sqrt(r^2 - dist^2))
+	// Perform normalized calculation then apply radius
 	float NormalizedThickness = 2.0 * sqrt(1.0 - DistanceSquared);
 
-	// 실제 월드 단위 두께 = 정규화 두께 * 파티클 반지름 * 스케일
+	// Actual world-space thickness = normalized thickness * particle radius * scale
 	float Thickness = NormalizedThickness * Input.ParticleRadius * ThicknessScale;
 
     return Thickness;

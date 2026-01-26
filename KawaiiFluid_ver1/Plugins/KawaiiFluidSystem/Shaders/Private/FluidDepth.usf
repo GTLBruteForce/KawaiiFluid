@@ -5,26 +5,26 @@
 #include "FluidCommon.ush"
 
 //-----------------------------------------------------------------------------
-// 파라미터
+// Parameters
 //-----------------------------------------------------------------------------
 
-// 파티클 데이터 버퍼
+// Particle data buffer
 StructuredBuffer<float3> ParticlePositions;
 StructuredBuffer<float3> ParticleVelocities;
 
-// 렌더링 파라미터
+// Rendering parameters
 float ParticleRadius;
 float4x4 ViewMatrix;
 float4x4 ProjectionMatrix;
 float4x4 ViewProjectionMatrix;
 
-// Occlusion test용 Scene Depth
+// Scene Depth for occlusion test
 Texture2D SceneDepthTexture;
 SamplerState SceneDepthSampler;
 
-// SceneDepth UV 변환용 파라미터
-float2 SceneViewRect;    // SceneDepth 유효 영역 크기 (Screen Percentage 적용됨)
-float2 SceneTextureSize; // SceneDepth 텍스처 전체 크기
+// Parameters for SceneDepth UV transformation
+float2 SceneViewRect;    // SceneDepth valid area size (Screen Percentage applied)
+float2 SceneTextureSize; // SceneDepth texture total size
 
 #if USE_ANISOTROPY
 // Anisotropy axes (float4 = direction.xyz + scale.w)
@@ -34,7 +34,7 @@ StructuredBuffer<float4> AnisotropyAxis3;
 #endif
 
 //-----------------------------------------------------------------------------
-// 버텍스 셰이더 (Vertex Shader)
+// Vertex Shader
 //-----------------------------------------------------------------------------
 
 struct FVertexInput
@@ -46,7 +46,7 @@ struct FVertexInput
 struct FVertexOutput
 {
 	float4 Position : SV_POSITION;
-	float2 UV : TEXCOORD0; // UV 좌표 추가
+	float2 UV : TEXCOORD0; // UV coordinates
 	float3 ViewSpacePosition : TEXCOORD1;
 	float3 ParticleCenter : TEXCOORD2;
 	float ParticleRadius : TEXCOORD3;
@@ -61,7 +61,7 @@ struct FVertexOutput
 #endif
 };
 
-// 빌보드 쿼드 정점
+// Billboard quad vertices
 static const float2 QuadVertices[4] =
 {
 	float2(-1.0, -1.0),
@@ -70,7 +70,7 @@ static const float2 QuadVertices[4] =
 	float2( 1.0,  1.0)
 };
 
-// 빌보드 UV
+// Billboard UV
 static const float2 QuadUVs[4] =
 {
 	float2(0.0, 1.0),
@@ -83,10 +83,10 @@ FVertexOutput MainVS(FVertexInput Input)
 {
 	FVertexOutput Output;
 
-	// 파티클 월드 위치 가져오기
+	// Get particle world position
 	float3 ParticleWorldPosition = ParticlePositions[Input.InstanceId];
 
-	// 뷰 공간(View space)으로 변환
+	// Transform to view space
 	float4 ParticleViewPosition = mul(float4(ParticleWorldPosition, 1.0), ViewMatrix);
 
 #if USE_ANISOTROPY
@@ -122,14 +122,14 @@ FVertexOutput MainVS(FVertexInput Input)
 	float BillboardRadius = ParticleRadius;
 #endif
 
-	// 빌보드 쿼드 오프셋 생성
+	// Generate billboard quad offset
 	float2 QuadOffset = QuadVertices[Input.VertexId] * BillboardRadius;
 
-	// 뷰 공간에서 쿼드 오프셋 적용 (카메라를 향하도록)
+	// Apply quad offset in view space (facing camera)
 	float3 ViewSpacePosition = ParticleViewPosition.xyz;
 	ViewSpacePosition.xy += QuadOffset;
 
-	// 투영 (Projection)
+	// Projection
 	Output.Position = mul(float4(ViewSpacePosition, 1.0), ProjectionMatrix);
 	Output.UV = QuadUVs[Input.VertexId];
 	Output.ViewSpacePosition = ViewSpacePosition;
@@ -148,7 +148,7 @@ FVertexOutput MainVS(FVertexInput Input)
 }
 
 //-----------------------------------------------------------------------------
-// 픽셀 셰이더 (Pixel Shader)
+// Pixel Shader
 //-----------------------------------------------------------------------------
 
 struct FPixelOutput
@@ -257,8 +257,8 @@ FPixelOutput MainPS(FVertexOutput Input)
 	ScreenUV = ScreenUV * 0.5 + 0.5;
 	ScreenUV.y = 1.0 - ScreenUV.y;
 
-	// SceneDepth UV 변환: ScreenUV를 SceneDepth의 유효 영역에 매핑
-	// SceneViewRect = SceneDepth 유효 영역, SceneTextureSize = SceneDepth 텍스처 전체 크기
+	// SceneDepth UV transformation: Map ScreenUV to SceneDepth valid area
+	// SceneViewRect = SceneDepth valid area, SceneTextureSize = SceneDepth total texture size
 	float2 SceneUV = ScreenUV * (SceneViewRect / SceneTextureSize);
 
 	// Sample scene depth for occlusion mask calculation (no early discard)
@@ -295,41 +295,41 @@ FPixelOutput MainPS(FVertexOutput Input)
 	float3 IntersectionPoint = Input.ParticleCenter + HitPoint;
 
 #else
-	// Billboard-Sphere 방식: UV를 사용해 원형 렌더링
-	// UV를 (-1, 1) 범위로 변환
+	// Billboard-Sphere method: Render circular shape using UV
+	// Transform UV to (-1, 1) range
 	float2 UV = Input.UV * 2.0 - 1.0;
 
-	// UV 거리 계산 (구의 반지름 = 1.0)
+	// Calculate UV distance (sphere radius = 1.0)
 	float r2 = dot(UV, UV);
 
-	// 원 밖의 픽셀은 버림 (사각형 → 원형)
+	// Discard pixels outside circle (square to circle)
 	if (r2 > 1.0)
 	{
 		discard;
 	}
 
-	// 구 표면의 Z 오프셋 계산
+	// Calculate Z offset on sphere surface
 	float z = sqrt(1.0 - r2);
 
-	// 실제 구 표면 위치 계산 (View Space)
+	// Calculate actual sphere surface position (View Space)
 	float3 IntersectionPoint = Input.ParticleCenter + float3(UV * Input.ParticleRadius, -z * Input.ParticleRadius);
 #endif
 
-	// Linear Depth 계산 (뷰 공간 Z를 양수 거리로 변환)
-	// View Space는 -Z가 전방이므로, 음수를 양수로 변환하여 저장
+	// Calculate Linear Depth (convert view space Z to positive distance)
+	// View Space uses -Z for forward direction, so convert negative to positive
 	Output.LinearDepth = -IntersectionPoint.z;
 
 	// World XY velocity (passed from vertex shader, same for entire particle)
 	Output.WorldXYVelocity = Input.WorldXYVelocity;
 
-	// Device Depth 계산 (클립 공간)
+	// Calculate Device Depth (clip space)
 	float4 ClipPosition = mul(float4(IntersectionPoint, 1.0), ProjectionMatrix);
 	Output.DeviceDepth = ClipPosition.z / ClipPosition.w;
 
-	// OcclusionMask 계산: 실제 intersection point의 device depth와 SceneDepth 비교
-	// Reversed-Z: 큰 값 = 더 가까움
-	// 유체가 씬 지오메트리보다 앞에 있으면 (DeviceDepth >= SceneDeviceDepth) 보임 (1.0)
-	// 유체가 씬 지오메트리보다 뒤에 있으면 (DeviceDepth < SceneDeviceDepth) 가려짐 (0.0)
+	// Calculate OcclusionMask: Compare actual intersection point's device depth with SceneDepth
+	// Reversed-Z: Larger value = closer
+	// Fluid in front of scene geometry (DeviceDepth >= SceneDeviceDepth) is visible (1.0)
+	// Fluid behind scene geometry (DeviceDepth < SceneDeviceDepth) is occluded (0.0)
 	Output.OcclusionMask = (Output.DeviceDepth >= SceneDeviceDepth) ? 1.0 : 0.0;
 
 	return Output;

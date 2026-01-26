@@ -54,13 +54,13 @@ int MaxCollisionFeedback;
 int bEnableCollisionFeedback;
 
 //=============================================================================
-// Collider Contact Count Buffer (간단한 충돌 카운트용)
+// Collider Contact Count Buffer (for simple collision count)
 //=============================================================================
 
-// 콜라이더별 충돌 입자 수 (atomic increment)
+// Number of colliding particles per collider (atomic increment)
 RWStructuredBuffer<uint> ColliderContactCounts;
 
-// 최대 콜라이더 수
+// Maximum collider count
 int MaxColliderCount;
 
 //=============================================================================
@@ -87,15 +87,15 @@ void RecordCollisionFeedback(int particleIdx, int colliderIdx, int colliderType,
                              float density, float3 normal, float penetration, float3 velocity,
                              int colliderOwnerID, int particleSourceID,  int boneIndex, float3 impactWorld)
 {
-	// 콜라이더별 충돌 카운트 증가 (항상 실행)
+	// Increment collision count per collider (always executed)
 	if (colliderIdx >= 0 && colliderIdx < MaxColliderCount)
 	{
 		uint dummy;
 		InterlockedAdd(ColliderContactCounts[colliderIdx], 1, dummy);
 	}
 
-	// 상세 피드백 기록 (본이 있는 콜라이더만 - Per-Bone Force용)
-	// BoneIndex < 0 이면 본이 없는 콜라이더 (StaticMeshActor 등)
+	// Record detailed feedback (only for colliders with bones - for Per-Bone Force)
+	// BoneIndex < 0 means collider without bone (StaticMeshActor, etc.)
 	if (bEnableCollisionFeedback == 0 || boneIndex < 0)
 	{
 		return;

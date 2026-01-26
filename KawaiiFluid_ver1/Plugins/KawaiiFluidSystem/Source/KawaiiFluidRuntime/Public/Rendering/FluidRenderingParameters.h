@@ -106,11 +106,11 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	EMetaballPipelineType PipelineType = EMetaballPipelineType::ScreenSpace;
 
 	//========================================
-	// Appearance (Basic)
+	// Color & Opacity
 	//========================================
 
 	/** Fluid color */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Color",
 		meta = (HideAlphaChannel))
 	FLinearColor FluidColor = FLinearColor(0.2f, 0.5f, 0.8f, 1.0f);
 
@@ -118,138 +118,129 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	 * Fluid opacity (0 = fully transparent, 1 = fully opaque).
 	 * Controls overall light absorption strength through the fluid.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Color",
 		meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float Opacity = 0.5f;
 
-	/** Index of Refraction (IOR). Water=1.33, Glass=1.5 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
-		meta = (ClampMin = "1.0", ClampMax = "2.0"))
-	float RefractiveIndex = 1.33f;
-
-	/** Specular strength */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
-		meta = (ClampMin = "0.0", ClampMax = "2.0"))
-	float SpecularStrength = 1.0f;
-
-	/** Specular roughness */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
-		meta = (ClampMin = "0.01", ClampMax = "1.0"))
-	float SpecularRoughness = 0.2f;
+	/** Thickness rendering scale */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Color",
+		meta = (ClampMin = "0.1", ClampMax = "10.0"))
+	float ThicknessScale = 1.0f;
 
 	/**
-	 * Ambient light intensity from SkyLight.
-	 * Scales the SkyLightColor contribution to prevent over-brightness.
-	 * Default 0.15 is tuned for UE5's default SkyLight intensity.
+	 * Thickness sensitivity (0 = uniform opacity, 1 = thickness-dependent).
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Color",
 		meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AmbientIntensity = 0.15f;
+	float ThicknessSensitivity = 0.5f;
+
+	//========================================
+	// Material
+	//========================================
+
+	/** Index of Refraction (IOR). Water=1.33, Glass=1.5 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Material",
+		meta = (ClampMin = "1.0", ClampMax = "2.0"))
+	float RefractiveIndex = 1.33f;
 
 	/**
 	 * Fresnel strength multiplier.
 	 * Scales the F0 value calculated from IOR: F0 = ((1-n)/(1+n))^2 * FresnelStrength
 	 * Water (IOR=1.33): base F0 ~ 0.02
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Material",
 		meta = (ClampMin = "0.0", ClampMax = "5.0"))
 	float FresnelStrength = 1.0f;
+
+	/** Specular strength */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Material",
+		meta = (ClampMin = "0.0", ClampMax = "2.0"))
+	float SpecularStrength = 1.0f;
+
+	/** Specular roughness */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Material",
+		meta = (ClampMin = "0.01", ClampMax = "1.0"))
+	float SpecularRoughness = 0.2f;
+
+	//========================================
+	// Lighting
+	//========================================
+
+	/**
+	 * Ambient light intensity from SkyLight.
+	 * Scales the SkyLightColor contribution to prevent over-brightness.
+	 * Default 0.15 is tuned for UE5's default SkyLight intensity.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Lighting",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AmbientIntensity = 0.15f;
+
+	//========================================
+	// Absorption (Beer's Law)
+	//========================================
 
 	/**
 	 * Per-channel absorption coefficients (Beer's Law).
 	 * Water: R=0.4, G=0.1, B=0.05 (absorbs red, appears blue).
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Absorption",
 		meta = (HideAlphaChannel))
 	FLinearColor AbsorptionColorCoefficients = FLinearColor(0.4f, 0.1f, 0.05f, 1.0f);
 
 	/**
-	 * Thickness sensitivity (0 = uniform opacity, 1 = thickness-dependent).
+	 * Absorption bias (Ray Marching only). Higher = FluidColor appears stronger.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
-		meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float ThicknessSensitivity = 0.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Absorption",
+		meta = (EditCondition = "PipelineType == EMetaballPipelineType::RayMarching",
+			ClampMin = "0.0", ClampMax = "1.0"))
+	float AbsorptionBias = 0.7f;
+
+	//========================================
+	// Refraction
+	//========================================
 
 	/**
 	 * Refraction offset scale. 0 = no refraction, higher = stronger distortion.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Refraction",
 		meta = (ClampMin = "0.0", ClampMax = "0.2"))
 	float RefractionScale = 0.05f;
 
-	/**
-	 * Fresnel reflection blend ratio. Controls how much reflection is mixed into the final color.
-	 * This parameter multiplies the physical Fresnel term to determine the blend factor.
-	 *
-	 * At grazing angles (edge of fluid), Fresnel approaches 1.0, so:
-	 * - FresnelReflectionBlend = 0.5 means 50% reflection at edges
-	 * - FresnelReflectionBlend = 1.0 means 100% reflection at edges (physically correct but often too intense)
-	 *
-	 * Relationship with other parameters:
-	 * - ScreenSpaceReflectionIntensity: scales the SSR color brightness BEFORE blending
-	 * - FresnelReflectionBlend: controls HOW MUCH of that reflection is blended in
-	 * - Both affect final visibility: low FresnelReflectionBlend = less visible reflection regardless of SSR intensity
-	 *
-	 * Recommended values:
-	 * - 0.3~0.5: Natural water look with subtle reflections
-	 * - 0.5~0.7: More reflective surfaces
-	 * - 0.8~1.0: Mirror-like surfaces (may cause edge artifacts)
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
-		meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float FresnelReflectionBlend = 0.5f;
-
-	/**
-	 * Absorption bias (for Ray Marching). Higher = FluidColor appears stronger.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
-		meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AbsorptionBias = 0.7f;
-
-	/** Thickness rendering scale */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Appearance",
-		meta = (ClampMin = "0.1", ClampMax = "10.0"))
-	float ThicknessScale = 1.0f;
-
 	//========================================
-	// Depth
+	// Depth & Smoothing
 	//========================================
 
 	/** Particle render radius (screen space, cm) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Depth",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Depth & Smoothing",
 		meta = (ClampMin = "0.5", ClampMax = "100.0"))
 	float ParticleRenderRadius = 15.0f;
-
-	//========================================
-	// Smoothing
-	//========================================
 
 	/**
 	 * Depth smoothing filter radius in pixels.
 	 * Larger values produce smoother surfaces but may blur fine details.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Depth & Smoothing",
 		meta = (ClampMin = "1", ClampMax = "50"))
 	int32 SmoothingRadius = 20;
 
 	/**
 	 * Depth difference threshold ratio. Lower = sharper edges, higher = smoother.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Depth & Smoothing",
 		meta = (ClampMin = "0.5", ClampMax = "20.0", DisplayName = "Threshold Ratio"))
 	float NarrowRangeThresholdRatio = 3.0f;
 
 	/**
 	 * Clamp ratio for front-facing depth samples. Prevents holes.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Depth & Smoothing",
 		meta = (ClampMin = "0.1", ClampMax = "5.0", DisplayName = "Clamp Ratio"))
 	float NarrowRangeClampRatio = 1.0f;
 
 	/**
 	 * Boost smoothing at shallow viewing angles (grazing angles).
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Smoothing",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Depth & Smoothing",
 		meta = (ClampMin = "0.0", ClampMax = "2.0", DisplayName = "Grazing Angle Boost"))
 	float NarrowRangeGrazingBoost = 1.0f;
 
@@ -264,6 +255,27 @@ struct KAWAIIFLUIDRUNTIME_API FFluidRenderingParameters
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Reflection")
 	EFluidReflectionMode ReflectionMode = EFluidReflectionMode::Cubemap;
+
+	/**
+	 * Fresnel reflection blend ratio for Cubemap reflection.
+	 * Controls how much Cubemap reflection is mixed into the final color.
+	 * This parameter multiplies the physical Fresnel term to determine the blend factor.
+	 *
+	 * At grazing angles (edge of fluid), Fresnel approaches 1.0, so:
+	 * - FresnelReflectionBlend = 0.5 means 50% reflection at edges
+	 * - FresnelReflectionBlend = 1.0 means 100% reflection at edges
+	 *
+	 * Note: SSR uses ScreenSpaceReflectionIntensity instead of this parameter.
+	 *
+	 * Recommended values:
+	 * - 0.3~0.5: Natural water look with subtle reflections
+	 * - 0.5~0.7: More reflective surfaces
+	 * - 0.8~1.0: Mirror-like surfaces (may cause edge artifacts)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Reflection",
+		meta = (EditCondition = "ReflectionMode != EFluidReflectionMode::None",
+			ClampMin = "0.0", ClampMax = "1.0"))
+	float FresnelReflectionBlend = 0.5f;
 
 	/**
 	 * Reflection Cubemap (environment map).

@@ -36,17 +36,17 @@ float2 ViewportSize;
 float2 InverseViewportSize;
 
 // UV mapping - Output coordinates (PostProcessing output resolution)
-float2 OutputViewRect;      // Output 렌더링 영역 크기
-float2 OutputViewRectMin;   // Output ViewRect 시작점
-float2 OutputTextureSize;   // Output 텍스처 크기
+float2 OutputViewRect;      // Output rendering area size
+float2 OutputViewRectMin;   // Output ViewRect start point
+float2 OutputTextureSize;   // Output texture size
 
 // UV mapping - GBuffer coordinates (may be different resolution due to Screen Percentage)
-float2 GBufferViewRect;     // GBuffer 렌더링 영역 크기
-float2 GBufferViewRectMin;  // GBuffer ViewRect 시작점
-float2 GBufferTextureSize;  // GBuffer 텍스처 크기
+float2 GBufferViewRect;     // GBuffer rendering area size
+float2 GBufferViewRectMin;  // GBuffer ViewRect start point
+float2 GBufferTextureSize;  // GBuffer texture size
 
 // UV mapping - SceneColor (same as Output in most cases)
-float2 SceneViewRect;       // SceneColor 렌더링 영역 크기
+float2 SceneViewRect;       // SceneColor rendering area size
 float2 SceneTextureSize;
 
 //-----------------------------------------------------------------------------
