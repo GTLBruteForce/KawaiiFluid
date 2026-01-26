@@ -476,7 +476,7 @@ float UKawaiiFluidVolumeComponent::GetWallBounce() const
 {
 	if (Preset)
 	{
-		return Preset->Restitution;
+		return Preset->Bounciness;
 	}
 	return 0.0f;  // Default fallback
 }

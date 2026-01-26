@@ -300,9 +300,9 @@ void UKawaiiFluidSimulationContext::InitializeSolvers(const UKawaiiFluidPresetDa
 	}
 
 	DensityConstraint = MakeShared<FDensityConstraint>(
-		Preset->RestDensity,
+		Preset->Density,
 		Preset->SmoothingRadius,
-		SPHScaling::GetScaledCompliance(Preset->Compliance, Preset->SmoothingRadius, Preset->ComplianceScalingExponent)
+		SPHScaling::GetScaledCompliance(Preset->Compressibility, Preset->SmoothingRadius, Preset->ComplianceExponent)
 	);
 	ViscositySolver = MakeShared<FViscositySolver>();
 	AdhesionSolver = MakeShared<FAdhesionSolver>();
@@ -405,15 +405,15 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	FGPUFluidSimulationParams GPUParams;
 
 	// Physics parameters from preset
-	GPUParams.RestDensity = Preset->RestDensity;
+	GPUParams.RestDensity = Preset->Density;
 	GPUParams.SmoothingRadius = Preset->SmoothingRadius;
 	// Scale Compliance for SmoothingRadius-independent stability
 	GPUParams.Compliance = SPHScaling::GetScaledCompliance(
-		Preset->Compliance, Preset->SmoothingRadius, Preset->ComplianceScalingExponent);
+		Preset->Compressibility, Preset->SmoothingRadius, Preset->ComplianceExponent);
 	GPUParams.ParticleRadius = Preset->ParticleRadius;
-	GPUParams.ViscosityCoefficient = Preset->ViscosityCoefficient;
-	GPUParams.CohesionStrength = Preset->CohesionStrength;
-	GPUParams.GlobalDamping = Preset->GlobalDamping;
+	GPUParams.ViscosityCoefficient = Preset->Viscosity;
+	GPUParams.CohesionStrength = Preset->SurfaceTension;
+	GPUParams.GlobalDamping = Preset->GetDamping();
 
 	// Stack Pressure (weight transfer from stacked attached particles)
 	GPUParams.StackPressureScale = Preset->bEnableStackPressure ? Preset->StackPressureScale : 0.0f;
@@ -503,7 +503,7 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 		GPUParams.BoundsCenter = FVector3f::ZeroVector;
 		GPUParams.BoundsExtent = FVector3f(1000000.0f);
 		GPUParams.BoundsRotation = FVector4f(0.0f, 0.0f, 0.0f, 1.0f);  // Identity
-		GPUParams.BoundsRestitution = Preset->Restitution;
+		GPUParams.BoundsRestitution = Preset->Bounciness;
 		GPUParams.BoundsFriction = Preset->Friction;
 	}
 
@@ -512,7 +512,7 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 
 	// Tensile Instability Correction (PBF Eq.13-14)
 	// Must be set before PrecomputeKernelCoefficients() to compute InvW_DeltaQ
-	GPUParams.bEnableTensileInstability = Preset->bEnableTensileInstabilityCorrection ? 1 : 0;
+	GPUParams.bEnableTensileInstability = Preset->bEnableTensileCorrection ? 1 : 0;
 	GPUParams.TensileK = Preset->TensileInstabilityK;
 	GPUParams.TensileN = Preset->TensileInstabilityN;
 	GPUParams.TensileDeltaQ = Preset->TensileInstabilityDeltaQ;
@@ -521,14 +521,14 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	GPUParams.PrecomputeKernelCoefficients();
 
 	// Configure Distance Field collision on GPU simulator (if enabled)
-	if (GPUSimulator.IsValid() && Preset->bUseDistanceFieldCollision)
+	if (GPUSimulator.IsValid() && Preset->bUseDistanceField)
 	{
 		FGPUDistanceFieldCollisionParams DFParams;
 		DFParams.bEnabled = 1;
 		DFParams.ParticleRadius = Preset->ParticleRadius;
-		DFParams.Restitution = Preset->DFCollisionRestitution;
-		DFParams.Friction = Preset->DFCollisionFriction;
-		DFParams.CollisionThreshold = Preset->DFCollisionThreshold;
+DFParams.Restitution = Preset->DFRestitution;
+		DFParams.Friction = Preset->DFFriction;
+		DFParams.CollisionThreshold = Preset->DFThreshold;
 
 		// Volume parameters will be set by scene renderer
 		// when Global Distance Field is available
@@ -579,7 +579,7 @@ void UKawaiiFluidSimulationContext::HandleAttachedParticlesCPU(
 	// This is already done in the main Simulate loop before substeps
 
 	// Apply adhesion for attached particles
-	if (AdhesionSolver.IsValid() && Preset->AdhesionForceStrength > 0.0f)
+	if (AdhesionSolver.IsValid() && Preset->Adhesion > 0.0f)
 	{
 		// Only apply to attached particles
 		for (int32 Idx : AttachedIndices)
@@ -624,7 +624,8 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 	// Ensure GPU simulator is ready
 	if (!IsGPUSimulatorReady())
 	{
-		InitializeGPUSimulator(Preset->MaxParticles);
+		const int32 MaxParticles = TargetVolumeComponent.IsValid() ? TargetVolumeComponent->MaxParticleCount : 200000;
+		InitializeGPUSimulator(MaxParticles);
 		if (!IsGPUSimulatorReady())
 		{
 			UE_LOG(LogTemp, Warning, TEXT("GPU Simulator not ready"));
@@ -640,7 +641,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 	GPUSimulator->SetExternalForce(FVector3f(Params.ExternalForce));
 
 	// Set primitive collision threshold from Preset
-	GPUSimulator->SetPrimitiveCollisionThreshold(Preset->PrimitiveCollisionThreshold);
+	GPUSimulator->SetPrimitiveCollisionThreshold(Preset->CollisionThreshold);
 
 	// Set simulation bounds for Z-Order sorting (Morton code)
 	// Priority: TargetVolumeComponent bounds > Preset bounds + SimulationOrigin
@@ -729,10 +730,10 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 		// Use persistent bone data for velocity calculation across frames
 		CollisionPrimitives.BoneTransforms = MoveTemp(PersistentBoneTransforms);
 		const float DefaultFriction = Preset->Friction;
-		const float DefaultRestitution = Preset->Restitution;
+		const float DefaultRestitution = Preset->Bounciness;
 
 		// Check if adhesion is enabled (use bone-aware export path)
-		const bool bUseGPUAdhesion = (Preset->AdhesionForceStrength > 0.0f || Preset->AdhesionVelocityStrength > 0.0f);
+		const bool bUseGPUAdhesion = (Preset->Adhesion > 0.0f || Preset->AdhesionVelocityStrength > 0.0f);
 
 		for (UFluidCollider* Collider : Params.Colliders)
 		{
@@ -825,7 +826,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 					{
 						// Set particle spacing before generation
 						GPUSimulator->SetStaticBoundaryParticleSpacing(Params.StaticBoundaryParticleSpacing);
-						GPUSimulator->GenerateStaticBoundaryParticles(Preset->SmoothingRadius, Preset->RestDensity);
+						GPUSimulator->GenerateStaticBoundaryParticles(Preset->SmoothingRadius, Preset->Density);
 						bStaticBoundaryParticlesDirty = false;
 					}
 				}
@@ -849,7 +850,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 				{
 					FGPUAdhesionParams AdhesionParams;
 					AdhesionParams.bEnableAdhesion = 0;
-					AdhesionParams.AdhesionStrength = Preset->AdhesionForceStrength;
+					AdhesionParams.AdhesionStrength = Preset->Adhesion;
 					AdhesionParams.AdhesionRadius = Preset->AdhesionRadius;
 					AdhesionParams.ColliderContactOffset = Preset->AdhesionContactOffset;
 					AdhesionParams.BoneVelocityScale = Preset->AdhesionBoneVelocityScale;
@@ -900,7 +901,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 					// For surface sampling: EffectiveVolume = Spacing² × (Spacing/2)
 					// Convert cm to m for proper unit consistency
 					const float Spacing_m = Interaction->BoundaryParticleSpacing * 0.01f;  // cm → m
-					const float RestDensity = Preset->RestDensity;  // kg/m³
+					const float RestDensity = Preset->Density;  // kg/m³
 					const float ParticleRadius_m = Spacing_m * 0.5f;
 					const float SurfaceArea_m = Spacing_m * Spacing_m;
 					const float EffectiveVolume_m = SurfaceArea_m * ParticleRadius_m;
@@ -958,10 +959,10 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 		{
 			FGPUBoundaryAdhesionParams BoundaryAdhesionParams;
 			BoundaryAdhesionParams.bEnabled = 1;
-			BoundaryAdhesionParams.AdhesionForceStrength = Preset->AdhesionForceStrength;
+			BoundaryAdhesionParams.AdhesionForceStrength = Preset->Adhesion;
 			BoundaryAdhesionParams.AdhesionVelocityStrength = Preset->AdhesionVelocityStrength;
 			BoundaryAdhesionParams.AdhesionRadius = Preset->AdhesionRadius;
-			BoundaryAdhesionParams.CohesionStrength = Preset->CohesionStrength;
+			BoundaryAdhesionParams.CohesionStrength = Preset->SurfaceTension;
 			BoundaryAdhesionParams.SmoothingRadius = Preset->SmoothingRadius;
 			BoundaryAdhesionParams.BoundaryParticleCount = TotalBoundaryParticles;
 			BoundaryAdhesionParams.FluidParticleCount = GPUSimulator->GetParticleCount();
@@ -1120,7 +1121,7 @@ void UKawaiiFluidSimulationContext::SimulateSubstep(
 		SCOPE_CYCLE_COUNTER(STAT_ContextWorldCollision);
 		if (Params.bUseWorldCollision && Params.World)
 		{
-			HandleWorldCollision(Particles, Params, SpatialHash, Params.ParticleRadius, SubstepDT, Preset->Friction, Preset->Restitution);
+			HandleWorldCollision(Particles, Params, SpatialHash, Params.ParticleRadius, SubstepDT, Preset->Friction, Preset->Bounciness);
 		}
 	}
 
@@ -1237,11 +1238,11 @@ void UKawaiiFluidSimulationContext::SolveDensityConstraints(
 	});
 
 	// Tensile Instability 파라미터 설정 (PBF Eq.13-14)
-	const bool bUseTensileCorrection = Preset->bEnableTensileInstabilityCorrection;
+	const bool bUseTensileCorrection = Preset->bEnableTensileCorrection;
 
 	// Scale Compliance based on SmoothingRadius for stability across different particle sizes
 	const float ScaledCompliance = SPHScaling::GetScaledCompliance(
-		Preset->Compliance, Preset->SmoothingRadius, Preset->ComplianceScalingExponent);
+		Preset->Compressibility, Preset->SmoothingRadius, Preset->ComplianceExponent);
 
 	// XPBD 반복 솔버 (점성 유체: 2-3회, 물: 4-6회)
 	const int32 SolverIterations = Preset->SolverIterations;
@@ -1259,7 +1260,7 @@ void UKawaiiFluidSimulationContext::SolveDensityConstraints(
 			DensityConstraint->SolveWithTensileCorrection(
 				Particles,
 				Preset->SmoothingRadius,
-				Preset->RestDensity,
+				Preset->Density,
 				ScaledCompliance,
 				DeltaTime,
 				TensileParams
@@ -1271,7 +1272,7 @@ void UKawaiiFluidSimulationContext::SolveDensityConstraints(
 			DensityConstraint->Solve(
 				Particles,
 				Preset->SmoothingRadius,
-				Preset->RestDensity,
+				Preset->Density,
 				ScaledCompliance,
 				DeltaTime
 			);
@@ -2149,9 +2150,9 @@ void UKawaiiFluidSimulationContext::ApplyViscosity(
 	TArray<FFluidParticle>& Particles,
 	const UKawaiiFluidPresetDataAsset* Preset)
 {
-	if (ViscositySolver.IsValid() && Preset->ViscosityCoefficient > 0.0f)
+if (ViscositySolver.IsValid() && Preset->Viscosity > 0.0f)
 	{
-		ViscositySolver->ApplyXSPH(Particles, Preset->ViscosityCoefficient, Preset->SmoothingRadius);
+		ViscositySolver->ApplyXSPH(Particles, Preset->Viscosity, Preset->SmoothingRadius);
 	}
 }
 
@@ -2168,11 +2169,11 @@ void UKawaiiFluidSimulationContext::ApplyCohesion(
 	TArray<FFluidParticle>& Particles,
 	const UKawaiiFluidPresetDataAsset* Preset)
 {
-	if (AdhesionSolver.IsValid() && Preset->CohesionStrength > 0.0f)
+if (AdhesionSolver.IsValid() && Preset->SurfaceTension > 0.0f)
 	{
 		AdhesionSolver->ApplyCohesion(
 			Particles,
-			Preset->CohesionStrength,
+			Preset->SurfaceTension,
 			Preset->SmoothingRadius
 		);
 	}
@@ -2374,7 +2375,7 @@ void UKawaiiFluidSimulationContext::CollectSimulationStats(
 
 	if (Preset)
 	{
-		Stats.SetRestDensity(Preset->RestDensity);
+		Stats.SetRestDensity(Preset->Density);
 		Stats.SetSolverIterations(Preset->SolverIterations);
 	}
 
@@ -2440,7 +2441,7 @@ void UKawaiiFluidSimulationContext::CollectGPUSimulationStats(
 
 	if (Preset)
 	{
-		Stats.SetRestDensity(Preset->RestDensity);
+		Stats.SetRestDensity(Preset->Density);
 		Stats.SetSolverIterations(Preset->SolverIterations);
 
 		// Use actual substep count from simulation
@@ -2531,7 +2532,7 @@ void UKawaiiFluidSimulationContext::CollectGPUSimulationStats(
 					Velocities.GetData(),
 					Masses.GetData(),
 					TotalCount,
-					Preset->RestDensity);
+					Preset->Density);
 			}
 		}
 		else

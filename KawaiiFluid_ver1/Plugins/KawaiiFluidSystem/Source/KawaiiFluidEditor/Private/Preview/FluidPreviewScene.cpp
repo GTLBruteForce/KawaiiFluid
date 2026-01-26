@@ -1,4 +1,4 @@
-﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
+// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
 #include "Preview/FluidPreviewScene.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
@@ -171,10 +171,10 @@ void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 
 	if (CurrentPreset)
 	{
-		// Initialize GPU simulator with preset's MaxParticles
+		// Initialize GPU simulator with preview settings MaxParticleCount
 		if (SimulationContext)
 		{
-			SimulationContext->InitializeGPUSimulator(CurrentPreset->MaxParticles);
+			SimulationContext->InitializeGPUSimulator(GetPreviewSettings().MaxParticleCount);
 			SimulationContext->InitializeSolvers(CurrentPreset);
 			SimulationContext->SetCachedPreset(CurrentPreset);
 		}
@@ -214,16 +214,16 @@ void FFluidPreviewScene::RefreshFromPreset()
 		return;
 	}
 
-	// Reinitialize GPU simulator if MaxParticles changed
+	// Reinitialize GPU simulator if MaxParticleCount changed
 	if (SimulationContext)
 	{
 		FGPUFluidSimulator* GPUSimulator = SimulationContext->GetGPUSimulator();
 		const int32 CurrentMaxParticles = GPUSimulator ? GPUSimulator->GetMaxParticleCount() : 0;
 
-		if (CurrentMaxParticles != CurrentPreset->MaxParticles)
+		if (CurrentMaxParticles != GetPreviewSettings().MaxParticleCount)
 		{
 			SimulationContext->ReleaseGPUSimulator();
-			SimulationContext->InitializeGPUSimulator(CurrentPreset->MaxParticles);
+			SimulationContext->InitializeGPUSimulator(GetPreviewSettings().MaxParticleCount);
 		}
 
 		SimulationContext->InitializeSolvers(CurrentPreset);

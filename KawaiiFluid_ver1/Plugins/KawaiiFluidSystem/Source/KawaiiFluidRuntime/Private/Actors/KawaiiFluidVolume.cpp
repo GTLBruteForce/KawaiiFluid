@@ -130,11 +130,13 @@ void AKawaiiFluidVolume::Tick(float DeltaSeconds)
 		if (UKawaiiFluidSimulationContext* Context = SimulationModule->GetSimulationContext())
 		{
 			// Initialize GPU simulator if not ready
-			UKawaiiFluidPresetDataAsset* Preset = VolumeComponent->GetPreset();
-			if (Preset && !Context->IsGPUSimulatorReady())
+			if (!Context->IsGPUSimulatorReady())
 			{
-				Context->InitializeGPUSimulator(Preset->MaxParticles);
+				Context->InitializeGPUSimulator(VolumeComponent->MaxParticleCount);
 			}
+
+			// Get preset for simulation parameters
+			UKawaiiFluidPresetDataAsset* Preset = VolumeComponent->GetPreset();
 
 			// Set GPU simulator reference (like UKawaiiFluidComponent)
 			if (Context->IsGPUSimulatorReady())
@@ -1525,7 +1527,7 @@ FColor AKawaiiFluidVolume::ComputeDebugDrawColor(int32 ParticleIndex, int32 Tota
 	case EFluidDebugVisualization::Density:
 		{
 			// Blue (low) to Red (high) based on density
-			const float RestDensity = Preset ? Preset->RestDensity : 1000.0f;
+			const float RestDensity = Preset ? Preset->Density : 1000.0f;
 			const float NormalizedDensity = FMath::Clamp(Density / (RestDensity * 2.0f), 0.0f, 1.0f);
 			return FLinearColor::LerpUsingHSV(FLinearColor::Blue, FLinearColor::Red, NormalizedDensity).ToFColor(true);
 		}

@@ -8,7 +8,6 @@
 #include "Rendering/FluidRenderingParameters.h"
 #include "KawaiiFluidPresetDataAsset.generated.h"
 
-class UKawaiiFluidSimulationContext;
 class UKawaiiFluidPresetDataAsset;
 
 /** Delegate broadcast when preset properties change (SmoothingRadius, etc.) */
@@ -23,7 +22,6 @@ UCLASS(BlueprintType)
 class KAWAIIFLUIDRUNTIME_API UKawaiiFluidPresetDataAsset : public UDataAsset
 {
 	GENERATED_BODY()
-
 
 public:
 	UKawaiiFluidPresetDataAsset();
@@ -41,190 +39,179 @@ public:
 	FFluidRenderingParameters RenderingParameters;
 
 	//========================================
-	// Fluid Identification
+	// Physics | Material
 	//========================================
 
+	/** XSPH viscosity (0=water, 0.5=slime, 0.8=honey) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float Viscosity = 0.5f;
+
+	/** Density (kg/m³) - Water: 1000, Slime: 1200, Honey: 1400 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "500.0", ClampMax = "3000.0"))
+	float Density = 1200.0f;
+
+	/** Compressibility - lower = more incompressible, higher = softer */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "0.0", ClampMax = "0.001"))
+	float Compressibility = 0.00001f;
+
+	/** Surface tension between particles (0=dispersed, 1=tight blob like water droplet) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SurfaceTension = 0.3f;
+
 	/**
-	 * 유체 식별 이름 (BP에서 Switch on Name으로 분기용)
-	 * 예: "Lava", "Water", "Slime"
-	 * Switch on Name 노드에서 이 이름으로 케이스를 만드세요
+	 * Adhesion (Akinci 2013)
+	 * Force pulling fluid toward boundary surfaces
+	 * Higher values = stronger "sticking" to walls/characters
+	 * 0 = no adhesion force, 10+ = very sticky
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Identification")
-	FName FluidName = NAME_None;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "0.0", ClampMax = "50.0"))
+	float Adhesion = 5.0f;
 
-	/** 유체 식별 이름 반환 */
-	UFUNCTION(BlueprintPure, Category = "Simulation|Identification")
-	FName GetFluidName() const { return FluidName; }
+	/** Bounciness (0=no bounce, 1=full bounce) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float Bounciness = 0.0f;
 
-	//========================================
-	// Context Class (Extensibility)
-	//========================================
+	/** Friction */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float Friction = 0.5f;
 
 	/**
-	 * Custom simulation context class
-	 * Override for custom fluid behaviors (lava, sand, etc.)
-	 * If nullptr, uses default UKawaiiFluidSimulationContext
+	 * Air resistance (0=no resistance, 1=maximum resistance)
+	 * Controls velocity damping per substep
+	 * 0 = no energy loss, 1 = 10% energy loss per substep
+	 * Useful for stabilizing simulation and preventing perpetual motion
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Extension")
-	TSubclassOf<UKawaiiFluidSimulationContext> ContextClass;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AirResistance = 0.05f;
+
+	/** Convert AirResistance to internal Damping value (0.9~1.0) */
+	UFUNCTION(BlueprintPure, Category = "Physics|Material")
+	float GetDamping() const { return 1.0f - (AirResistance * 0.1f); }
 
 	//========================================
-	// Physics Parameters
+	// Physics | Simulation | Resolution
 	//========================================
 
-	/** Rest density (kg/m³) - Slime: 1200, Water: 1000, Honey: 1400 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Physics", meta = (ClampMin = "0.1"))
-	float RestDensity = 1200.0f;
-
-	/** Smoothing radius (kernel radius h, cm) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Physics", meta = (ClampMin = "1.0"))
-	float SmoothingRadius = 20.0f;
-
-	//========================================
-	// Particle Size Parameters (Auto-calculated)
-	//========================================
+	/** Particle render radius (cm) - primary resolution input */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Resolution", meta = (ClampMin = "0.1"))
+	float ParticleRadius = 5.0f;
 
 	/**
-	 * Spacing ratio relative to SmoothingRadius (d/h)
+	 * Spacing ratio (d/h) - particle density relative to smoothing radius
 	 * Recommended: 0.5 (yields ~33 neighbors in 3D)
 	 * Range: 0.3 (dense, ~124 neighbors) to 0.7 (sparse, ~15 neighbors)
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Particle Size",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Resolution",
 		meta = (ClampMin = "0.1", ClampMax = "0.7"))
 	float SpacingRatio = 0.5f;
 
 	/**
-	 * Particle spacing (cm) - distance between particles when spawned
-	 * Auto-calculated: SmoothingRadius * SpacingRatio
+	 * Smoothing radius (kernel radius h, cm)
+	 * Auto-calculated: ParticleRadius * 2 / SpacingRatio
 	 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Simulation|Particle Size")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Physics|Simulation|Resolution")
+	float SmoothingRadius = 20.0f;
+
+	/**
+	 * Particle spacing (cm) - distance between particles when spawned
+	 * Auto-calculated: ParticleRadius * 2
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Physics|Simulation|Resolution")
 	float ParticleSpacing = 10.0f;
 
 	/**
 	 * Particle mass (kg)
-	 * Auto-calculated: RestDensity * (Spacing_m)³
+	 * Auto-calculated: Density * (ParticleSpacing_m)³
 	 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Simulation|Particle Size")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Physics|Simulation|Resolution")
 	float ParticleMass = 1.0f;
 
-	/**
-	 * Particle render radius (cm)
-	 * Auto-calculated: ParticleSpacing * 0.5
-	 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Simulation|Particle Size")
-	float ParticleRadius = 5.0f;
-
 	/** Estimated neighbor count based on spacing ratio */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Simulation|Particle Size")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Physics|Simulation|Resolution")
 	int32 EstimatedNeighborCount = 33;
 
+	//========================================
+	// Physics | Simulation | Solver
+	//========================================
+
 	/** Substep target dt (seconds) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Physics", meta = (ClampMin = "0.001", ClampMax = "0.05"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Solver", meta = (ClampMin = "0.001", ClampMax = "0.05"))
 	float SubstepDeltaTime = 1.0f / 120.0f;
 
 	/** Maximum substep count */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Physics", meta = (ClampMin = "1", ClampMax = "16"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Solver", meta = (ClampMin = "1", ClampMax = "16"))
 	int32 MaxSubsteps = 8;
 
-	/** Gravity */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Physics")
-	FVector Gravity = FVector(0.0f, 0.0f, -980.0f);
-
-	/** XPBD Compliance - smaller = more incompressible (Slime: 0.01, Water: 0.0001) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Physics", meta = (ClampMin = "0.0"))
-	float Compliance = 0.00001f;
+	/** XPBD constraint solver iterations (viscous fluid: 2-3, water: 4-6) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Solver", meta = (ClampMin = "1", ClampMax = "10"))
+	int32 SolverIterations = 3;
 
 	/**
 	 * Compliance scaling exponent for SmoothingRadius independence
-	 * When SmoothingRadius differs from 20cm, Compliance is auto-scaled:
-	 * ScaledCompliance = Compliance * (20/h)^Exponent
+	 * When SmoothingRadius differs from 20cm, Compressibility is auto-scaled:
+	 * ScaledCompressibility = Compressibility * (20/h)^Exponent
 	 * Higher values = stronger scaling for stability at smaller radii
 	 * Recommended: 4-6 (theoretical: 10, practical: 4-6)
 	 * 0 = disable auto-scaling
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Physics", meta = (ClampMin = "0.0", ClampMax = "10.0"))
-	float ComplianceScalingExponent = 4.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Solver", meta = (ClampMin = "0.0", ClampMax = "10.0"))
+	float ComplianceExponent = 4.0f;
 
-	/** XPBD constraint solver iterations (viscous fluid: 2-3, water: 4-6) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Physics", meta = (ClampMin = "1", ClampMax = "10"))
-	int32 SolverIterations = 3;
-
-	/**
-	 * Global velocity damping per substep
-	 * Applied after FinalizePositions to dissipate energy
-	 * 1.0 = no damping, 0.99 = 1% damping per substep, 0.95 = 5% damping
-	 * Useful for stabilizing simulation and preventing perpetual motion
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Physics", meta = (ClampMin = "0.9", ClampMax = "1.0"))
-	float GlobalDamping = 0.995f;
+	/** Gravity */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Solver")
+	FVector Gravity = FVector(0.0f, 0.0f, -980.0f);
 
 	//========================================
-	// Tensile Instability Correction (PBF Eq.13-14)
+	// Physics | Simulation | Collision
 	//========================================
 
 	/**
-	 * Enable artificial pressure (scorr) for surface tension
-	 * Prevents particle clustering at low-density regions (splash, surface)
-	 * Based on PBF paper Section 4 (Macklin & Müller, 2013)
+	 * Fluid name for collision event identification
+	 * Used to identify fluid type on collision (e.g., Switch on Name in BP)
+	 * Example: "Lava", "Water", "Slime"
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Tensile Instability")
-	bool bEnableTensileInstabilityCorrection = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Collision")
+	FName FluidName = NAME_None;
+
+	/** Fluid name getter */
+	UFUNCTION(BlueprintPure, Category = "Physics|Simulation|Collision")
+	FName GetFluidName() const { return FluidName; }
+
+	/** Collision channel */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Collision")
+	TEnumAsByte<ECollisionChannel> CollisionChannel = ECC_GameTraceChannel1;
 
 	/**
-	 * Artificial pressure strength (k in paper)
-	 * Higher values create stronger repulsion at surface
-	 * Typical: 0.1 for water-like, 0.01 for viscous fluids
+	 * Collision threshold (cm)
+	 * Particle center within (ParticleRadius + this value) from collider surface triggers collision
+	 * Higher = earlier detection, Lower = closer approach before collision
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Tensile Instability",
-		meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bEnableTensileInstabilityCorrection"))
-	float TensileInstabilityK = 0.1f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Collision", meta = (ClampMin = "0.0", ClampMax = "10.0"))
+	float CollisionThreshold = 1.0f;
 
 	/**
-	 * Artificial pressure exponent (n in paper)
-	 * Higher values make the correction more localized
-	 * Typical: 4
+	 * Enable Distance Field collision
+	 * Uses UE5 Global Distance Field for GPU-based static mesh collision
+	 * Requires "Generate Mesh Distance Fields" enabled in Project Settings
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Tensile Instability",
-		meta = (ClampMin = "1", ClampMax = "8", EditCondition = "bEnableTensileInstabilityCorrection"))
-	int32 TensileInstabilityN = 4;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Collision")
+	bool bUseDistanceField = false;
 
-	/**
-	 * Reference distance as fraction of smoothing radius (Δq/h)
-	 * scorr uses W(r)/W(Δq) ratio
-	 * Typical: 0.2 (20% of h)
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Tensile Instability",
-		meta = (ClampMin = "0.01", ClampMax = "0.5", EditCondition = "bEnableTensileInstabilityCorrection"))
-	float TensileInstabilityDeltaQ = 0.2f;
+	/** Distance threshold for DF collision detection (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Collision", meta = (ClampMin = "0.1", ClampMax = "50.0", EditCondition = "bUseDistanceField"))
+	float DFThreshold = 1.0f;
 
-	//========================================
-	// Viscosity Parameters
-	//========================================
+	/** Distance Field collision restitution (bounciness) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Collision", meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bUseDistanceField"))
+	float DFRestitution = 0.3f;
 
-	/** XSPH viscosity coefficient (0=water, 0.5=slime, 0.8=honey) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Viscosity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float ViscosityCoefficient = 0.5f;
+	/** Distance Field collision friction */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Collision", meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bUseDistanceField"))
+	float DFFriction = 0.1f;
 
 	//========================================
-	// Surface Tension Parameters
+	// Physics | Simulation | Adhesion
 	//========================================
-
-	/** Cohesion strength - surface tension between particles (0=dispersed, 1=tight blob like water droplet) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Surface Tension", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float CohesionStrength = 0.3f;
-
-	//========================================
-	// Adhesion Parameters
-	//========================================
-
-	/**
-	 * Adhesion Force Strength (Akinci 2013)
-	 * Actual force pulling fluid toward boundary surfaces
-	 * Higher values = stronger "sticking" to walls/characters
-	 * 0 = no adhesion force, 10+ = very sticky
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Adhesion", meta = (ClampMin = "0.0", ClampMax = "50.0"))
-	float AdhesionForceStrength = 5.0f;
 
 	/**
 	 * Adhesion Velocity Transfer Strength
@@ -232,30 +219,29 @@ public:
 	 * Higher values = fluid follows moving characters better
 	 * 0 = no following, 1 = full velocity match
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Adhesion", meta = (ClampMin = "0.0", ClampMax = "5.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Adhesion", meta = (ClampMin = "0.0", ClampMax = "5.0"))
 	float AdhesionVelocityStrength = 0.5f;
 
 	/** Adhesion radius (cm) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Adhesion", meta = (ClampMin = "0.1"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Adhesion", meta = (ClampMin = "0.1"))
 	float AdhesionRadius = 25.0f;
 
 	/**
 	 * Additional contact offset (cm) applied to adhesion/collision checks.
 	 * Positive values allow particles to overlap deeper into bone colliders.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Adhesion", meta = (ClampMin = "-50.0", ClampMax = "50.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Adhesion", meta = (ClampMin = "-50.0", ClampMax = "50.0"))
 	float AdhesionContactOffset = 0.0f;
 
 	/**
 	 * Scale applied to bone velocity when updating attached particle velocity.
 	 * 1 = inherit full bone motion, 0 = keep previous particle velocity.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Adhesion", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Adhesion", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float AdhesionBoneVelocityScale = 1.0f;
-	
 
 	//========================================
-	// Boundary Interaction (Moving Characters/Objects)
+	// Physics | Simulation | Boundary | Interaction
 	//========================================
 
 	/**
@@ -263,7 +249,7 @@ public:
 	 * When enabled, reduces pressure repulsion when boundary is approaching fluid
 	 * This prevents fluid from "flying away" when characters move fast
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Boundary Interaction")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Interaction")
 	bool bEnableRelativeVelocityDamping = true;
 
 	/**
@@ -271,7 +257,7 @@ public:
 	 * 0 = no damping (original behavior), 1 = full damping (fluid sticks to boundary)
 	 * Recommended: 0.5 ~ 0.8
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Boundary Interaction",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Interaction",
 		meta = (EditCondition = "bEnableRelativeVelocityDamping", ClampMin = "0.0", ClampMax = "1.0"))
 	float RelativeVelocityDampingStrength = 0.6f;
 
@@ -280,7 +266,7 @@ public:
 	 * Higher = fluid follows boundary more closely
 	 * 1.0 = full velocity inheritance
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Boundary Interaction",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Interaction",
 		meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float BoundaryVelocityTransferStrength = 0.8f;
 
@@ -289,7 +275,7 @@ public:
 	 * When fluid-boundary relative speed exceeds this, velocity transfer reduces
 	 * Typical walking: 300~500 cm/s, Running: 600~1000 cm/s
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Boundary Interaction",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Interaction",
 		meta = (ClampMin = "0.0", ClampMax = "5000.0"))
 	float BoundaryDetachSpeedThreshold = 500.0f;
 
@@ -298,12 +284,12 @@ public:
 	 * Above this speed, no velocity transfer from boundary
 	 * Should be > BoundaryDetachSpeedThreshold
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Boundary Interaction",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Interaction",
 		meta = (ClampMin = "0.0", ClampMax = "10000.0"))
 	float BoundaryMaxDetachSpeed = 1500.0f;
 
 	//========================================
-	// Boundary Attachment (Strong Constraint)
+	// Physics | Simulation | Boundary | Attachment
 	//========================================
 
 	/**
@@ -312,7 +298,7 @@ public:
 	 * will be strongly constrained to follow them during character movement
 	 * This prevents fluid from falling off during animation/movement
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Boundary Attachment")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Attachment")
 	bool bEnableBoundaryAttachment = true;
 
 	/**
@@ -320,7 +306,7 @@ public:
 	 * Fluid particles within this distance from boundary particles will attach
 	 * Recommended: Similar to SmoothingRadius (default 25cm)
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Boundary Attachment",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Attachment",
 		meta = (EditCondition = "bEnableBoundaryAttachment", ClampMin = "1.0", ClampMax = "100.0"))
 	float BoundaryAttachRadius = 25.0f;
 
@@ -329,7 +315,7 @@ public:
 	 * Detach when distance > AttachRadius * this value
 	 * Higher = more tolerant of stretching before detach
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Boundary Attachment",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Attachment",
 		meta = (EditCondition = "bEnableBoundaryAttachment", ClampMin = "1.5", ClampMax = "100.0"))
 	float BoundaryDetachDistanceMultiplier = 3.0f;
 
@@ -338,7 +324,7 @@ public:
 	 * Detach when fluid-boundary relative speed exceeds this
 	 * Higher = harder to shake off by movement
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Boundary Attachment",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Attachment",
 		meta = (EditCondition = "bEnableBoundaryAttachment", ClampMin = "100.0", ClampMax = "10000.0"))
 	float BoundaryAttachDetachSpeedThreshold = 500.0f;
 
@@ -347,7 +333,7 @@ public:
 	 * Prevents immediate re-attachment after detaching
 	 * Recommended: 0.1~0.5 seconds
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Boundary Attachment",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Attachment",
 		meta = (EditCondition = "bEnableBoundaryAttachment", ClampMin = "0.0", ClampMax = "2.0"))
 	float BoundaryAttachCooldown = 0.2f;
 
@@ -356,27 +342,62 @@ public:
 	 * How strongly attached particles follow boundary position
 	 * 1.0 = rigid attachment, 0.5 = soft attachment with some simulation influence
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Boundary Attachment",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Boundary|Attachment",
 		meta = (EditCondition = "bEnableBoundaryAttachment", ClampMin = "0.0", ClampMax = "1.0"))
 	float BoundaryAttachConstraintBlend = 0.8f;
 
 	//========================================
-	// Particle Sleeping (Stabilization)
+	// Physics | Simulation | Stability
 	//========================================
+
+	/**
+	 * Enable artificial pressure (scorr) for surface tension
+	 * Prevents particle clustering at low-density regions (splash, surface)
+	 * Based on PBF paper Section 4 (Macklin & Muller, 2013)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability")
+	bool bEnableTensileCorrection = true;
+
+	/**
+	 * Artificial pressure strength (k in paper)
+	 * Higher values create stronger repulsion at surface
+	 * Typical: 0.1 for water-like, 0.01 for viscous fluids
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability",
+		meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bEnableTensileCorrection"))
+	float TensileInstabilityK = 0.1f;
+
+	/**
+	 * Artificial pressure exponent (n in paper)
+	 * Higher values make the correction more localized
+	 * Typical: 4
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability",
+		meta = (ClampMin = "1", ClampMax = "8", EditCondition = "bEnableTensileCorrection"))
+	int32 TensileInstabilityN = 4;
+
+	/**
+	 * Reference distance as fraction of smoothing radius (dq/h)
+	 * scorr uses W(r)/W(dq) ratio
+	 * Typical: 0.2 (20% of h)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability",
+		meta = (ClampMin = "0.01", ClampMax = "0.5", EditCondition = "bEnableTensileCorrection"))
+	float TensileInstabilityDeltaQ = 0.2f;
 
 	/**
 	 * Enable particle sleeping for stability
 	 * Sleeping particles are excluded from constraint solving, reducing micro-jitter
 	 * Reference: NVIDIA Flex stabilization technique
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Sleeping")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability")
 	bool bEnableParticleSleeping = false;
 
 	/**
 	 * Velocity threshold for sleep (cm/s)
 	 * Particles moving slower than this may enter sleep state
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Sleeping",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability",
 		meta = (EditCondition = "bEnableParticleSleeping", ClampMin = "0.1", ClampMax = "100.0"))
 	float SleepVelocityThreshold = 5.0f;
 
@@ -384,7 +405,7 @@ public:
 	 * Number of consecutive low-velocity frames before sleeping
 	 * Higher values = more stable but slower sleep response
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Sleeping",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability",
 		meta = (EditCondition = "bEnableParticleSleeping", ClampMin = "1", ClampMax = "120"))
 	int32 SleepFrameThreshold = 30;
 
@@ -393,20 +414,16 @@ public:
 	 * Sleeping particles wake up when nearby particles or external forces exceed this
 	 * Should be higher than SleepVelocityThreshold to prevent oscillation
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Sleeping",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability",
 		meta = (EditCondition = "bEnableParticleSleeping", ClampMin = "1.0", ClampMax = "200.0"))
 	float WakeVelocityThreshold = 20.0f;
-
-	//========================================
-	// Stack Pressure Parameters
-	//========================================
 
 	/**
 	 * Enable stack pressure for attached particles
 	 * When enabled, particles stacked on top transfer their weight to particles below,
 	 * causing lower particles to slide down faster - creating realistic dripping behavior
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Stack Pressure")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability")
 	bool bEnableStackPressure = true;
 
 	/**
@@ -414,7 +431,7 @@ public:
 	 * Higher values = faster dripping, more separation between particles
 	 * Recommended: 50 ~ 200 (due to SPH kernel normalization)
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Stack Pressure",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability",
 		meta = (EditCondition = "bEnableStackPressure", ClampMin = "0.0", ClampMax = "1000.0"))
 	float StackPressureScale = 100.0f;
 
@@ -422,68 +439,16 @@ public:
 	 * Stack pressure neighbor search radius (cm)
 	 * 0 = use SmoothingRadius
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Stack Pressure",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability",
 		meta = (EditCondition = "bEnableStackPressure", ClampMin = "0.0"))
 	float StackPressureRadius = 0.0f;
 
 	//========================================
-	// Collision Parameters
+	// Utility Functions
 	//========================================
 
-	/** Restitution (bounciness) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Collision", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float Restitution = 0.0f;
-
-	/** Friction */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Collision", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float Friction = 0.5f;
-
-	/** Collision channel */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Collision")
-	TEnumAsByte<ECollisionChannel> CollisionChannel = ECC_GameTraceChannel1;
-
-	/**
-	 * Primitive collision threshold (cm)
-	 * 입자 중심이 콜라이더 표면에서 (ParticleRadius + 이 값) 이내면 충돌 처리됨
-	 * 값이 클수록 더 일찍 충돌 감지, 작을수록 더 가깝게 접근해야 충돌
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Collision", meta = (ClampMin = "0.0", ClampMax = "10.0"))
-	float PrimitiveCollisionThreshold = 1.0f;
-
-	//========================================
-	// Distance Field Collision (GPU)
-	//========================================
-
-	/**
-	 * Enable Distance Field collision
-	 * Uses UE5 Global Distance Field for GPU-based static mesh collision
-	 * Requires "Generate Mesh Distance Fields" enabled in Project Settings
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Distance Field Collision")
-	bool bUseDistanceFieldCollision = false;
-
-	/** Distance threshold for collision detection (cm) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Distance Field Collision", meta = (ClampMin = "0.1", ClampMax = "50.0", EditCondition = "bUseDistanceFieldCollision"))
-	float DFCollisionThreshold = 1.0f;
-
-	/** Distance Field collision restitution (bounciness) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Distance Field Collision", meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bUseDistanceFieldCollision"))
-	float DFCollisionRestitution = 0.3f;
-
-	/** Distance Field collision friction */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Distance Field Collision", meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "bUseDistanceFieldCollision"))
-	float DFCollisionFriction = 0.1f;
-
-	//========================================
-	// Limits
-	//========================================
-
-	/** Maximum particle count */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation|Limits", meta = (ClampMin = "1"))
-	int32 MaxParticles = 10000;
-
-	/** Recalculate derived particle parameters (mass, spacing, radius) based on SmoothingRadius and RestDensity */
-	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	/** Recalculate derived parameters (SmoothingRadius, ParticleSpacing, ParticleMass) based on ParticleRadius and SpacingRatio */
+	UFUNCTION(BlueprintCallable, Category = "Physics")
 	void RecalculateDerivedParameters();
 
 #if WITH_EDITORONLY_DATA

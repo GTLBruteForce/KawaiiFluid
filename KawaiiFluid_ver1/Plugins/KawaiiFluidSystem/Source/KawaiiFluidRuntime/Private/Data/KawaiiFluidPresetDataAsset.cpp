@@ -15,31 +15,27 @@ UKawaiiFluidPresetDataAsset::UKawaiiFluidPresetDataAsset()
 void UKawaiiFluidPresetDataAsset::RecalculateDerivedParameters()
 {
 	//========================================
-	// Particle Size Parameters
+	// Resolution Parameters (from ParticleRadius + SpacingRatio)
 	//========================================
 
-	// Clamp SpacingRatio to valid range
+	// Clamp inputs to valid range
+	ParticleRadius = FMath::Max(ParticleRadius, 0.1f);
 	SpacingRatio = FMath::Clamp(SpacingRatio, 0.1f, 0.7f);
 
-	// ParticleSpacing = SmoothingRadius * SpacingRatio (cm)
-	ParticleSpacing = SmoothingRadius * SpacingRatio;
+	// ParticleSpacing = ParticleRadius * 2 (cm)
+	ParticleSpacing = ParticleRadius * 2.0f;
+
+	// SmoothingRadius = ParticleSpacing / SpacingRatio (reverse calculation)
+	SmoothingRadius = ParticleSpacing / SpacingRatio;
+	SmoothingRadius = FMath::Clamp(SmoothingRadius, 1.0f, 200.0f);
 
 	// Convert spacing to meters for mass calculation
 	const float Spacing_m = ParticleSpacing * 0.01f;
 
-	// ParticleMass = RestDensity * d³ (kg)
-	// This ensures uniform grid at spacing d achieves RestDensity
-	ParticleMass = RestDensity * Spacing_m * Spacing_m * Spacing_m;
-
-	// Ensure minimum mass
+	// ParticleMass = Density * d³ (kg)
+	// This ensures uniform grid at spacing d achieves Density
+	ParticleMass = Density * Spacing_m * Spacing_m * Spacing_m;
 	ParticleMass = FMath::Max(ParticleMass, 0.001f);
-
-	// ParticleRadius = Spacing / 2 (cm)
-	// Renders particles with slight overlap for continuous fluid appearance
-	ParticleRadius = ParticleSpacing * 0.5f;
-
-	// Ensure minimum radius
-	ParticleRadius = FMath::Max(ParticleRadius, 0.1f);
 
 	// Estimate neighbor count: N ≈ (4/3)π × (h/d)³ = (4/3)π × (1/SpacingRatio)³
 	const float HOverD = 1.0f / SpacingRatio;
@@ -51,22 +47,15 @@ void UKawaiiFluidPresetDataAsset::PostEditChangeProperty(FPropertyChangedEvent& 
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
-	// Validate parameters
-	if (SmoothingRadius < 1.0f)
-	{
-		SmoothingRadius = 1.0f;
-	}
-
 	// Check which property changed
 	const FName PropertyName = PropertyChangedEvent.Property ?
 		PropertyChangedEvent.Property->GetFName() : NAME_None;
 
 	// Recalculate derived parameters when relevant properties change
-	// - Particle Size: SmoothingRadius, RestDensity, SpacingRatio
-	// - Z-Order Sorting: SmoothingRadius affects CellSize and BoundsExtent
-	// Note: GridAxisBits is a global constant (GPU_MORTON_GRID_AXIS_BITS), not editable per-preset
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidPresetDataAsset, SmoothingRadius) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidPresetDataAsset, RestDensity) ||
+	// - Resolution: ParticleRadius, SpacingRatio → SmoothingRadius, ParticleSpacing, etc.
+	// - Mass: Density affects ParticleMass
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidPresetDataAsset, ParticleRadius) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidPresetDataAsset, Density) ||
 		PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidPresetDataAsset, SpacingRatio))
 	{
 		RecalculateDerivedParameters();

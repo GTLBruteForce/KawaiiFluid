@@ -531,7 +531,7 @@ FKawaiiFluidSimulationParams UKawaiiFluidSimulationModule::BuildSimulationParams
 			}
 
 			Params.WorldBounds = FBox(VolumeCenter + AABBMin, VolumeCenter + AABBMax);
-			Params.BoundsRestitution = Preset ? Preset->Restitution : 0.0f;
+			Params.BoundsRestitution = Preset ? Preset->Bounciness : 0.0f;
 			Params.BoundsFriction = Preset ? Preset->Friction : 0.5f;
 		}
 	}
@@ -563,7 +563,7 @@ FKawaiiFluidSimulationParams UKawaiiFluidSimulationModule::BuildSimulationParams
 		}
 
 		Params.WorldBounds = FBox(VolumeCenter + AABBMin, VolumeCenter + AABBMax);
-		Params.BoundsRestitution = Preset ? Preset->Restitution : 0.0f;
+		Params.BoundsRestitution = Preset ? Preset->Bounciness : 0.0f;
 		Params.BoundsFriction = Preset ? Preset->Friction : 0.5f;
 	}
 
@@ -1900,7 +1900,7 @@ void UKawaiiFluidSimulationModule::ResolveVolumeBoundaryCollisions()
 	float EffectiveFriction;
 
 	// Get bounce/friction from Preset
-	const float PresetBounce = Preset ? Preset->Restitution : 0.0f;
+	const float PresetBounce = Preset ? Preset->Bounciness : 0.0f;
 	const float PresetFriction = Preset ? Preset->Friction : 0.5f;
 
 	if (UKawaiiFluidVolumeComponent* ExternalVolume = GetTargetVolumeComponent())

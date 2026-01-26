@@ -232,7 +232,10 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 				// GPU 시뮬레이션 설정 (항상 GPU 사용)
 				if (!Context->IsGPUSimulatorReady())
 				{
-					Context->InitializeGPUSimulator(Preset->MaxParticles);
+					if (UKawaiiFluidVolumeComponent* Volume = GetTargetVolumeComponent())
+					{
+						Context->InitializeGPUSimulator(Volume->MaxParticleCount);
+					}
 				}
 			if (Context->IsGPUSimulatorReady())
 				{
@@ -290,7 +293,7 @@ void UKawaiiFluidComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 		// Update volume runtime parameters (size/rotation from editor, center from component)
 		// Note: Bounce/Friction parameters are now obtained from Preset internally
 		UKawaiiFluidPresetDataAsset* ModulePreset = SimulationModule->GetPreset();
-		const float PresetBounce = ModulePreset ? ModulePreset->Restitution : 0.0f;
+		const float PresetBounce = ModulePreset ? ModulePreset->Bounciness : 0.0f;
 		const float PresetFriction = ModulePreset ? ModulePreset->Friction : 0.5f;
 		SimulationModule->SetSimulationVolume(
 			SimulationModule->GetEffectiveVolumeSize(),

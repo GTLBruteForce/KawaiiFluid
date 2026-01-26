@@ -40,7 +40,7 @@ FFluidTestMetrics FFluidMetricsCollector::CollectFromModule(const UKawaiiFluidSi
 	float RestDensity = 1000.0f;  // Default
 	if (const UKawaiiFluidPresetDataAsset* Preset = Module->GetPreset())
 	{
-		RestDensity = Preset->RestDensity;
+		RestDensity = Preset->Density;
 	}
 
 	// Collect from particles

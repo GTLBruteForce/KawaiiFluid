@@ -87,6 +87,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Volume")
 	TObjectPtr<UKawaiiFluidPresetDataAsset> Preset;
 
+	/** Maximum particle count for this volume's GPU buffer */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Volume", meta = (ClampMin = "1"))
+	int32 MaxParticleCount = 200000;
+
 	//========================================
 	// Static Boundary Particles (Akinci 2012)
 	//========================================

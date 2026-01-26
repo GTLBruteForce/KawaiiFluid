@@ -177,10 +177,10 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 					Context->SetCachedPreset(Preset);
 				}
 
-				// GPU simulation setup (always enabled)
-				if (!Context->IsGPUSimulatorReady())
+			// GPU simulation setup (always enabled)
+				if (!Context->IsGPUSimulatorReady() && TargetVolume)
 				{
-					Context->InitializeGPUSimulator(Preset->MaxParticles);
+					Context->InitializeGPUSimulator(TargetVolume->MaxParticleCount);
 				}
 
 			if (Context->IsGPUSimulatorReady())
@@ -497,14 +497,8 @@ UKawaiiFluidSimulationContext* UKawaiiFluidSimulatorSubsystem::GetOrCreateContex
 		return *Found;
 	}
 
-	// Create new context - use ContextClass if specified, otherwise default class
-	TSubclassOf<UKawaiiFluidSimulationContext> ContextClass = Preset->ContextClass;
-	if (!ContextClass)
-	{
-		ContextClass = UKawaiiFluidSimulationContext::StaticClass();
-	}
-
-	UKawaiiFluidSimulationContext* NewContext = NewObject<UKawaiiFluidSimulationContext>(this, ContextClass);
+	// Create new context - always use default UKawaiiFluidSimulationContext
+	UKawaiiFluidSimulationContext* NewContext = NewObject<UKawaiiFluidSimulationContext>(this);
 	NewContext->InitializeSolvers(Preset);
 
 	// Store VolumeComponent reference in Context for bounds access
@@ -584,9 +578,9 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 		Params.CPUCollisionFeedbackLockPtr = &CPUCollisionFeedbackLock;
 
 		// GPU simulation setup (always enabled)
-		if (!Context->IsGPUSimulatorReady())
+		if (!Context->IsGPUSimulatorReady() && TargetVolume)
 		{
-			Context->InitializeGPUSimulator(EffectivePreset->MaxParticles);
+			Context->InitializeGPUSimulator(TargetVolume->MaxParticleCount);
 		}
 
 		if (Context->IsGPUSimulatorReady())
@@ -658,9 +652,9 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaT
 		Params.CPUCollisionFeedbackLockPtr = &CPUCollisionFeedbackLock;
 
 		// GPU simulation setup (always enabled)
-		if (!Context->IsGPUSimulatorReady())
+		if (!Context->IsGPUSimulatorReady() && CacheKey.VolumeComponent)
 		{
-			Context->InitializeGPUSimulator(Preset->MaxParticles);
+			Context->InitializeGPUSimulator(CacheKey.VolumeComponent->MaxParticleCount);
 		}
 
 		if (Context->IsGPUSimulatorReady())
