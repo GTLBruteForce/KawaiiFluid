@@ -14,8 +14,8 @@ class FGPUFluidSimulator;
 class FRDGBuilder;
 
 /**
- * 유체 입자 데이터를 GPU 버퍼로 관리하는 렌더 리소스
- * CPU 시뮬레이션 데이터를 GPU에 업로드하여 Niagara/SSFR에서 사용 가능하게 함
+ * Render resource that manages fluid particle data as GPU buffers
+ * Uploads CPU simulation data to GPU for use in Niagara/SSFR
  */
 class KAWAIIFLUIDRUNTIME_API FKawaiiFluidRenderResource : public FRenderResource
 {
@@ -27,45 +27,45 @@ public:
 	// FRenderResource Interface
 	//========================================
 
-	/** GPU 리소스 초기화 (렌더 스레드) */
+	/** Initialize GPU resources (render thread) */
 	virtual void InitRHI(FRHICommandListBase& RHICmdList) override;
 
-	/** GPU 리소스 해제 (렌더 스레드) */
+	/** Release GPU resources (render thread) */
 	virtual void ReleaseRHI() override;
 
 	//========================================
-	// GPU 버퍼 접근 (렌더 스레드)
+	// GPU buffer access (render thread)
 	//========================================
 
-	/** Structured Buffer의 SRV (Shader Resource View) 반환 */
+	/** Get SRV (Shader Resource View) of Structured Buffer */
 	FRHIShaderResourceView* GetParticleSRV() const { return ParticleSRV; }
 
-	/** RHI 버퍼 직접 반환 (미래 통합용) */
+	/** Get RHI buffer directly (for future integration) */
 	FRHIBuffer* GetParticleBufferRHI() const 
 	{ 
 		return ParticleBuffer.GetReference(); 
 	}
 
-	/** 현재 파티클 수 */
+	/** Current particle count */
 	int32 GetParticleCount() const { return ParticleCount; }
 
-	/** 버퍼 최대 용량 반환 */
+	/** Get buffer maximum capacity */
 	int32 GetBufferCapacity() const { return BufferCapacity; }
 
-	/** 버퍼가 유효한지 확인 */
+	/** Check if buffer is valid */
 	bool IsValid() const { return ParticleBuffer.IsValid() && ParticleSRV.IsValid(); }
 
 	//========================================
-	// GPU 버퍼 접근 (Phase 2: GPU → GPU 렌더링)
+	// GPU buffer access (Phase 2: GPU → GPU rendering)
 	//========================================
 
-	/** GPU Pooled Buffer 반환 (RDG 등록용) - Legacy AoS */
+	/** Get GPU Pooled Buffer (for RDG registration) - Legacy AoS */
 	TRefCountPtr<FRDGPooledBuffer> GetPooledParticleBuffer() const
 	{
 		return PooledParticleBuffer;
 	}
 
-	/** GPU 버퍼가 유효한지 확인 (Phase 2 경로용) */
+	/** Check if GPU buffer is valid (for Phase 2 path) */
 	bool HasValidGPUBuffer() const
 	{
 		return PooledParticleBuffer.IsValid() && ParticleCount > 0 && bBufferReadyForRendering.load();
@@ -75,78 +75,78 @@ public:
 	void SetBufferReadyForRendering(bool bReady) { bBufferReadyForRendering = bReady; }
 
 	//========================================
-	// SoA (Structure of Arrays) 버퍼 접근
-	// - 메모리 대역폭 최적화: 32B/particle → 12B/particle (SDF용)
+	// SoA (Structure of Arrays) buffer access
+	// - Memory bandwidth optimization: 32B/particle → 12B/particle (for SDF)
 	//========================================
 
-	/** Position 전용 SoA 버퍼 (float3 * N, 12B each) - SDF 핫패스 */
+	/** Position-only SoA buffer (float3 * N, 12B each) - SDF hotpath */
 	TRefCountPtr<FRDGPooledBuffer> GetPooledPositionBuffer() const
 	{
 		return PooledPositionBuffer;
 	}
 
-	/** Velocity 전용 SoA 버퍼 (float3 * N, 12B each) - 모션블러용 */
+	/** Velocity-only SoA buffer (float3 * N, 12B each) - for motion blur */
 	TRefCountPtr<FRDGPooledBuffer> GetPooledVelocityBuffer() const
 	{
 		return PooledVelocityBuffer;
 	}
 
-	/** SoA 버퍼가 유효한지 확인 */
+	/** Check if SoA buffer is valid */
 	bool HasValidSoABuffers() const
 	{
 		return PooledPositionBuffer.IsValid() && ParticleCount > 0 && bBufferReadyForRendering.load();
 	}
 
 	//========================================
-	// GPU 시뮬레이터 인터페이스
+	// GPU simulator interface
 	//========================================
 
 	/**
-	 * GPU 시뮬레이터 참조 설정 (게임 스레드에서 호출)
-	 * GPU 모드에서 렌더 스레드가 직접 시뮬레이터 버퍼에 접근할 수 있도록 함
-	 * @param InSimulator GPU 시뮬레이터 참조 (nullptr이면 CPU 모드)
-	 * @param InParticleCount GPU 파티클 수
-	 * @param InParticleRadius 파티클 반경
+	 * Set GPU simulator reference (called from game thread)
+	 * Allows render thread to directly access simulator buffers in GPU mode
+	 * @param InSimulator GPU simulator reference (nullptr for CPU mode)
+	 * @param InParticleCount GPU particle count
+	 * @param InParticleRadius Particle radius
 	 */
 	void SetGPUSimulatorReference(FGPUFluidSimulator* InSimulator, int32 InParticleCount, float InParticleRadius);
 
-	/** GPU 시뮬레이터 참조 해제 (CPU 모드로 전환) */
+	/** Clear GPU simulator reference (switch to CPU mode) */
 	void ClearGPUSimulatorReference();
 
-	/** 현재 GPU 시뮬레이터 참조 반환 */
+	/** Get current GPU simulator reference */
 	FGPUFluidSimulator* GetGPUSimulator() const { return CachedGPUSimulator; }
 
-	/** GPU 시뮬레이터 모드인지 확인 */
+	/** Check if in GPU simulator mode */
 	bool HasGPUSimulator() const { return CachedGPUSimulator != nullptr; }
 
 	/**
-	 * 통합 파티클 수 반환 (렌더 스레드에서 호출)
-	 * GPU 모드: GPU 시뮬레이터의 파티클 수
-	 * CPU 모드: 캐시된 파티클 수
+	 * Get unified particle count (called from render thread)
+	 * GPU mode: GPU simulator's particle count
+	 * CPU mode: Cached particle count
 	 */
 	int32 GetUnifiedParticleCount() const;
 
 	/**
-	 * 통합 파티클 반경 반환
+	 * Get unified particle radius
 	 */
 	float GetUnifiedParticleRadius() const { return CachedParticleRadius; }
 
 	/**
-	 * Physics 버퍼 SRV 반환 (렌더 스레드에서 호출)
-	 * GPU 모드: GPUSimulator의 PersistentParticleBuffer (FGPUFluidParticle 형식)
-	 * CPU 모드: nullptr (Physics 버퍼 없음)
-	 * @param GraphBuilder RDG 빌더
-	 * @return Physics 버퍼 SRV 또는 nullptr
+	 * Get Physics buffer SRV (called from render thread)
+	 * GPU mode: GPUSimulator's PersistentParticleBuffer (FGPUFluidParticle format)
+	 * CPU mode: nullptr (no Physics buffer)
+	 * @param GraphBuilder RDG builder
+	 * @return Physics buffer SRV or nullptr
 	 */
 	FRDGBufferSRVRef GetPhysicsBufferSRV(FRDGBuilder& GraphBuilder) const;
 
 	/**
-	 * Anisotropy Axis 버퍼들 반환 (GPU 모드에서만 유효)
-	 * @param GraphBuilder RDG 빌더
-	 * @param OutAxis1SRV Axis1 버퍼 SRV
-	 * @param OutAxis2SRV Axis2 버퍼 SRV
-	 * @param OutAxis3SRV Axis3 버퍼 SRV
-	 * @return Anisotropy 버퍼가 유효하면 true
+	 * Get Anisotropy Axis buffers (valid only in GPU mode)
+	 * @param GraphBuilder RDG builder
+	 * @param OutAxis1SRV Axis1 buffer SRV
+	 * @param OutAxis2SRV Axis2 buffer SRV
+	 * @param OutAxis3SRV Axis3 buffer SRV
+	 * @return true if Anisotropy buffers are valid
 	 */
 	bool GetAnisotropyBufferSRVs(
 		FRDGBuilder& GraphBuilder,
@@ -154,130 +154,130 @@ public:
 		FRDGBufferSRVRef& OutAxis2SRV,
 		FRDGBufferSRVRef& OutAxis3SRV) const;
 
-	/** Anisotropy가 활성화되어 있는지 확인 */
+	/** Check if Anisotropy is enabled */
 	bool IsAnisotropyEnabled() const;
 
 	//========================================
-	// Bounds 데이터 (SDF 볼륨용)
+	// Bounds data (for SDF volume)
 	//========================================
 
 	/**
-	 * GPU Bounds 버퍼 설정 (렌더 스레드에서 호출)
-	 * ViewExtension에서 ExtractRenderDataWithBoundsPass 후 설정
+	 * Set GPU Bounds buffer (called from render thread)
+	 * Set after ExtractRenderDataWithBoundsPass in ViewExtension
 	 */
 	void SetBoundsBuffer(TRefCountPtr<FRDGPooledBuffer> InBoundsBuffer);
 
-	/** GPU Bounds 버퍼 반환 */
+	/** Get GPU Bounds buffer */
 	TRefCountPtr<FRDGPooledBuffer> GetPooledBoundsBuffer() const { return PooledBoundsBuffer; }
 
-	/** Bounds 버퍼가 유효한지 확인 */
+	/** Check if Bounds buffer is valid */
 	bool HasValidBoundsBuffer() const { return PooledBoundsBuffer.IsValid(); }
 
 	/**
-	 * FKawaiiRenderParticle 버퍼 설정 (렌더 스레드에서 호출)
-	 * ViewExtension에서 ExtractRenderDataPass 후 설정
+	 * Set FKawaiiRenderParticle buffer (called from render thread)
+	 * Set after ExtractRenderDataPass in ViewExtension
 	 */
 	void SetRenderParticleBuffer(TRefCountPtr<FRDGPooledBuffer> InBuffer);
 
-	/** FKawaiiRenderParticle 버퍼 반환 (SDF iteration용) */
+	/** Get FKawaiiRenderParticle buffer (for SDF iteration) */
 	TRefCountPtr<FRDGPooledBuffer> GetPooledRenderParticleBuffer() const { return PooledRenderParticleBuffer; }
 
-	/** Bounds 버퍼 포인터 반환 (QueueBufferExtraction용) */
+	/** Get Bounds buffer pointer (for QueueBufferExtraction) */
 	TRefCountPtr<FRDGPooledBuffer>* GetPooledBoundsBufferPtr() { return &PooledBoundsBuffer; }
 
-	/** RenderParticle 버퍼 포인터 반환 (QueueBufferExtraction용) */
+	/** Get RenderParticle buffer pointer (for QueueBufferExtraction) */
 	TRefCountPtr<FRDGPooledBuffer>* GetPooledRenderParticleBufferPtr() { return &PooledRenderParticleBuffer; }
 
-	/** Position 버퍼 포인터 반환 (QueueBufferExtraction용) */
+	/** Get Position buffer pointer (for QueueBufferExtraction) */
 	TRefCountPtr<FRDGPooledBuffer>* GetPooledPositionBufferPtr() { return &PooledPositionBuffer; }
 
-	/** Velocity 버퍼 포인터 반환 (QueueBufferExtraction용) */
+	/** Get Velocity buffer pointer (for QueueBufferExtraction) */
 	TRefCountPtr<FRDGPooledBuffer>* GetPooledVelocityBufferPtr() { return &PooledVelocityBuffer; }
 
 	//========================================
-	// Z-Order 버퍼 접근 (Ray Marching 볼륨 빌딩용)
+	// Z-Order buffer access (for Ray Marching volume building)
 	//========================================
 
 	/**
-	 * Z-Order CellStart 버퍼 반환 (GPU 시뮬레이터에서 직접 가져옴)
-	 * Ray Marching 볼륨 빌딩에서 셀 시작 인덱스로 사용
+	 * Get Z-Order CellStart buffer (fetched directly from GPU simulator)
+	 * Used as cell start index in Ray Marching volume building
 	 */
 	TRefCountPtr<FRDGPooledBuffer> GetPooledCellStartBuffer() const;
 
 	/**
-	 * Z-Order CellEnd 버퍼 반환 (GPU 시뮬레이터에서 직접 가져옴)
-	 * Ray Marching 볼륨 빌딩에서 셀 끝 인덱스로 사용
+	 * Get Z-Order CellEnd buffer (fetched directly from GPU simulator)
+	 * Used as cell end index in Ray Marching volume building
 	 */
 	TRefCountPtr<FRDGPooledBuffer> GetPooledCellEndBuffer() const;
 
 	/**
-	 * Z-Order 버퍼가 유효한지 확인
-	 * GPU 시뮬레이터가 있고 Z-Order 버퍼가 유효해야 true
+	 * Check if Z-Order buffer is valid
+	 * Returns true if GPU simulator exists and Z-Order buffer is valid
 	 */
 	bool HasValidZOrderBuffers() const;
 
 private:
 	//========================================
-	// GPU 리소스
+	// GPU resources
 	//========================================
 
-	/** Structured Buffer (GPU 메모리) */
+	/** Structured Buffer (GPU memory) */
 	FBufferRHIRef ParticleBuffer;
 
-	/** Shader Resource View (쉐이더 읽기용) */
+	/** Shader Resource View (for shader read) */
 	FShaderResourceViewRHIRef ParticleSRV;
 
-	/** Unordered Access View (쉐이더 쓰기용 - Phase 2 GPU→GPU 복사) */
+	/** Unordered Access View (for shader write - Phase 2 GPU→GPU copy) */
 	FUnorderedAccessViewRHIRef ParticleUAV;
 
-	/** Pooled Buffer for RDG registration (Phase 2 GPU→GPU 복사) - Legacy AoS */
+	/** Pooled Buffer for RDG registration (Phase 2 GPU→GPU copy) - Legacy AoS */
 	TRefCountPtr<FRDGPooledBuffer> PooledParticleBuffer;
 
 	//========================================
-	// SoA (Structure of Arrays) 버퍼
+	// SoA (Structure of Arrays) buffers
 	//========================================
 
-	/** Position 전용 버퍼 (float3 * N, 12B each) - SDF 핫패스 */
+	/** Position-only buffer (float3 * N, 12B each) - SDF hotpath */
 	TRefCountPtr<FRDGPooledBuffer> PooledPositionBuffer;
 
-	/** Velocity 전용 버퍼 (float3 * N, 12B each) - 모션블러용 */
+	/** Velocity-only buffer (float3 * N, 12B each) - for motion blur */
 	TRefCountPtr<FRDGPooledBuffer> PooledVelocityBuffer;
 
-	/** Bounds 버퍼 (float3 * 2: Min, Max) - SDF 볼륨 범위 */
+	/** Bounds buffer (float3 * 2: Min, Max) - SDF volume range */
 	TRefCountPtr<FRDGPooledBuffer> PooledBoundsBuffer;
 
-	/** FKawaiiRenderParticle 버퍼 (SDF iteration용) */
+	/** FKawaiiRenderParticle buffer (for SDF iteration) */
 	TRefCountPtr<FRDGPooledBuffer> PooledRenderParticleBuffer;
 
-	/** 현재 버퍼에 저장된 파티클 수 */
+	/** Current particle count stored in buffer */
 	int32 ParticleCount;
 
-	/** 버퍼 최대 용량 (재할당 최소화) */
+	/** Buffer maximum capacity (minimize reallocation) */
 	int32 BufferCapacity;
 
 	/** Buffer is ready for rendering (ExtractRenderDataPass has completed) */
 	std::atomic<bool> bBufferReadyForRendering{false};
 
 	//========================================
-	// GPU 시뮬레이터 참조
+	// GPU simulator reference
 	//========================================
 
-	/** GPU 시뮬레이터 참조 (렌더 스레드에서 직접 버퍼 접근용) */
+	/** GPU simulator reference (for direct buffer access from render thread) */
 	std::atomic<FGPUFluidSimulator*> CachedGPUSimulator{nullptr};
 
-	/** 캐시된 파티클 수 */
+	/** Cached particle count */
 	std::atomic<int32> CachedGPUParticleCount{0};
 
-	/** 캐시된 파티클 반경 */
+	/** Cached particle radius */
 	std::atomic<float> CachedParticleRadius{10.0f};
 
 	//========================================
-	// 내부 헬퍼
+	// Internal helpers
 	//========================================
 
-	/** 버퍼 크기 조정 필요 여부 확인 */
+	/** Check if buffer resize is needed */
 	bool NeedsResize(int32 NewCount) const;
 
-	/** 버퍼 재생성 (크기 변경 시) */
+	/** Recreate buffer (when size changes) */
 	void ResizeBuffer(FRHICommandListBase& RHICmdList, int32 NewCapacity);
 };

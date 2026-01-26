@@ -24,12 +24,12 @@ const FEditorModeID FFluidBrushEditorMode::EM_FluidBrush = TEXT("EM_FluidBrush")
 
 FFluidBrushEditorMode::FFluidBrushEditorMode()
 {
-	// FEdMode 멤버 명시적 참조
+	// Explicit FEdMode member reference
 	FEdMode::Info = FEditorModeInfo(
 		EM_FluidBrush,
 		LOCTEXT("FluidBrushModeName", "Fluid Brush"),
 		FSlateIcon(),
-		false  // 툴바에 표시 안함
+		false  // Do not show in toolbar
 	);
 }
 
@@ -41,7 +41,7 @@ void FFluidBrushEditorMode::Enter()
 {
 	FEdMode::Enter();
 
-	// 선택 변경 델리게이트 바인딩
+	// Bind selection changed delegate
 	if (GEditor)
 	{
 		SelectionChangedHandle = USelection::SelectionChangedEvent.AddRaw(
@@ -53,21 +53,21 @@ void FFluidBrushEditorMode::Enter()
 
 void FFluidBrushEditorMode::Exit()
 {
-	// 선택 변경 델리게이트 언바인딩
+	// Unbind selection changed delegate
 	if (SelectionChangedHandle.IsValid())
 	{
 		USelection::SelectionChangedEvent.Remove(SelectionChangedHandle);
 		SelectionChangedHandle.Reset();
 	}
 
-	// Component 모드 정리
+	// Cleanup Component mode
 	if (TargetComponent.IsValid())
 	{
 		TargetComponent->bBrushModeActive = false;
 	}
 	TargetComponent.Reset();
 
-	// Volume 모드 정리
+	// Cleanup Volume mode
 	if (TargetVolumeComponent.IsValid())
 	{
 		TargetVolumeComponent->bBrushModeActive = false;
@@ -84,7 +84,7 @@ void FFluidBrushEditorMode::Exit()
 
 void FFluidBrushEditorMode::SetTargetComponent(UKawaiiFluidComponent* Component)
 {
-	// 기존 Volume 타겟 클리어
+	// Clear existing Volume target
 	TargetVolume.Reset();
 	TargetVolumeComponent.Reset();
 
@@ -102,7 +102,7 @@ void FFluidBrushEditorMode::SetTargetComponent(UKawaiiFluidComponent* Component)
 
 void FFluidBrushEditorMode::SetTargetVolume(AKawaiiFluidVolume* Volume)
 {
-	// 기존 Component 타겟 클리어
+	// Clear existing Component target
 	TargetComponent.Reset();
 
 	TargetVolume = Volume;
@@ -125,7 +125,7 @@ void FFluidBrushEditorMode::SetTargetVolume(AKawaiiFluidVolume* Volume)
 bool FFluidBrushEditorMode::InputKey(FEditorViewportClient* ViewportClient, FViewport* Viewport,
                                       FKey Key, EInputEvent Event)
 {
-	// Component 또는 Volume 중 하나가 유효해야 함
+	// Either Component or Volume must be valid
 	const bool bHasComponent = TargetComponent.IsValid();
 	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
 
@@ -134,15 +134,15 @@ bool FFluidBrushEditorMode::InputKey(FEditorViewportClient* ViewportClient, FVie
 		return false;
 	}
 
-	// BrushSettings 참조 (분기 처리)
-	FFluidBrushSettings& Settings = bHasVolume 
-		? TargetVolumeComponent->BrushSettings 
+	// Get BrushSettings reference (branched)
+	FFluidBrushSettings& Settings = bHasVolume
+		? TargetVolumeComponent->BrushSettings
 		: TargetComponent->BrushSettings;
 
-	// 좌클릭: 페인팅
+	// Left click: Painting
 	if (Key == EKeys::LeftMouseButton)
 	{
-		// Alt + 좌클릭 = 카메라 회전, 패스스루
+		// Alt + Left click = Camera rotation, pass through
 		if (ViewportClient->IsAltPressed())
 		{
 			return false;
@@ -168,14 +168,14 @@ bool FFluidBrushEditorMode::InputKey(FEditorViewportClient* ViewportClient, FVie
 
 	if (Event == IE_Pressed)
 	{
-		// ESC: 종료
+		// ESC: Exit
 		if (Key == EKeys::Escape)
 		{
 			GetModeManager()->DeactivateMode(EM_FluidBrush);
 			return true;
 		}
 
-		// [ ]: 크기 조절
+		// [ ]: Adjust size
 		if (Key == EKeys::LeftBracket)
 		{
 			Settings.Radius = FMath::Max(10.0f, Settings.Radius - 10.0f);
@@ -187,7 +187,7 @@ bool FFluidBrushEditorMode::InputKey(FEditorViewportClient* ViewportClient, FVie
 			return true;
 		}
 
-		// 1, 2: 모드 전환
+		// 1, 2: Switch mode
 		if (Key == EKeys::One)
 		{
 			Settings.Mode = EFluidBrushMode::Add;
@@ -206,17 +206,17 @@ bool FFluidBrushEditorMode::InputKey(FEditorViewportClient* ViewportClient, FVie
 bool FFluidBrushEditorMode::HandleClick(FEditorViewportClient* InViewportClient, HHitProxy* HitProxy,
                                          const FViewportClick& Click)
 {
-	// 좌클릭은 브러시로 처리, 선택 동작 막음
+	// Left click is handled by brush, block selection behavior
 	if (Click.GetKey() == EKeys::LeftMouseButton && !InViewportClient->IsAltPressed())
 	{
-		return true;  // 클릭 처리됨 - 선택 막음
+		return true;  // Click handled - block selection
 	}
 	return false;
 }
 
 bool FFluidBrushEditorMode::StartTracking(FEditorViewportClient* ViewportClient, FViewport* Viewport)
 {
-	// 트래킹 모드 사용 안 함 - InputKey에서 직접 처리
+	// Tracking mode not used - handled directly in InputKey
 	return false;
 }
 
@@ -230,7 +230,7 @@ bool FFluidBrushEditorMode::MouseMove(FEditorViewportClient* ViewportClient, FVi
 {
 	UpdateBrushLocation(ViewportClient, x, y);
 
-	// 페인팅 중이면 브러시 적용
+	// Apply brush if painting
 	if (bPainting && bValidLocation)
 	{
 		ApplyBrush();
@@ -278,10 +278,10 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 		return false;
 	}
 
-	// Volume 박스 정보 미리 계산
+	// Pre-calculate Volume box information
 	FBox VolumeBounds;
-	float tEntry = -1.0f;  // 진입점 (카메라→박스)
-	float tExit = -1.0f;   // 출구점 (박스 반대편)
+	float tEntry = -1.0f;  // Entry point (camera→box)
+	float tExit = -1.0f;   // Exit point (far side of box)
 	int32 entryAxis = -1;
 	int32 exitAxis = -1;
 	bool bEntryMinSide = false;
@@ -351,14 +351,14 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 		}
 	}
 
-	// 라인트레이스로 스태틱 메시 검사
+	// Line trace to check static meshes
 	FHitResult Hit;
 	FCollisionQueryParams QueryParams;
 	QueryParams.bTraceComplex = true;
 
 	if (World->LineTraceSingleByChannel(Hit, Origin, Origin + Direction * 50000.0f, ECC_Visibility, QueryParams))
 	{
-		// 히트가 박스 내부에 있는지 확인
+		// Check if hit is inside the box
 		if (bHasVolumeIntersection && VolumeBounds.IsInsideOrOn(Hit.Location))
 		{
 			BrushLocation = Hit.Location;
@@ -366,10 +366,10 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 			bValidLocation = true;
 			return true;
 		}
-		// 히트가 박스 밖이면 fallthrough해서 박스 면 사용
+		// If hit is outside box, fall through to use box face
 	}
 
-	// 박스 면에 브러시 위치
+	// Position brush on box face
 	if (bHasVolumeIntersection)
 	{
 		float tHit;
@@ -378,14 +378,14 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 
 		if (bCameraInsideBox)
 		{
-			// 카메라가 박스 안 → 출구점(반대편 면) 사용
+			// Camera inside box → use exit point (far side face)
 			tHit = tExit;
 			hitAxis = exitAxis;
 			bMinSide = bExitMinSide;
 		}
 		else if (tEntry >= 0.0f)
 		{
-			// 카메라가 박스 밖 → 진입점 사용
+			// Camera outside box → use entry point
 			tHit = tEntry;
 			hitAxis = entryAxis;
 			bMinSide = bEntryMinSide;
@@ -403,7 +403,7 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 			BrushNormal = FVector::ZeroVector;
 			if (hitAxis >= 0)
 			{
-				// 노말은 카메라를 향해야 함 (박스 안쪽으로 향하는 노말)
+				// Normal should face the camera (inward-facing normal)
 				BrushNormal[hitAxis] = bMinSide ? 1.0f : -1.0f;
 			}
 			else
@@ -416,7 +416,7 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 		}
 	}
 
-	// 히트 실패 시 브러시 비활성화
+	// Disable brush on hit failure
 	bValidLocation = false;
 	return false;
 }
@@ -428,7 +428,7 @@ void FFluidBrushEditorMode::ApplyBrush()
 		return;
 	}
 
-	// Component 또는 Volume 중 하나가 유효해야 함
+	// Either Component or Volume must be valid
 	const bool bHasComponent = TargetComponent.IsValid();
 	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
 
@@ -437,12 +437,12 @@ void FFluidBrushEditorMode::ApplyBrush()
 		return;
 	}
 
-	// BrushSettings 참조 (분기 처리)
-	const FFluidBrushSettings& Settings = bHasVolume 
-		? TargetVolumeComponent->BrushSettings 
+	// Get BrushSettings reference (branched)
+	const FFluidBrushSettings& Settings = bHasVolume
+		? TargetVolumeComponent->BrushSettings
 		: TargetComponent->BrushSettings;
 
-	// 스트로크 간격
+	// Stroke interval
 	double Now = FPlatformTime::Seconds();
 	if (Now - LastStrokeTime < Settings.StrokeInterval)
 	{
@@ -450,7 +450,7 @@ void FFluidBrushEditorMode::ApplyBrush()
 	}
 	LastStrokeTime = Now;
 
-	// Volume 모드
+	// Volume mode
 	if (bHasVolume)
 	{
 		TargetVolume->Modify();
@@ -472,7 +472,7 @@ void FFluidBrushEditorMode::ApplyBrush()
 				break;
 		}
 	}
-	// Component 모드
+	// Component mode
 	else
 	{
 		TargetComponent->Modify();
@@ -509,7 +509,7 @@ void FFluidBrushEditorMode::Render(const FSceneView* View, FViewport* Viewport, 
 
 void FFluidBrushEditorMode::DrawBrushPreview(FPrimitiveDrawInterface* PDI)
 {
-	// Component 또는 Volume 중 하나가 유효해야 함
+	// Either Component or Volume must be valid
 	const bool bHasComponent = TargetComponent.IsValid();
 	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
 
@@ -518,34 +518,34 @@ void FFluidBrushEditorMode::DrawBrushPreview(FPrimitiveDrawInterface* PDI)
 		return;
 	}
 
-	// BrushSettings 참조 (분기 처리)
-	const FFluidBrushSettings& Settings = bHasVolume 
-		? TargetVolumeComponent->BrushSettings 
+	// Get BrushSettings reference (branched)
+	const FFluidBrushSettings& Settings = bHasVolume
+		? TargetVolumeComponent->BrushSettings
 		: TargetComponent->BrushSettings;
 	FColor Color = GetBrushColor().ToFColor(true);
 
-	// 노말 기준 원 (실제 스폰 영역 - 반구의 바닥면)
+	// Circle based on normal (actual spawn area - hemisphere base)
 	FVector Tangent, Bitangent;
 	BrushNormal.FindBestAxisVectors(Tangent, Bitangent);
 	DrawCircle(PDI, BrushLocation, Tangent, Bitangent, Color, Settings.Radius, 32, SDPG_Foreground);
 
-	// 노말 방향 화살표 (스폰 방향 표시)
+	// Arrow in normal direction (shows spawn direction)
 	FVector ArrowEnd = BrushLocation + BrushNormal * Settings.Radius;
 	PDI->DrawLine(BrushLocation, ArrowEnd, Color, SDPG_Foreground, 2.0f);
 
-	// 화살표 머리
+	// Arrow head
 	FVector ArrowHead1 = ArrowEnd - BrushNormal * 15.0f + Tangent * 8.0f;
 	FVector ArrowHead2 = ArrowEnd - BrushNormal * 15.0f - Tangent * 8.0f;
 	PDI->DrawLine(ArrowEnd, ArrowHead1, Color, SDPG_Foreground, 2.0f);
 	PDI->DrawLine(ArrowEnd, ArrowHead2, Color, SDPG_Foreground, 2.0f);
 
-	// 중심점
+	// Center point
 	PDI->DrawPoint(BrushLocation, Color, 8.0f, SDPG_Foreground);
 }
 
 FLinearColor FFluidBrushEditorMode::GetBrushColor() const
 {
-	// Component 또는 Volume 중 하나가 유효해야 함
+	// Either Component or Volume must be valid
 	const bool bHasComponent = TargetComponent.IsValid();
 	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
 
@@ -554,9 +554,9 @@ FLinearColor FFluidBrushEditorMode::GetBrushColor() const
 		return FLinearColor::White;
 	}
 
-	// BrushSettings 참조 (분기 처리)
-	EFluidBrushMode Mode = bHasVolume 
-		? TargetVolumeComponent->BrushSettings.Mode 
+	// Get BrushSettings reference (branched)
+	EFluidBrushMode Mode = bHasVolume
+		? TargetVolumeComponent->BrushSettings.Mode
 		: TargetComponent->BrushSettings.Mode;
 
 	switch (Mode)
@@ -575,7 +575,7 @@ void FFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FView
 {
 	FEdMode::DrawHUD(ViewportClient, Viewport, View, Canvas);
 
-	// Component 또는 Volume 중 하나가 유효해야 함
+	// Either Component or Volume must be valid
 	const bool bHasComponent = TargetComponent.IsValid();
 	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
 
@@ -584,17 +584,17 @@ void FFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FView
 		return;
 	}
 
-	// BrushSettings 참조 (분기 처리)
-	const FFluidBrushSettings& Settings = bHasVolume 
-		? TargetVolumeComponent->BrushSettings 
+	// Get BrushSettings reference (branched)
+	const FFluidBrushSettings& Settings = bHasVolume
+		? TargetVolumeComponent->BrushSettings
 		: TargetComponent->BrushSettings;
 	FString ModeStr = (Settings.Mode == EFluidBrushMode::Add) ? TEXT("ADD") : TEXT("REMOVE");
 
-	// 파티클 개수 (분기 처리)
+	// Particle count (branched)
 	int32 ParticleCount = -1;
 	if (bHasVolume)
 	{
-		// Volume 모드: Volume의 SimulationModule에서 전체 파티클 수
+		// Volume mode: Total particle count from Volume's SimulationModule
 		if (UKawaiiFluidSimulationModule* SimModule = TargetVolume->GetSimulationModule())
 		{
 			ParticleCount = SimModule->GetParticleCount();
@@ -602,8 +602,8 @@ void FFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FView
 	}
 	else
 	{
-		// Component 모드: 이 컴포넌트가 소유한 파티클 수 (per-source count)
-		if (TargetComponent->GetSimulationModule()) 
+		// Component mode: Particle count owned by this component (per-source count)
+		if (TargetComponent->GetSimulationModule())
 		{
 			const int32 SourceID = TargetComponent->GetSimulationModule()->GetSourceID();
 			ParticleCount = TargetComponent->GetSimulationModule()->GetParticleCountForSource(SourceID);
@@ -622,7 +622,7 @@ void FFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FView
 
 bool FFluidBrushEditorMode::DisallowMouseDeltaTracking() const
 {
-	// Component 또는 Volume 중 하나가 유효해야 함
+	// Either Component or Volume must be valid
 	const bool bHasComponent = TargetComponent.IsValid();
 	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
 
@@ -631,20 +631,20 @@ bool FFluidBrushEditorMode::DisallowMouseDeltaTracking() const
 		return false;
 	}
 
-	// RMB/MMB는 카메라 조작 허용
+	// Allow camera manipulation with RMB/MMB
 	const TSet<FKey>& PressedButtons = FSlateApplication::Get().GetPressedMouseButtons();
 	if (PressedButtons.Contains(EKeys::RightMouseButton) || PressedButtons.Contains(EKeys::MiddleMouseButton))
 	{
 		return false;
 	}
 
-	// Alt 누르면 카메라 오빗 허용
+	// Allow camera orbit when Alt is pressed
 	if (FSlateApplication::Get().GetModifierKeys().IsAltDown())
 	{
 		return false;
 	}
 
-	// 그 외 (LMB 단독) = 브러시 모드이므로 카메라 트래킹 비활성화
+	// Otherwise (LMB only) = brush mode so disable camera tracking
 	return true;
 }
 
@@ -652,11 +652,11 @@ void FFluidBrushEditorMode::Tick(FEditorViewportClient* ViewportClient, float De
 {
 	FEdMode::Tick(ViewportClient, DeltaTime);
 
-	// Component 또는 Volume 중 하나가 유효해야 함
+	// Either Component or Volume must be valid
 	const bool bHasComponent = TargetComponent.IsValid();
 	const bool bHasVolume = TargetVolume.IsValid() && TargetVolumeComponent.IsValid();
 
-	// 타겟이 삭제됨
+	// Target destroyed
 	if (!bHasComponent && !bHasVolume)
 	{
 		UE_LOG(LogTemp, Log, TEXT("Fluid Brush Mode: Target destroyed, exiting"));
@@ -664,18 +664,18 @@ void FFluidBrushEditorMode::Tick(FEditorViewportClient* ViewportClient, float De
 		return;
 	}
 
-	// 조건 5: 뷰포트 포커스 잃음 체크
+	// Condition 5: Check viewport focus loss
 	if (ViewportClient && !ViewportClient->Viewport->HasFocus())
 	{
-		// 다른 창으로 포커스 이동 시에만 종료 (짧은 포커스 손실은 무시)
-		// 실제로는 뷰포트 전환 시에만 중요하므로 일단 생략
-		// 필요하면 타이머로 일정 시간 포커스 없으면 종료하도록 구현
+		// Exit only when focus moves to another window (ignore brief focus loss)
+		// Currently omitted as it's only important for viewport switching
+		// Can implement with timer to exit after certain duration without focus
 	}
 }
 
 void FFluidBrushEditorMode::OnSelectionChanged(UObject* Object)
 {
-	// 페인팅 중에는 선택 변경 무시
+	// Ignore selection changes while painting
 	if (bPainting)
 	{
 		return;
@@ -692,7 +692,7 @@ void FFluidBrushEditorMode::OnSelectionChanged(UObject* Object)
 		return;
 	}
 
-	// 아무것도 선택 안 됨 -> 종료
+	// Nothing selected -> exit
 	if (Selection->Num() == 0)
 	{
 		UE_LOG(LogTemp, Log, TEXT("Fluid Brush Mode: Selection cleared, exiting"));
@@ -700,7 +700,7 @@ void FFluidBrushEditorMode::OnSelectionChanged(UObject* Object)
 		return;
 	}
 
-	// 타겟 액터가 여전히 선택되어 있는지 확인
+	// Check if target actor is still selected
 	if (TargetOwnerActor.IsValid())
 	{
 		bool bTargetStillSelected = Selection->IsSelected(TargetOwnerActor.Get());

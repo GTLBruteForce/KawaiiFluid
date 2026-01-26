@@ -8,10 +8,10 @@
 class UFluidCollider;
 
 /**
- * 접착력 솔버
+ * @brief Adhesion solver.
  *
- * Akinci et al. 2013 "Versatile Surface Tension and Adhesion for SPH Fluids" 기반
- * 유체 입자가 표면(캐릭터, 벽 등)에 달라붙는 효과 구현
+ * Based on Akinci et al. 2013 "Versatile Surface Tension and Adhesion for SPH Fluids"
+ * Implements fluid particle adhesion to surfaces (characters, walls, etc.)
  */
 class KAWAIIFLUIDRUNTIME_API FAdhesionSolver
 {
@@ -19,14 +19,14 @@ public:
 	FAdhesionSolver();
 
 	/**
-	 * 접착력 적용
+	 * @brief Apply adhesion forces.
 	 *
-	 * @param Particles 입자 배열
-	 * @param Colliders 콜라이더 목록 (접착 대상)
-	 * @param AdhesionStrength 접착 강도 (0.0 ~ 1.0)
-	 * @param AdhesionRadius 접착 범위
-	 * @param DetachThreshold 분리 임계값
-	 * @param ColliderContactOffset 접촉 거리 보정값 (양수면 더 깊이 겹침 허용)
+	 * @param Particles Particle array
+	 * @param Colliders Collider list (adhesion targets)
+	 * @param AdhesionStrength Adhesion strength (0.0 ~ 1.0)
+	 * @param AdhesionRadius Adhesion range
+	 * @param DetachThreshold Detachment threshold
+	 * @param ColliderContactOffset Contact distance offset (positive allows deeper penetration)
 	 */
 	void Apply(
 		TArray<FFluidParticle>& Particles,
@@ -38,11 +38,11 @@ public:
 	);
 
 	/**
-	 * 입자 간 응집력 (표면 장력) 적용
+	 * @brief Apply inter-particle cohesion (surface tension).
 	 *
-	 * @param Particles 입자 배열
-	 * @param CohesionStrength 응집 강도
-	 * @param SmoothingRadius 커널 반경
+	 * @param Particles Particle array
+	 * @param CohesionStrength Cohesion strength
+	 * @param SmoothingRadius Kernel radius
 	 */
 	void ApplyCohesion(
 		TArray<FFluidParticle>& Particles,
@@ -52,7 +52,7 @@ public:
 
 private:
 	/**
-	 * 경계 표면과의 접착력 계산
+	 * @brief Compute adhesion force with boundary surface.
 	 */
 	FVector ComputeAdhesionForce(
 		const FVector& ParticlePos,
@@ -64,7 +64,7 @@ private:
 	);
 
 	/**
-	 * 접착 상태 업데이트
+	 * @brief Update attachment state.
 	 */
 	void UpdateAttachmentState(
 		FFluidParticle& Particle,

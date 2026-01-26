@@ -38,13 +38,13 @@ void UMeshFluidCollider::AutoFindMeshComponent()
 		return;
 	}
 
-	// 1순위: SkeletalMeshComponent (PhysicsAsset 기반 정밀 충돌)
+	// Priority 1: SkeletalMeshComponent (precise collision via PhysicsAsset)
 	USkeletalMeshComponent* SkelMesh = Owner->FindComponentByClass<USkeletalMeshComponent>();
 	if (SkelMesh)
 	{
 		TargetMeshComponent = SkelMesh;
 
-		// 디버그: PhysicsAsset 정보 출력
+		// Debug: log PhysicsAsset info
 		UPhysicsAsset* PhysAsset = SkelMesh->GetPhysicsAsset();
 		if (PhysAsset)
 		{
@@ -70,7 +70,7 @@ void UMeshFluidCollider::AutoFindMeshComponent()
 		return;
 	}
 
-	// 2순위: CapsuleComponent (단순 캡슐 충돌)
+	// Priority 2: CapsuleComponent (simple capsule collision)
 	UCapsuleComponent* Capsule = Owner->FindComponentByClass<UCapsuleComponent>();
 	if (Capsule)
 	{
@@ -79,7 +79,7 @@ void UMeshFluidCollider::AutoFindMeshComponent()
 		return;
 	}
 
-	// 3순위: StaticMeshComponent
+	// Priority 3: StaticMeshComponent
 	UStaticMeshComponent* StaticMesh = Owner->FindComponentByClass<UStaticMeshComponent>();
 	if (StaticMesh)
 	{
@@ -105,7 +105,7 @@ void UMeshFluidCollider::CacheCollisionShapes()
 		return;
 	}
 
-	// CapsuleComponent인 경우
+	// Handle CapsuleComponent
 	UCapsuleComponent* Capsule = Cast<UCapsuleComponent>(TargetMeshComponent);
 	if (Capsule)
 	{
@@ -128,7 +128,7 @@ void UMeshFluidCollider::CacheCollisionShapes()
 		return;
 	}
 
-	// SkeletalMeshComponent인 경우 - PhysicsAsset 사용
+	// Handle SkeletalMeshComponent - use PhysicsAsset
 	USkeletalMeshComponent* SkelMesh = Cast<USkeletalMeshComponent>(TargetMeshComponent);
 	if (SkelMesh)
 	{
@@ -139,7 +139,7 @@ void UMeshFluidCollider::CacheCollisionShapes()
 		}
 	}
 
-	// StaticMeshComponent인 경우 - Simple Collision 사용
+	// Handle StaticMeshComponent - use Simple Collision
 	UStaticMeshComponent* StaticMesh = Cast<UStaticMeshComponent>(TargetMeshComponent);
 	if (StaticMesh)
 	{
@@ -150,7 +150,7 @@ void UMeshFluidCollider::CacheCollisionShapes()
 		}
 	}
 
-	// 폴백: 바운딩 박스 사용
+	// Fallback: use bounding box
 	FBoxSphereBounds Bounds = TargetMeshComponent->Bounds;
 	CachedBounds = Bounds.GetBox();
 	bCacheValid = true;
@@ -179,7 +179,7 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 
 		FTransform BoneTransform = SkelMesh->GetBoneTransform(BoneIndex);
 
-		// 캡슐 캐싱
+		// Cache capsules
 		for (const FKSphylElem& SphylElem : BodySetup->AggGeom.SphylElems)
 		{
 			FTransform CapsuleLocalTransform = SphylElem.GetTransform();
@@ -198,9 +198,9 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			CachedCap.Radius = CapsuleRadius;
 			CachedCap.BoneName = BodySetup->BoneName;
 			CachedCap.BoneTransform = BoneTransform;
-			CachedCap.BoneIndex = BoneIndex;  // 본 인덱스 설정
+			CachedCap.BoneIndex = BoneIndex;  // Set bone index
 
-			// [디버깅] 캐시 시점의 BoneIndex 확인
+			// [Debug] Verify BoneIndex at cache time
 			int32 CachedIndex = CachedCapsules.Num();
 			//UE_LOG(LogTemp, Warning, TEXT("[CapsuleCache] Idx=%d, BoneName='%s', BoneIndex=%d"),CachedIndex, *BodySetup->BoneName.ToString(), BoneIndex);
 
@@ -210,7 +210,7 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			CachedBounds += CachedCap.End;
 		}
 
-		// 스피어 캐싱
+		// Cache spheres
 		for (const FKSphereElem& SphereElem : BodySetup->AggGeom.SphereElems)
 		{
 			FTransform SphereLocalTransform = SphereElem.GetTransform();
@@ -221,13 +221,13 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			CachedSph.Radius = SphereElem.Radius + CollisionMargin;
 			CachedSph.BoneName = BodySetup->BoneName;
 			CachedSph.BoneTransform = BoneTransform;
-			CachedSph.BoneIndex = BoneIndex;  // 본 인덱스 설정
+			CachedSph.BoneIndex = BoneIndex;  // Set bone index
 			CachedSpheres.Add(CachedSph);
 
 			CachedBounds += CachedSph.Center;
 		}
 
-		// 박스 캐싱
+		// Cache boxes
 		for (const FKBoxElem& BoxElem : BodySetup->AggGeom.BoxElems)
 		{
 			FTransform BoxLocalTransform = BoxElem.GetTransform();
@@ -241,10 +241,10 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			CachedBx.Rotation = BoxWorldTransform.GetRotation();
 			CachedBx.BoneName = BodySetup->BoneName;
 			CachedBx.BoneTransform = BoneTransform;
-			CachedBx.BoneIndex = BoneIndex;  // 본 인덱스 설정
+			CachedBx.BoneIndex = BoneIndex;  // Set bone index
 			CachedBoxes.Add(CachedBx);
 
-			// 박스 8개 코너 추가하여 바운딩 박스 확장
+			// Add 8 box corners to expand bounding box
 			for (int32 CornerIdx = 0; CornerIdx < 8; ++CornerIdx)
 			{
 				FVector LocalCorner(
@@ -257,22 +257,22 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			}
 		}
 
-		// Convex 캐싱
+		// Cache convex hulls
 		for (const FKConvexElem& ConvexElem : BodySetup->AggGeom.ConvexElems)
 		{
 			FCachedConvex CachedCvx;
 			CachedCvx.BoneName = BodySetup->BoneName;
 			CachedCvx.BoneTransform = BoneTransform;
-			CachedCvx.BoneIndex = BoneIndex;  // 본 인덱스 설정
+			CachedCvx.BoneIndex = BoneIndex;  // Set bone index
 
-			// 버텍스에서 평면 추출 (Convex Hull)
+			// Extract planes from vertices (Convex Hull)
 			const TArray<FVector>& VertexData = ConvexElem.VertexData;
 			if (VertexData.Num() < 4)
 			{
-				continue;  // 최소 4개의 정점 필요
+				continue;  // Need at least 4 vertices
 			}
 
-			// 월드 좌표로 변환된 버텍스
+			// Transform vertices to world space
 			TArray<FVector> WorldVerts;
 			WorldVerts.Reserve(VertexData.Num());
 			FVector CenterSum = FVector::ZeroVector;
@@ -295,11 +295,11 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 			}
 			CachedCvx.BoundingRadius = FMath::Sqrt(MaxDistSq) + CollisionMargin;
 
-			// Index 데이터에서 평면 생성
+			// Generate planes from index data
 			const TArray<int32>& IndexData = ConvexElem.IndexData;
 			if (IndexData.Num() >= 3)
 			{
-				// 삼각형마다 평면 생성 (중복 평면 제거 필요)
+				// Create a plane for each triangle (with duplicate removal)
 				TSet<uint32> PlaneHashes;
 				for (int32 i = 0; i + 2 < IndexData.Num(); i += 3)
 				{
@@ -322,14 +322,14 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 						{
 							Normal /= NormalLen;
 
-							// 외부를 향하도록 normal 방향 조정
+							// Adjust normal to face outward
 							FVector ToCenter = CachedCvx.Center - V0;
 							if (FVector::DotProduct(Normal, ToCenter) > 0)
 							{
 								Normal = -Normal;
 							}
 
-							// 해시로 중복 제거 (양자화된 normal 사용)
+							// Remove duplicates using hash (quantized normal)
 							int32 Nx = FMath::RoundToInt(Normal.X * 1000.0f);
 							int32 Ny = FMath::RoundToInt(Normal.Y * 1000.0f);
 							int32 Nz = FMath::RoundToInt(Normal.Z * 1000.0f);
@@ -358,7 +358,7 @@ void UMeshFluidCollider::CacheSkeletalMeshCollision(USkeletalMeshComponent* Skel
 
 	if (CachedCapsules.Num() > 0 || CachedSpheres.Num() > 0 || CachedBoxes.Num() > 0 || CachedConvexes.Num() > 0)
 	{
-		// 가장 큰 반경으로 바운딩 박스 확장
+		// Expand bounding box by largest radius
 		float MaxRadius = CollisionMargin;
 		for (const FCachedCapsule& Cap : CachedCapsules)
 		{
@@ -397,7 +397,7 @@ void UMeshFluidCollider::CacheStaticMeshCollision(UStaticMeshComponent* StaticMe
 
 	FTransform ComponentTransform = StaticMesh->GetComponentTransform();
 
-	// 스피어 캐싱
+	// Cache spheres
 	for (const FKSphereElem& SphereElem : BodySetup->AggGeom.SphereElems)
 	{
 		FTransform SphereLocalTransform = SphereElem.GetTransform();
@@ -413,7 +413,7 @@ void UMeshFluidCollider::CacheStaticMeshCollision(UStaticMeshComponent* StaticMe
 		CachedBounds += CachedSph.Center;
 	}
 
-	// 캡슐 캐싱
+	// Cache capsules
 	for (const FKSphylElem& SphylElem : BodySetup->AggGeom.SphylElems)
 	{
 		FTransform CapsuleLocalTransform = SphylElem.GetTransform();
@@ -439,7 +439,7 @@ void UMeshFluidCollider::CacheStaticMeshCollision(UStaticMeshComponent* StaticMe
 		CachedBounds += CachedCap.End;
 	}
 
-	// 박스 캐싱
+	// Cache boxes
 	for (const FKBoxElem& BoxElem : BodySetup->AggGeom.BoxElems)
 	{
 		FTransform BoxLocalTransform = BoxElem.GetTransform();
@@ -457,7 +457,7 @@ void UMeshFluidCollider::CacheStaticMeshCollision(UStaticMeshComponent* StaticMe
 		CachedBx.BoneTransform = ComponentTransform;
 		CachedBoxes.Add(CachedBx);
 
-		// 박스 8개 코너 추가
+		// Add 8 box corners
 		for (int32 CornerIdx = 0; CornerIdx < 8; ++CornerIdx)
 		{
 			FVector LocalCorner(
@@ -470,7 +470,7 @@ void UMeshFluidCollider::CacheStaticMeshCollision(UStaticMeshComponent* StaticMe
 		}
 	}
 
-	// Convex 캐싱
+	// Cache convex hulls
 	for (const FKConvexElem& ConvexElem : BodySetup->AggGeom.ConvexElems)
 	{
 		FCachedConvex CachedCvx;
@@ -483,7 +483,7 @@ void UMeshFluidCollider::CacheStaticMeshCollision(UStaticMeshComponent* StaticMe
 			continue;
 		}
 
-		// 월드 좌표로 변환
+		// Transform to world space
 		TArray<FVector> WorldVerts;
 		WorldVerts.Reserve(VertexData.Num());
 		FVector CenterSum = FVector::ZeroVector;
@@ -506,7 +506,7 @@ void UMeshFluidCollider::CacheStaticMeshCollision(UStaticMeshComponent* StaticMe
 		}
 		CachedCvx.BoundingRadius = FMath::Sqrt(MaxDistSq) + CollisionMargin;
 
-		// Index 데이터에서 평면 생성
+		// Generate planes from index data
 		const TArray<int32>& IndexData = ConvexElem.IndexData;
 		if (IndexData.Num() >= 3)
 		{
@@ -532,7 +532,7 @@ void UMeshFluidCollider::CacheStaticMeshCollision(UStaticMeshComponent* StaticMe
 					{
 						Normal /= NormalLen;
 
-						// 외부를 향하도록
+						// Adjust to face outward
 						FVector ToCenter = CachedCvx.Center - V0;
 						if (FVector::DotProduct(Normal, ToCenter) > 0)
 						{
@@ -598,8 +598,8 @@ bool UMeshFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClose
 		return false;
 	}
 
-	// AABB 컬링: 바운딩 박스 밖이면 스킵
-	const float CullingMargin = 50.0f;  // 충돌 마진 + 여유
+	// AABB culling: skip if outside bounding box
+	const float CullingMargin = 50.0f;  // Collision margin + safety
 	if (!CachedBounds.ExpandBy(CullingMargin).IsInside(Point))
 	{
 		return false;
@@ -608,10 +608,10 @@ bool UMeshFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClose
 	float MinDistance = TNumericLimits<float>::Max();
 	bool bFoundAny = false;
 
-	// 캐싱된 캡슐들 순회
+	// Iterate cached capsules
 	for (const FCachedCapsule& Cap : CachedCapsules)
 	{
-		// 캡슐 축에서 가장 가까운 점 찾기
+		// Find closest point on capsule axis
 		FVector SegmentDir = Cap.End - Cap.Start;
 		float SegmentLengthSq = SegmentDir.SizeSquared();
 
@@ -657,7 +657,7 @@ bool UMeshFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClose
 		}
 	}
 
-	// 캐싱된 스피어들 순회
+	// Iterate cached spheres
 	for (const FCachedSphere& Sph : CachedSpheres)
 	{
 		FVector ToPointVec = Point - Sph.Center;
@@ -690,19 +690,19 @@ bool UMeshFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClose
 		}
 	}
 
-	// 캐싱된 박스들 순회
+	// Iterate cached boxes
 	for (const FCachedBox& Box : CachedBoxes)
 	{
-		// 월드 좌표를 박스 로컬 좌표로 변환
+		// Transform world point to box local space
 		FVector LocalPoint = Box.Rotation.UnrotateVector(Point - Box.Center);
 
-		// 로컬 좌표에서 가장 가까운 점 찾기 (클램핑)
+		// Find closest point in local space (clamping)
 		FVector ClampedLocal;
 		ClampedLocal.X = FMath::Clamp(LocalPoint.X, -Box.Extent.X, Box.Extent.X);
 		ClampedLocal.Y = FMath::Clamp(LocalPoint.Y, -Box.Extent.Y, Box.Extent.Y);
 		ClampedLocal.Z = FMath::Clamp(LocalPoint.Z, -Box.Extent.Z, Box.Extent.Z);
 
-		// 다시 월드 좌표로 변환
+		// Transform back to world space
 		FVector TempClosestPoint = Box.Center + Box.Rotation.RotateVector(ClampedLocal);
 
 		FVector ToPointVec = Point - TempClosestPoint;
@@ -711,7 +711,7 @@ bool UMeshFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClose
 		FVector TempNormal;
 		if (TempDistance < KINDA_SMALL_NUMBER)
 		{
-			// 점이 박스 내부에 있음 - 가장 가까운 면으로 밀어냄
+			// Point is inside box - push to nearest face
 			FVector AbsLocal = LocalPoint.GetAbs();
 			FVector DistToFace = Box.Extent - AbsLocal;
 
@@ -748,17 +748,17 @@ bool UMeshFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClose
 		}
 	}
 
-	// 캐싱된 Convex들 순회
+	// Iterate cached convex hulls
 	for (const FCachedConvex& Cvx : CachedConvexes)
 	{
-		// Bounding sphere 컬링
+		// Bounding sphere culling
 		float BoundDist = FVector::Dist(Point, Cvx.Center) - Cvx.BoundingRadius;
 		if (BoundDist > MinDistance)
 		{
 			continue;
 		}
 
-		// Convex SDF: 모든 평면과의 부호 있는 거리 중 최대값
+		// Convex SDF: maximum signed distance among all planes
 		float MaxPlaneDist = -TNumericLimits<float>::Max();
 		FVector BestNormal = FVector::UpVector;
 
@@ -779,13 +779,13 @@ bool UMeshFluidCollider::GetClosestPoint(const FVector& Point, FVector& OutClose
 			MinDistance = TempDistance;
 			OutNormal = BestNormal;
 			OutDistance = TempDistance;
-			// Closest point는 point에서 normal 방향으로 distance만큼 이동
+			// Closest point is offset from query point by distance along normal
 			OutClosestPoint = Point - BestNormal * TempDistance;
 			bFoundAny = true;
 		}
 	}
 
-	// 캐싱된 데이터가 없으면 바운딩 박스 사용
+	// Fallback to bounding box if no cached data
 	if (!bFoundAny && TargetMeshComponent)
 	{
 		FVector BoxCenter = CachedBounds.GetCenter();
@@ -816,7 +816,7 @@ bool UMeshFluidCollider::GetClosestPointWithBone(const FVector& Point, FVector& 
 		return false;
 	}
 
-	// AABB 컬링: 바운딩 박스 밖이면 스킵
+	// AABB culling: skip if outside bounding box
 	const float CullingMargin = 50.0f;
 	if (!CachedBounds.ExpandBy(CullingMargin).IsInside(Point))
 	{
@@ -828,7 +828,7 @@ bool UMeshFluidCollider::GetClosestPointWithBone(const FVector& Point, FVector& 
 	float MinDistance = TNumericLimits<float>::Max();
 	bool bFoundAny = false;
 
-	// 캐싱된 캡슐들 순회
+	// Iterate cached capsules
 	for (const FCachedCapsule& Cap : CachedCapsules)
 	{
 		FVector SegmentDir = Cap.End - Cap.Start;
@@ -878,7 +878,7 @@ bool UMeshFluidCollider::GetClosestPointWithBone(const FVector& Point, FVector& 
 		}
 	}
 
-	// 캐싱된 스피어들 순회
+	// Iterate cached spheres
 	for (const FCachedSphere& Sph : CachedSpheres)
 	{
 		FVector ToPointVec = Point - Sph.Center;
@@ -913,19 +913,19 @@ bool UMeshFluidCollider::GetClosestPointWithBone(const FVector& Point, FVector& 
 		}
 	}
 
-	// 캐싱된 박스들 순회
+	// Iterate cached boxes
 	for (const FCachedBox& Box : CachedBoxes)
 	{
-		// 월드 좌표를 박스 로컬 좌표로 변환
+		// Transform world point to box local space
 		FVector LocalPoint = Box.Rotation.UnrotateVector(Point - Box.Center);
 
-		// 로컬 좌표에서 가장 가까운 점 찾기 (클램핑)
+		// Find closest point in local space (clamping)
 		FVector ClampedLocal;
 		ClampedLocal.X = FMath::Clamp(LocalPoint.X, -Box.Extent.X, Box.Extent.X);
 		ClampedLocal.Y = FMath::Clamp(LocalPoint.Y, -Box.Extent.Y, Box.Extent.Y);
 		ClampedLocal.Z = FMath::Clamp(LocalPoint.Z, -Box.Extent.Z, Box.Extent.Z);
 
-		// 다시 월드 좌표로 변환
+		// Transform back to world space
 		FVector TempClosestPoint = Box.Center + Box.Rotation.RotateVector(ClampedLocal);
 
 		FVector ToPointVec = Point - TempClosestPoint;
@@ -934,7 +934,7 @@ bool UMeshFluidCollider::GetClosestPointWithBone(const FVector& Point, FVector& 
 		FVector TempNormal;
 		if (TempDistance < KINDA_SMALL_NUMBER)
 		{
-			// 점이 박스 내부에 있음 - 가장 가까운 면으로 밀어냄
+			// Point is inside box - push to nearest face
 			FVector AbsLocal = LocalPoint.GetAbs();
 			FVector DistToFace = Box.Extent - AbsLocal;
 
@@ -973,17 +973,17 @@ bool UMeshFluidCollider::GetClosestPointWithBone(const FVector& Point, FVector& 
 		}
 	}
 
-	// 캐싱된 Convex들 순회
+	// Iterate cached convex hulls
 	for (const FCachedConvex& Cvx : CachedConvexes)
 	{
-		// Bounding sphere 컬링
+		// Bounding sphere culling
 		float BoundDist = FVector::Dist(Point, Cvx.Center) - Cvx.BoundingRadius;
 		if (BoundDist > MinDistance)
 		{
 			continue;
 		}
 
-		// Convex SDF: 모든 평면과의 부호 있는 거리 중 최대값
+		// Convex SDF: maximum signed distance among all planes
 		float MaxPlaneDist = -TNumericLimits<float>::Max();
 		FVector BestNormal = FVector::UpVector;
 
@@ -1011,7 +1011,7 @@ bool UMeshFluidCollider::GetClosestPointWithBone(const FVector& Point, FVector& 
 		}
 	}
 
-	// 캐싱된 데이터가 없으면 바운딩 박스 사용 (본 정보 없음)
+	// Fallback to bounding box if no cached data (no bone info)
 	if (!bFoundAny && TargetMeshComponent)
 	{
 		FVector BoxCenter = CachedBounds.GetCenter();
@@ -1042,7 +1042,7 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 		return false;
 	}
 
-	// CapsuleComponent인 경우
+	// Handle CapsuleComponent
 	UCapsuleComponent* Capsule = Cast<UCapsuleComponent>(TargetMeshComponent);
 	if (Capsule)
 	{
@@ -1066,7 +1066,7 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 		}
 	}
 
-	// SkeletalMeshComponent인 경우 - PhysicsAsset 사용
+	// Handle SkeletalMeshComponent - use PhysicsAsset
 	USkeletalMeshComponent* SkelMesh = Cast<USkeletalMeshComponent>(TargetMeshComponent);
 	if (SkelMesh)
 	{
@@ -1088,7 +1088,7 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 
 				FTransform BoneTransform = SkelMesh->GetBoneTransform(BoneIndex);
 
-				// PhysicsAsset의 Sphyl(캡슐) 요소들 처리
+				// Process PhysicsAsset Sphyl (capsule) elements
 				for (const FKSphylElem& SphylElem : BodySetup->AggGeom.SphylElems)
 				{
 					FTransform CapsuleLocalTransform = SphylElem.GetTransform();
@@ -1103,7 +1103,7 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 					FVector CapsuleStart = CapsuleCenter - CapsuleUp * HalfLength;
 					FVector CapsuleEnd = CapsuleCenter + CapsuleUp * HalfLength;
 
-					// 캡슐 축에서 가장 가까운 점 찾기
+					// Find closest point on capsule axis
 					FVector SegmentDir = CapsuleEnd - CapsuleStart;
 					float SegmentLengthSq = SegmentDir.SizeSquared();
 
@@ -1126,7 +1126,7 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 					}
 				}
 
-				// PhysicsAsset의 Sphere 요소들 처리
+				// Process PhysicsAsset Sphere elements
 				for (const FKSphereElem& SphereElem : BodySetup->AggGeom.SphereElems)
 				{
 					FTransform SphereLocalTransform = SphereElem.GetTransform();
@@ -1142,7 +1142,7 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 					}
 				}
 
-				// PhysicsAsset의 Box 요소들 처리
+				// Process PhysicsAsset Box elements
 				for (const FKBoxElem& BoxElem : BodySetup->AggGeom.BoxElems)
 				{
 					FTransform BoxLocalTransform = BoxElem.GetTransform();
@@ -1154,10 +1154,10 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 					                  BoxElem.Z * 0.5f + CollisionMargin);
 					FQuat BoxRotation = BoxWorldTransform.GetRotation();
 
-					// 월드 좌표를 박스 로컬 좌표로 변환
+					// Transform world point to box local space
 					FVector LocalPoint = BoxRotation.UnrotateVector(Point - BoxCenter);
 
-					// 로컬 좌표가 박스 범위 내인지 확인
+					// Check if local point is within box bounds
 					if (FMath::Abs(LocalPoint.X) <= BoxExtent.X &&
 					    FMath::Abs(LocalPoint.Y) <= BoxExtent.Y &&
 					    FMath::Abs(LocalPoint.Z) <= BoxExtent.Z)
@@ -1167,17 +1167,17 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 				}
 			}
 
-			// 캐싱된 Convex 체크 (PhysicsAsset에서 직접 읽지 않고 캐시 사용)
+			// Check cached convex hulls (use cache instead of reading from PhysicsAsset)
 			for (const FCachedConvex& Cvx : CachedConvexes)
 			{
-				// Bounding sphere 컬링
+				// Bounding sphere culling
 				float BoundDist = FVector::Dist(Point, Cvx.Center) - Cvx.BoundingRadius;
 				if (BoundDist > 0.0f)
 				{
 					continue;
 				}
 
-				// Convex 내부 = 모든 평면에 대해 부호 있는 거리가 음수
+				// Inside convex = signed distance is negative for all planes
 				bool bInside = true;
 				for (const FCachedConvexPlane& Plane : Cvx.Planes)
 				{
@@ -1199,17 +1199,17 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 		}
 	}
 
-	// 캐싱된 Convex 체크 (StaticMesh 등)
+	// Check cached convex hulls (StaticMesh, etc.)
 	for (const FCachedConvex& Cvx : CachedConvexes)
 	{
-		// Bounding sphere 컬링
+		// Bounding sphere culling
 		float BoundDist = FVector::Dist(Point, Cvx.Center) - Cvx.BoundingRadius;
 		if (BoundDist > 0.0f)
 		{
 			continue;
 		}
 
-		// Convex 내부 = 모든 평면에 대해 부호 있는 거리가 음수
+		// Inside convex = signed distance is negative for all planes
 		bool bInside = true;
 		for (const FCachedConvexPlane& Plane : Cvx.Planes)
 		{
@@ -1227,7 +1227,7 @@ bool UMeshFluidCollider::IsPointInside(const FVector& Point) const
 		}
 	}
 
-	// 폴백: 바운딩 박스 사용
+	// Fallback: use bounding box
 	FBoxSphereBounds Bounds = TargetMeshComponent->Bounds;
 	return Bounds.GetBox().IsInside(Point);
 }
@@ -1272,10 +1272,10 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUSphere.Radius = Sph.Radius;
 		GPUSphere.Friction = InFriction;
 		GPUSphere.Restitution = InRestitution;
-		GPUSphere.BoneIndex = Sph.BoneIndex;  // 캐시된 본 인덱스 사용
+		GPUSphere.BoneIndex = Sph.BoneIndex;  // Use cached bone index
 		GPUSphere.OwnerID = InOwnerID;
 
-		// [디버깅] GPU Collider 추가 로그 (첫 번째 호출에만)
+		// [Debug] GPU Collider log (first call only)
 		if (!bLoggedSpheres)
 		{
 			int32 ColliderArrayIndex = OutSpheres.Num();
@@ -1290,7 +1290,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 	// Export capsules
 	static int32 ExportCallCount = 0;
 	ExportCallCount++;
-	bool bShouldLog = (ExportCallCount <= 1);  // 첫 번째 호출만 로그
+	bool bShouldLog = (ExportCallCount <= 1);  // Log first call only
 
 	for (const FCachedCapsule& Cap : CachedCapsules)
 	{
@@ -1302,10 +1302,10 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUCapsule.Radius = Cap.Radius;
 		GPUCapsule.Friction = InFriction;
 		GPUCapsule.Restitution = InRestitution;
-		GPUCapsule.BoneIndex = Cap.BoneIndex;  // 캐시된 본 인덱스 사용
+		GPUCapsule.BoneIndex = Cap.BoneIndex;  // Use cached bone index
 		GPUCapsule.OwnerID = InOwnerID;
 
-		// [디버깅] GPU Export 시 BoneIndex 확인
+		// [Debug] Verify BoneIndex during GPU export
 		if (bShouldLog)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("[GPUExport] Capsule[%d]: BoneName='%s', BoneIndex=%d, OwnerID=%d"),
@@ -1329,7 +1329,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		);
 		GPUBox.Friction = InFriction;
 		GPUBox.Restitution = InRestitution;
-		GPUBox.BoneIndex = Box.BoneIndex;  // 캐시된 본 인덱스 사용
+		GPUBox.BoneIndex = Box.BoneIndex;  // Use cached bone index
 		GPUBox.OwnerID = InOwnerID;
 		OutBoxes.Add(GPUBox);
 	}
@@ -1344,7 +1344,7 @@ void UMeshFluidCollider::ExportToGPUPrimitives(
 		GPUConvex.PlaneCount = Cvx.Planes.Num();
 		GPUConvex.Friction = InFriction;
 		GPUConvex.Restitution = InRestitution;
-		GPUConvex.BoneIndex = Cvx.BoneIndex;  // 캐시된 본 인덱스 사용
+		GPUConvex.BoneIndex = Cvx.BoneIndex;  // Use cached bone index
 		GPUConvex.OwnerID = InOwnerID;
 		OutConvexes.Add(GPUConvex);
 
@@ -1392,7 +1392,7 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 		LoggedOwnerIDs.Add(InOwnerID);
 	}
 
-	// Helper lambda to get or create bone index
+	// Helper lambda: get or create bone index
 	auto GetOrCreateBoneIndex = [&](FName BoneName, const FTransform& BoneTransform) -> int32
 	{
 		if (BoneName == NAME_None)
@@ -1429,10 +1429,10 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 		GPUSphere.Radius = Sph.Radius;
 		GPUSphere.Friction = InFriction;
 		GPUSphere.Restitution = InRestitution;
-		GPUSphere.BoneIndex = Sph.BoneIndex;  // Skeleton BoneIndex 직접 사용 (BUG FIX)
+		GPUSphere.BoneIndex = Sph.BoneIndex;  // Use Skeleton BoneIndex directly (BUG FIX)
 		GPUSphere.OwnerID = InOwnerID;
 
-		// BoneTransforms 배열 업데이트 (속도 계산용)
+		// Update BoneTransforms array (for velocity calculation)
 		GetOrCreateBoneIndex(Sph.BoneName, Sph.BoneTransform);
 
 		OutSpheres.Add(GPUSphere);
@@ -1447,10 +1447,10 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 		GPUCapsule.Radius = Cap.Radius;
 		GPUCapsule.Friction = InFriction;
 		GPUCapsule.Restitution = InRestitution;
-		GPUCapsule.BoneIndex = Cap.BoneIndex;  // Skeleton BoneIndex 직접 사용 (BUG FIX)
+		GPUCapsule.BoneIndex = Cap.BoneIndex;  // Use Skeleton BoneIndex directly (BUG FIX)
 		GPUCapsule.OwnerID = InOwnerID;
 
-		// BoneTransforms 배열 업데이트 (속도 계산용)
+		// Update BoneTransforms array (for velocity calculation)
 		GetOrCreateBoneIndex(Cap.BoneName, Cap.BoneTransform);
 
 		OutCapsules.Add(GPUCapsule);
@@ -1470,10 +1470,10 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 		);
 		GPUBox.Friction = InFriction;
 		GPUBox.Restitution = InRestitution;
-		GPUBox.BoneIndex = Box.BoneIndex;  // Skeleton BoneIndex 직접 사용 (BUG FIX)
+		GPUBox.BoneIndex = Box.BoneIndex;  // Use Skeleton BoneIndex directly (BUG FIX)
 		GPUBox.OwnerID = InOwnerID;
 
-		// BoneTransforms 배열 업데이트 (속도 계산용)
+		// Update BoneTransforms array (for velocity calculation)
 		GetOrCreateBoneIndex(Box.BoneName, Box.BoneTransform);
 
 		OutBoxes.Add(GPUBox);
@@ -1489,10 +1489,10 @@ void UMeshFluidCollider::ExportToGPUPrimitivesWithBones(
 		GPUConvex.PlaneCount = Cvx.Planes.Num();
 		GPUConvex.Friction = InFriction;
 		GPUConvex.Restitution = InRestitution;
-		GPUConvex.BoneIndex = Cvx.BoneIndex;  // Skeleton BoneIndex 직접 사용 (BUG FIX)
+		GPUConvex.BoneIndex = Cvx.BoneIndex;  // Use Skeleton BoneIndex directly (BUG FIX)
 		GPUConvex.OwnerID = InOwnerID;
 
-		// BoneTransforms 배열 업데이트 (속도 계산용)
+		// Update BoneTransforms array (for velocity calculation)
 		GetOrCreateBoneIndex(Cvx.BoneName, Cvx.BoneTransform);
 
 		OutConvexes.Add(GPUConvex);

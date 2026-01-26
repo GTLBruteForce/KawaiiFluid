@@ -5,7 +5,7 @@
 #include "CoreMinimal.h"
 
 /**
- * 렌더링에 사용할 파티클 구조체 정의
+ * Particle structure for rendering
  */
 struct KAWAIIFLUIDRUNTIME_API FKawaiiRenderParticle
 {
@@ -13,7 +13,7 @@ public:
 	FVector3f Position;
 	FVector3f Velocity;
 	float Radius;
-	float Padding; // 16바이트 정렬을 위한 패딩
+	float Padding; // Padding for 16-byte alignment
 
 	FKawaiiRenderParticle()
 		: Position(FVector3f::ZeroVector)
@@ -24,8 +24,8 @@ public:
 	}
 };
 
-// 32 바이트 크기 확인
+// Verify 32-byte size
 static_assert(sizeof(FKawaiiRenderParticle) == 32, "FKawaiiRenderParticle size is not 32 bytes.");
 
-// 오프셋 검증
+// Verify offset
 static_assert(STRUCT_OFFSET(FKawaiiRenderParticle, Radius) == 24, "Radius offset is incorrect.");

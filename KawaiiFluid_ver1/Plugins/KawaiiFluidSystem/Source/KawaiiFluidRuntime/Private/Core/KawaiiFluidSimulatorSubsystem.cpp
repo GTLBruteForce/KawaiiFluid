@@ -116,7 +116,7 @@ void UKawaiiFluidSimulatorSubsystem::Tick(float DeltaTime)
 		//========================================
 		// Collision Feedback Processing (GPU + CPU)
 		//========================================
-		// OwnerID → InteractionComponent 맵 빌드 (한 번만, O(1) 조회용)
+		// Build OwnerID → InteractionComponent map (once, for O(1) lookup)
 		TMap<int32, UFluidInteractionComponent*> OwnerIDToIC;
 		OwnerIDToIC.Reserve(GlobalInteractionComponents.Num());
 		for (UFluidInteractionComponent* IC : GlobalInteractionComponents)
@@ -127,7 +127,7 @@ void UKawaiiFluidSimulatorSubsystem::Tick(float DeltaTime)
 			}
 		}
 
-		// 각 Module에 대해 ProcessCollisionFeedback 호출
+		// Call ProcessCollisionFeedback for each Module
 		for (UKawaiiFluidSimulationModule* Module : AllModules)
 		{
 			if (Module && Module->bEnableCollisionEvents)
@@ -136,7 +136,7 @@ void UKawaiiFluidSimulatorSubsystem::Tick(float DeltaTime)
 			}
 		}
 
-		// CPU 버퍼 클리어
+		// Clear CPU buffer
 		CPUCollisionFeedbackBuffer.Reset();
 	}
 }
@@ -188,7 +188,7 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 					Module->SetGPUSimulator(Context->GetGPUSimulatorShared());
 					Module->SetGPUSimulationActive(true);
 
-					// PIE/로드 후 캐시된 CPU 파티클을 GPU로 업로드
+					// Upload cached CPU particles to GPU after PIE/Load
 					Module->UploadCPUParticlesToGPU();
 
 					UE_LOG(LogTemp, Log, TEXT("SimulationModule: GPU simulation initialized at registration"));
@@ -442,7 +442,7 @@ UKawaiiFluidSimulationModule* UKawaiiFluidSimulatorSubsystem::GetModuleBySourceI
 		return nullptr;
 	}
 
-	// 방법 1: SourceID 슬롯 매칭 (AllocateSourceID 결과)
+	// Method 1: SourceID slot matching (AllocateSourceID result)
 	for (UKawaiiFluidSimulationModule* Module : AllModules)
 	{
 		if (Module && Module->GetSourceID() == SourceID)
@@ -451,7 +451,7 @@ UKawaiiFluidSimulationModule* UKawaiiFluidSimulatorSubsystem::GetModuleBySourceI
 		}
 	}
 
-	// 방법 2: AllFluidComponents에서 찾기 (레거시 UniqueID 매칭)
+	// Method 2: Search in AllFluidComponents (legacy UniqueID matching)
 	for (UKawaiiFluidComponent* Component : AllFluidComponents)
 	{
 		if (Component && Component->GetUniqueID() == SourceID)
@@ -460,7 +460,7 @@ UKawaiiFluidSimulationModule* UKawaiiFluidSimulatorSubsystem::GetModuleBySourceI
 		}
 	}
 
-	// 방법 3: AllModules의 Outer(Component)에서 찾기 (레거시 UniqueID 매칭)
+	// Method 3: Search in AllModules' Outer(Component) (legacy UniqueID matching)
 	for (UKawaiiFluidSimulationModule* Module : AllModules)
 	{
 		if (Module)
@@ -568,12 +568,12 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 			continue;
 		}
 
-		// Build simulation params - Module에서 직접 빌드!
+		// Build simulation params - directly from Module!
 		FKawaiiFluidSimulationParams Params = Module->BuildSimulationParams();
 		Params.Colliders.Append(GlobalColliders);
 		Params.InteractionComponents.Append(GlobalInteractionComponents);
 
-		// CPU 충돌 피드백 버퍼 포인터 설정 (Context에서 사용)
+		// Set CPU collision feedback buffer pointers (used by Context)
 		Params.CPUCollisionFeedbackBufferPtr = &CPUCollisionFeedbackBuffer;
 		Params.CPUCollisionFeedbackLockPtr = &CPUCollisionFeedbackLock;
 
@@ -642,12 +642,12 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaT
 			continue;
 		}
 
-		// Build merged simulation params - Module에서 직접!
+		// Build merged simulation params - directly from Module!
 		FKawaiiFluidSimulationParams Params = BuildMergedModuleSimulationParams(Modules);
 		Params.Colliders.Append(GlobalColliders);
 		Params.InteractionComponents.Append(GlobalInteractionComponents);
 
-		// CPU 충돌 피드백 버퍼 포인터 설정 (Context에서 사용)
+		// Set CPU collision feedback buffer pointers (used by Context)
 		Params.CPUCollisionFeedbackBufferPtr = &CPUCollisionFeedbackBuffer;
 		Params.CPUCollisionFeedbackLockPtr = &CPUCollisionFeedbackLock;
 
@@ -666,7 +666,7 @@ void UKawaiiFluidSimulatorSubsystem::SimulateBatchedFluidComponents(float DeltaT
 				{
 					Module->SetGPUSimulator(BatchGPUSimulator);
 					Module->SetGPUSimulationActive(true);
-					// Note: PIE/로드 후 업로드는 RegisterModule에서 처리됨
+					// Note: Upload after PIE/Load is handled in RegisterModule
 				}
 			}
 		}

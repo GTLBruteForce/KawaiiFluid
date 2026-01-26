@@ -859,9 +859,9 @@ static_assert(sizeof(FGPUBoundaryOwnerTransform) == 128, "FGPUBoundaryOwnerTrans
  * Uses Bone's local space for stable attachment (follows bone animation)
  * 64 bytes, 4-byte aligned (must match HLSL struct in FluidBoundaryAttachment.usf)
  *
- * 메모리 레이아웃 (64 bytes):
+ * Memory Layout (64 bytes):
  *   OwnerID         (4 bytes)  - int32
- *   BoneIndex       (4 bytes)  - int32 (스켈레톤 본 인덱스, -1 = component transform 사용)
+ *   BoneIndex       (4 bytes)  - int32 (skeleton bone index, -1 = use component transform)
  *   AdhesionStrength(4 bytes)  - float
  *   AttachmentTime  (4 bytes)  - float
  *   SurfaceDistance (4 bytes)  - float
@@ -1055,29 +1055,29 @@ struct FGPUBoundaryOwnerAABB
 static_assert(sizeof(FGPUBoundaryOwnerAABB) == 32, "FGPUBoundaryOwnerAABB must be 32 bytes");
 
 /**
- * GPU Boundary Particle (World-space 경계 입자)
- * GPU 셰이더와 메모리 레이아웃 일치 필요 (FluidBoundarySkinning.usf)
+ * GPU Boundary Particle (World-space boundary particle)
+ * Must match memory layout with GPU shader (FluidBoundarySkinning.usf)
  *
- * 메모리 레이아웃 (64 bytes):
+ * Memory Layout (64 bytes):
  *   Position      (12 bytes) - float3
  *   Psi           (4 bytes)  - float
  *   Normal        (12 bytes) - float3
  *   OwnerID       (4 bytes)  - int32
  *   Velocity      (12 bytes) - float3
  *   FrictionCoeff (4 bytes)  - float
- *   BoneIndex     (4 bytes)  - int32 (스켈레톤 본 인덱스, -1 = static mesh)
+ *   BoneIndex     (4 bytes)  - int32 (skeleton bone index, -1 = static mesh)
  *   Padding       (12 bytes) - float3 (alignment)
  */
 struct FGPUBoundaryParticle
 {
-	FVector3f Position;      // 월드 좌표 위치
-	float Psi;               // Boundary psi 값 (밀도 기여)
-	FVector3f Normal;        // 표면 법선
+	FVector3f Position;      // World position
+	float Psi;               // Boundary psi value (density contribution)
+	FVector3f Normal;        // Surface normal
 	int32 OwnerID;           // FluidInteractionComponent ID
-	FVector3f Velocity;      // 경계 입자 속도
-	float FrictionCoeff;     // 마찰 계수
-	int32 BoneIndex;         // 스켈레톤 본 인덱스 (-1 for static mesh)
-	FVector3f Padding;       // GPU 정렬용 패딩
+	FVector3f Velocity;      // Boundary particle velocity
+	float FrictionCoeff;     // Friction coefficient
+	int32 BoneIndex;         // Skeleton bone index (-1 for static mesh)
+	FVector3f Padding;       // GPU alignment padding
 
 	FGPUBoundaryParticle()
 		: Position(FVector3f::ZeroVector)
@@ -1137,11 +1137,11 @@ struct FGPUBoundaryParticles
 };
 
 /**
- * GPU Boundary Particle Local (Bone-local 경계 입자)
- * 스켈레탈 메시의 본 좌표계 기준 경계 입자 - GPU 스키닝용
- * 셰이더 FluidBoundarySkinning.usf의 FGPUBoundaryParticleLocal과 메모리 레이아웃 일치
+ * GPU Boundary Particle Local (Bone-local boundary particle)
+ * Boundary particle in skeletal mesh bone space - for GPU skinning
+ * Must match memory layout with shader FluidBoundarySkinning.usf FGPUBoundaryParticleLocal
  *
- * 메모리 레이아웃 (48 bytes):
+ * Memory Layout (48 bytes):
  *   LocalPosition (12 bytes) - float3
  *   Psi           (4 bytes)  - float
  *   LocalNormal   (12 bytes) - float3
@@ -1151,12 +1151,12 @@ struct FGPUBoundaryParticles
  */
 struct FGPUBoundaryParticleLocal
 {
-	FVector3f LocalPosition;    // 본 로컬 좌표 위치
-	float Psi;                  // Volume contribution (밀도 기여)
-	FVector3f LocalNormal;      // 본 로컬 표면 법선
-	float FrictionCoeff;        // Coulomb 마찰 계수 (0~2)
-	int32 BoneIndex;            // 스켈레톤 본 인덱스 (-1 for static mesh)
-	FVector3f Padding;          // GPU 정렬용 패딩
+	FVector3f LocalPosition;    // Bone-local position
+	float Psi;                  // Volume contribution (density contribution)
+	FVector3f LocalNormal;      // Bone-local surface normal
+	float FrictionCoeff;        // Coulomb friction coefficient (0~2)
+	int32 BoneIndex;            // Skeleton bone index (-1 for static mesh)
+	FVector3f Padding;          // GPU alignment padding
 
 	FGPUBoundaryParticleLocal()
 		: LocalPosition(FVector3f::ZeroVector)
@@ -1184,19 +1184,19 @@ static_assert(sizeof(FGPUBoundaryParticleLocal) == 48, "FGPUBoundaryParticleLoca
 
 /**
  * GPU Boundary Adhesion Parameters
- * Boundary Adhesion 패스에서 사용하는 파라미터 집합
+ * Parameter set used in boundary adhesion pass
  */
 struct FGPUBoundaryAdhesionParams
 {
-	int32 bEnabled = 0;                        // Adhesion 활성화 여부 (0 or 1)
-	float AdhesionForceStrength = 1.0f;        // Adhesion 힘 강도
-	float AdhesionVelocityStrength = 0.5f;     // Adhesion 속도 전달 강도
-	float AdhesionRadius = 50.0f;              // Adhesion 최대 거리 (cm)
-	float CohesionStrength = 1.0f;             // Cohesion 힘 강도
-	float SmoothingRadius = 25.0f;             // SPH 스무딩 반경 (cm)
-	int32 BoundaryParticleCount = 0;           // Boundary 파티클 수
-	int32 FluidParticleCount = 0;              // Fluid 파티클 수
-	float DeltaTime = 0.016f;                  // 델타 타임
+	int32 bEnabled = 0;                        // Enable adhesion (0 or 1)
+	float AdhesionForceStrength = 1.0f;        // Adhesion force strength
+	float AdhesionVelocityStrength = 0.5f;     // Adhesion velocity transfer strength
+	float AdhesionRadius = 50.0f;              // Maximum adhesion distance (cm)
+	float CohesionStrength = 1.0f;             // Cohesion force strength
+	float SmoothingRadius = 25.0f;             // SPH smoothing radius (cm)
+	int32 BoundaryParticleCount = 0;           // Number of boundary particles
+	int32 FluidParticleCount = 0;              // Number of fluid particles
+	float DeltaTime = 0.016f;                  // Delta time
 
 	FGPUBoundaryAdhesionParams() = default;
 };

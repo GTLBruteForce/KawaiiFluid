@@ -5,10 +5,10 @@
 
 UKawaiiSlimeSimulationModule::UKawaiiSlimeSimulationModule()
 {
-	// 슬라임은 기본적으로 Independent 모드
+	// Slime defaults to Independent mode
 	SetIndependentSimulation(true);
-	
-	// TODO: 슬라임 기능 구현 시 활성화
+
+	// TODO: Enable when slime features are implemented
 	bEnableShapeMatching = true;
 	bEnableClustering = true;
 	bEnableSurfaceTension = true;
@@ -21,7 +21,7 @@ void UKawaiiSlimeSimulationModule::Initialize(UKawaiiFluidPresetDataAsset* InPre
 {
 	Super::Initialize(InPreset);
 
-	// Owner Actor 위치로 Nucleus 초기화
+	// Initialize Nucleus to Owner Actor location
 	if (AActor* Owner = OwnerActorWeak.Get())
 	{
 		NucleusPosition = Owner->GetActorLocation();
@@ -29,7 +29,7 @@ void UKawaiiSlimeSimulationModule::Initialize(UKawaiiFluidPresetDataAsset* InPre
 }
 
 //========================================
-// Tick (슬라임 전용 로직)
+// Tick (Slime-specific logic)
 //========================================
 
 void UKawaiiSlimeSimulationModule::TickSlime(float DeltaTime)
@@ -41,14 +41,14 @@ void UKawaiiSlimeSimulationModule::TickSlime(float DeltaTime)
 		bRestShapeInitialized = true;
 	}
 
-	// 파티클 없으면 early out
+	// Early out if no particles
 	if (GetParticleCount() == 0)
 	{
 		return;
 	}
 
-	// === 레거시와 동일하게 슬라임 전용 로직 비활성화 ===
-	// TODO: 슬라임 기능 구현 시 활성화
+	// === Slime-specific logic disabled (same as legacy) ===
+	// TODO: Enable when slime features are implemented
 
 	// === Update Core Particles ===
 	//UpdateCoreParticles();
@@ -426,8 +426,8 @@ void UKawaiiSlimeSimulationModule::ApplyMovementInput(FVector Input)
 
 	Input = Input.GetClampedToMaxSize(1.0f);
 
-	// DeltaTime 추정 (실제로는 외부에서 전달받아야 함)
-	float DeltaTime = 0.016f; // ~60fps 가정
+	// Estimate DeltaTime (in practice should be passed externally)
+	float DeltaTime = 0.016f; // Assume ~60fps
 
 	// Apply input to nucleus velocity
 	NucleusVelocity += Input * MoveForce * DeltaTime;

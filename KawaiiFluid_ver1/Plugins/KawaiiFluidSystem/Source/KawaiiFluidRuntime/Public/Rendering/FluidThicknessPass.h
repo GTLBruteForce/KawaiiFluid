@@ -11,8 +11,8 @@ class UKawaiiFluidMetaballRenderer;
 typedef FRDGTexture* FRDGTextureRef;
 
 /**
- * Fluid Thickness 렌더링 패스 (Batched path)
- * 지정된 렌더러 리스트만 렌더링 (배치 최적화용)
+ * Fluid Thickness rendering pass (Batched path)
+ * Renders only specified renderer list (for batch optimization)
  */
 void RenderFluidThicknessPass(
 	FRDGBuilder& GraphBuilder,

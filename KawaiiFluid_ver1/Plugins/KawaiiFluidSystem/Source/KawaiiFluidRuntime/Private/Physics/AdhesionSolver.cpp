@@ -18,7 +18,7 @@ void FAdhesionSolver::Apply(
 	float DetachThreshold,
 	float ColliderContactOffset)
 {
-	// 디버그: AdhesionSolver 호출 확인
+	// Debug: Verify AdhesionSolver invocation
 	static int32 ApplyDebugCounter = 0;
 	if (++ApplyDebugCounter % 1000 == 0)
 	{
@@ -31,7 +31,7 @@ void FAdhesionSolver::Apply(
 		return;
 	}
 
-	// 결과 저장용 구조체
+	// Structure for storing results
 	struct FAdhesionResult
 	{
 		FVector Force;
@@ -39,14 +39,14 @@ void FAdhesionSolver::Apply(
 		float ForceMagnitude;
 		FName BoneName;
 		FTransform BoneTransform;
-		FVector ParticlePosition;  // 로컬 오프셋 계산용
-		FVector SurfaceNormal;     // 표면 미끄러짐 계산용
+		FVector ParticlePosition;  // For local offset calculation
+		FVector SurfaceNormal;     // For surface slip calculation
 	};
 
 	TArray<FAdhesionResult> Results;
 	Results.SetNum(Particles.Num());
 
-	// 병렬 계산 (읽기만 하므로 안전)
+	// Parallel computation (safe as read-only)
 	ParallelFor(Particles.Num(), [&](int32 i)
 	{
 		const FFluidParticle& Particle = Particles[i];
@@ -65,7 +65,7 @@ void FAdhesionSolver::Apply(
 				continue;
 			}
 
-			// 콜라이더에서 최근접점과 법선, 본 정보 얻기
+			// Get closest point, normal, and bone information from collider
 			FVector SurfacePoint;
 			FVector Normal;
 			float Distance;
@@ -76,7 +76,7 @@ void FAdhesionSolver::Apply(
 			{
 				const float AdjustedDistance = FMath::Max(0.0f, Distance - ColliderContactOffset);
 
-				// 가장 가까운 콜라이더 추적 (거리 무관하게)
+				// Track closest collider (regardless of distance)
 				if (AdjustedDistance < ClosestDistance)
 				{
 					ClosestDistance = AdjustedDistance;
@@ -89,12 +89,12 @@ void FAdhesionSolver::Apply(
 			}
 		}
 
-		// 접착력 계산: 상태에 따라 다른 마진 적용
-		// 이미 붙어있는 입자 (위에서 떨어지며 몸에 닿음): 엄격한 마진
+		// Adhesion force calculation: apply different margins based on state
+		// Already attached particles (falling from above onto body): strict margin
 		const float AttachMargin_Attached = 5.0f;
 		const float MaintainMargin_Attached = 15.0f;
-		const float MaintainMargin_NearGround = 5.0f;  // 바닥 근처일 때 감소된 마진
-		// 안 붙어있던 입자 (바닥에서 몸에 새로 붙음): 여유로운 마진
+		const float MaintainMargin_NearGround = 5.0f;  // Reduced margin when near ground
+		// Previously unattached particles (newly attaching from floor to body): relaxed margin
 		const float AttachMargin_New = 10.0f;
 
 		bool bShouldApplyAdhesion = false;
@@ -104,20 +104,20 @@ void FAdhesionSolver::Apply(
 		{
 			if (bSameActor)
 			{
-				// 같은 액터에 접착 유지 (바닥 근처면 마진 감소)
+				// Maintain adhesion to same actor (reduced margin if near ground)
 				float EffectiveMaintainMargin = Particle.bNearGround ? MaintainMargin_NearGround : MaintainMargin_Attached;
 				bShouldApplyAdhesion = (ClosestDistance <= EffectiveMaintainMargin);
 			}
 			else
 			{
-				// 다른 액터(바닥 등)가 더 가까움: 기존 접착 해제하고 새로 접착 판단
+				// Different actor (floor etc.) is closer: release existing adhesion and judge new attachment
 				bShouldApplyAdhesion = (ClosestDistance <= AttachMargin_Attached);
 			}
 		}
 		else if (!Particle.bJustDetached)
 		{
-			// 새로 접착: 여유로운 마진 (바닥에서 몸에 붙는 경우 등 대응)
-			// bJustDetached가 true면 이번 프레임에 분리된 것이므로 재접착 안함
+			// New attachment: relaxed margin (handles cases like attaching from floor to body)
+			// If bJustDetached is true, particle detached this frame so prevent reattachment
 			bShouldApplyAdhesion = (ClosestDistance <= AttachMargin_New);
 		}
 
@@ -125,20 +125,20 @@ void FAdhesionSolver::Apply(
 		{
 			if (bSameActor && ClosestDistance > AttachMargin_Attached)
 			{
-				// 같은 액터에서 멀어진 경우: 강한 복귀 힘 적용 (빠른 이동 대응)
+				// Moving away from same actor: apply strong recovery force (handles fast movement)
 				FVector ToSurface = ClosestSurfacePoint - Particle.Position;
 				float ToSurfaceLen = ToSurface.Size();
 				if (ToSurfaceLen > KINDA_SMALL_NUMBER)
 				{
 					FVector Direction = ToSurface / ToSurfaceLen;
-					// 거리에 비례하는 강한 복귀 힘 (스프링처럼)
+					// Strong recovery force proportional to distance (spring-like)
 					float RecoveryStrength = FMath::Min(ClosestDistance * 0.5f, 50.0f);
 					TotalAdhesionForce = Direction * RecoveryStrength;
 				}
 			}
 			else
 			{
-				// 일반 접착력 계산 (표면 가까이 있을 때)
+				// Normal adhesion force calculation (when close to surface)
 				FVector AdhesionForce = ComputeAdhesionForce(
 					Particle.Position,
 					ClosestSurfacePoint,
@@ -153,14 +153,14 @@ void FAdhesionSolver::Apply(
 		}
 		else
 		{
-			// 디버그: 분리 원인 로깅
+			// Debug: Log detachment reason
 			static int32 DistanceLogCounter = 0;
 			if (Particle.bIsAttached && ++DistanceLogCounter % 200 == 1)
 			{
 				UE_LOG(LogTemp, Warning, TEXT("[Distance] Particle %d: Dist=%.1f, SameActor=%d, Bone=%s"),
 					Particle.ParticleID, ClosestDistance, bSameActor ? 1 : 0, *Particle.AttachedBoneName.ToString());
 			}
-			// 접착 범위 밖이면 콜라이더 정보 클리어
+			// Clear collider information if outside adhesion range
 			ClosestColliderActor = nullptr;
 		}
 
@@ -173,7 +173,7 @@ void FAdhesionSolver::Apply(
 		Results[i].SurfaceNormal = ClosestSurfaceNormal;
 	});
 
-	// 순차 적용 (상태 변경이 있으므로)
+	// Sequential application (due to state changes)
 	for (int32 i = 0; i < Particles.Num(); ++i)
 	{
 		Particles[i].Velocity += Results[i].Force;
@@ -187,7 +187,7 @@ void FAdhesionSolver::Apply(
 			Results[i].ParticlePosition,
 			Results[i].SurfaceNormal
 		);
-		// 프레임 끝에서 분리 플래그 리셋 (다음 프레임에는 재접착 가능)
+		// Reset detachment flag at frame end (allow reattachment next frame)
 		Particles[i].bJustDetached = false;
 	}
 }
@@ -205,7 +205,7 @@ void FAdhesionSolver::ApplyCohesion(
 	TArray<FVector> CohesionForces;
 	CohesionForces.SetNum(Particles.Num());
 
-	// 병렬 계산
+	// Parallel computation
 	ParallelFor(Particles.Num(), [&](int32 i)
 	{
 		const FFluidParticle& Particle = Particles[i];
@@ -227,10 +227,10 @@ void FAdhesionSolver::ApplyCohesion(
 				continue;
 			}
 
-			// Cohesion 커널
+			// Cohesion kernel
 			float CohesionWeight = SPHKernels::Cohesion(Distance, SmoothingRadius);
 
-			// 응집력: 이웃 방향으로 당김
+			// Cohesion force: pull towards neighbors
 			FVector Direction = -r / Distance;
 			CohesionForce += CohesionStrength * CohesionWeight * Direction;
 		}
@@ -238,7 +238,7 @@ void FAdhesionSolver::ApplyCohesion(
 		CohesionForces[i] = CohesionForce;
 	});
 
-	// 병렬 적용
+	// Parallel application
 	ParallelFor(Particles.Num(), [&](int32 i)
 	{
 		Particles[i].Velocity += CohesionForces[i];
@@ -253,7 +253,7 @@ FVector FAdhesionSolver::ComputeAdhesionForce(
 	float AdhesionStrength,
 	float AdhesionRadius)
 {
-	// Adhesion 커널 값
+	// Adhesion kernel value
 	float AdhesionWeight = SPHKernels::Adhesion(Distance, AdhesionRadius);
 
 	if (AdhesionWeight <= 0.0f)
@@ -261,7 +261,7 @@ FVector FAdhesionSolver::ComputeAdhesionForce(
 		return FVector::ZeroVector;
 	}
 
-	// 표면 방향 벡터
+	// Surface direction vector
 	FVector ToSurface = SurfacePoint - ParticlePos;
 
 	if (ToSurface.SizeSquared() < KINDA_SMALL_NUMBER)
@@ -271,7 +271,7 @@ FVector FAdhesionSolver::ComputeAdhesionForce(
 
 	ToSurface.Normalize();
 
-	// 접착력: 표면 방향으로 당김
+	// Adhesion force: pull towards surface
 	FVector AdhesionForce = AdhesionStrength * AdhesionWeight * ToSurface;
 
 	return AdhesionForce;
@@ -287,7 +287,7 @@ void FAdhesionSolver::UpdateAttachmentState(
 	const FVector& ParticlePosition,
 	const FVector& SurfaceNormal)
 {
-	// 디버그: 분리 원인 추적
+	// Debug: Track detachment reason
 	static int32 DetachLogCounter = 0;
 	if (Particle.bIsAttached && !ColliderActor)
 	{
@@ -302,17 +302,17 @@ void FAdhesionSolver::UpdateAttachmentState(
 	{
 		if (!Particle.bIsAttached)
 		{
-		// 새로 접착
+		// New attachment
 			Particle.bIsAttached = true;
 			Particle.AttachedActor = TWeakObjectPtr<AActor>(ColliderActor);
 			Particle.AttachedBoneName = BoneName;
-			// 본 로컬 좌표로 변환하여 저장
+			// Transform and store in bone local coordinates
 			Particle.AttachedLocalOffset = BoneTransform.InverseTransformPosition(ParticlePosition);
 			Particle.AttachedSurfaceNormal = SurfaceNormal;
 		}
 		else if (Particle.AttachedActor.Get() != ColliderActor || Particle.AttachedBoneName != BoneName)
 		{
-		// 다른 오브젝트 또는 다른 본으로 이동
+		// Moving to different object or different bone
 			Particle.AttachedActor = TWeakObjectPtr<AActor>(ColliderActor);
 			Particle.AttachedBoneName = BoneName;
 			Particle.AttachedLocalOffset = BoneTransform.InverseTransformPosition(ParticlePosition);
@@ -320,14 +320,14 @@ void FAdhesionSolver::UpdateAttachmentState(
 		}
 		else
 		{
-			// 같은 본에 계속 접착: 시뮬레이션에 의한 위치 변화(흘러내림)를 로컬 오프셋에 반영
+			// Continue adhering to same bone: reflect simulation-induced position changes (dripping) in local offset
 			Particle.AttachedLocalOffset = BoneTransform.InverseTransformPosition(ParticlePosition);
 			Particle.AttachedSurfaceNormal = SurfaceNormal;
 		}
 	}
 	else
 	{
-		// 콜라이더 근처에 없으면 무조건 접착 해제
+		// Unconditionally release adhesion if not near collider
 		if (Particle.bIsAttached)
 		{
 			Particle.bIsAttached = false;

@@ -44,21 +44,21 @@ void FKawaiiFluidEditorModule::StartupModule()
 		FFluidBrushEditorMode::EM_FluidBrush,
 		LOCTEXT("FluidBrushModeName", "Fluid Brush"),
 		FSlateIcon(),
-		false  // 툴바에 표시 안함
+		false  // Do not show in toolbar
 	);
 
-	// 커스텀 썸네일 렌더러 등록
+	// Register custom thumbnail renderer
 	UThumbnailManager::Get().RegisterCustomRenderer(
 		UKawaiiFluidPresetDataAsset::StaticClass(),
 		UKawaiiFluidPresetThumbnailRenderer::StaticClass());
 
-	// 에셋 저장 시 썸네일 자동 갱신 이벤트 바인딩
+	// Bind event for automatic thumbnail refresh on asset save
 	UPackage::PreSavePackageWithContextEvent.AddRaw(this, &FKawaiiFluidEditorModule::HandleAssetPreSave);
 }
 
 void FKawaiiFluidEditorModule::ShutdownModule()
 {
-	// 이벤트 바인딩 해제
+	// Unbind event
 	UPackage::PreSavePackageWithContextEvent.RemoveAll(this);
 
 	if (!GExitPurge && !IsEngineExitRequested() && UObjectInitialized())
@@ -88,7 +88,7 @@ void FKawaiiFluidEditorModule::HandleAssetPreSave(UPackage* InPackage, FObjectPr
 {
 	if (!InPackage) return;
 
-	// 패키지 내부에 우리 프리셋 에셋이 있는지 확인합니다.
+	// Check if our preset asset exists inside the package
 	TArray<UObject*> ObjectsInPackage;
 	GetObjectsWithOuter(InPackage, ObjectsInPackage);
 
@@ -96,8 +96,8 @@ void FKawaiiFluidEditorModule::HandleAssetPreSave(UPackage* InPackage, FObjectPr
 	{
 		if (UKawaiiFluidPresetDataAsset* Preset = Cast<UKawaiiFluidPresetDataAsset>(Obj))
 		{
-			// 이 시점에 ThumbnailTools를 호출하면, Draw가 그린 최신 결과가 
-			// .uasset 파일의 썸네일 섹션에 물리적으로 기록됩니다.
+			// Calling ThumbnailTools at this point physically writes the latest Draw result
+			// to the thumbnail section of the .uasset file.
 			ThumbnailTools::GenerateThumbnailForObjectToSaveToDisk(Preset);
 		}
 	}

@@ -33,10 +33,10 @@ void RenderFluidThicknessPass(
 		return;
 	}
 
-	// 뷰포트 크기로 텍스처 생성
+	// Create texture with viewport size
 	FIntPoint TextureSize = View.UnscaledViewRect.Size();
 
-	// Thickness Texture 생성
+	// Create Thickness Texture
 	FRDGTextureDesc ThicknessDesc = FRDGTextureDesc::Create2D(
 		TextureSize,
 		PF_R16F,
@@ -52,7 +52,7 @@ void RenderFluidThicknessPass(
 	float ThicknessScale = Renderers[0]->GetLocalParameters().ThicknessScale;
 	float ParticleRadius = Renderers[0]->GetLocalParameters().ParticleRenderRadius;
 
-	// 중복 처리 방지를 위해 처리된 RenderResource 추적
+	// Track processed RenderResources to prevent duplicate processing
 	TSet<FKawaiiFluidRenderResource*> ProcessedResources;
 
 	// Render each renderer's particles (batch-specific only)
@@ -63,7 +63,7 @@ void RenderFluidThicknessPass(
 		FKawaiiFluidRenderResource* RR = Renderer->GetFluidRenderResource();
 		if (!RR || !RR->IsValid()) continue;
 
-		// 이미 처리된 RenderResource는 스킵
+		// Skip already processed RenderResources
 		if (ProcessedResources.Contains(RR))
 		{
 			continue;
@@ -83,11 +83,11 @@ void RenderFluidThicknessPass(
 			continue;
 		}
 
-		// Position 버퍼 가져오기 (GPU/CPU 공통 - ViewExtension에서 항상 생성됨)
+		// Get Position buffer (GPU/CPU common - always created by ViewExtension)
 		TRefCountPtr<FRDGPooledBuffer> PositionPooledBuffer = RR->GetPooledPositionBuffer();
 		if (!PositionPooledBuffer.IsValid())
 		{
-			// ViewExtension에서 버퍼가 생성되지 않았으면 스킵
+			// Skip if buffer not created by ViewExtension
 			continue;
 		}
 
@@ -96,7 +96,7 @@ void RenderFluidThicknessPass(
 			TEXT("SSFRThicknessPositions"));
 		ParticleBufferSRV = GraphBuilder.CreateSRV(PositionBuffer);
 
-		// 유효한 파티클이 없으면 스킵
+		// Skip if no valid particles
 		if (!ParticleBufferSRV || ParticleCount == 0)
 		{
 			continue;
@@ -112,11 +112,11 @@ void RenderFluidThicknessPass(
 		PassParameters->ProjectionMatrix = FMatrix44f(ProjectionMatrix);
 		PassParameters->ThicknessScale = ThicknessScale; // Use from LocalParameters
 
-		// Occlusion test를 위한 SceneDepth 파라미터
+		// SceneDepth parameters for occlusion test
 		PassParameters->SceneDepthTexture = SceneDepthTexture;
 		PassParameters->SceneDepthSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 
-		// SceneDepth UV 변환을 위한 ViewRect와 텍스처 크기
+		// ViewRect and texture size for SceneDepth UV transformation
 		const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
 		PassParameters->SceneViewRect = FVector2f(
 			ViewInfo.ViewRect.Width(),
@@ -147,9 +147,9 @@ void RenderFluidThicknessPass(
 				GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
 
 				GraphicsPSOInit.BlendState = TStaticBlendState<
-					CW_RED, // R채널만 사용 (R16F)
+					CW_RED, // R channel only (R16F)
 					BO_Add, BF_One, BF_One, // Color: Add(Src, Dst)
-					BO_Add, BF_Zero, BF_One // Alpha: Add(0, 1) -> Alpha는 안 건드림
+					BO_Add, BF_Zero, BF_One // Alpha: Add(0, 1) - don't modify Alpha
 				>::GetRHI();
 				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
 				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<

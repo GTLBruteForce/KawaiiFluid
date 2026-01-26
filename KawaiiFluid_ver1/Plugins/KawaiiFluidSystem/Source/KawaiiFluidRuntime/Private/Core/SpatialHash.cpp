@@ -18,7 +18,7 @@ void FSpatialHash::Clear()
 {
 	++RebuildCounter;
 
-	// 주기적으로 빈 셀 정리 (메모리 누수 방지)
+	// Periodically purge empty cells (prevent memory leaks)
 	if (RebuildCounter >= PurgeInterval)
 	{
 		Grid.Empty();
@@ -27,7 +27,7 @@ void FSpatialHash::Clear()
 	}
 	else
 	{
-		// 메모리 재할당 없이 비우기 (capacity 유지)
+		// Clear without reallocation (maintain capacity)
 		for (auto& Pair : Grid)
 		{
 			Pair.Value.Reset();
@@ -43,10 +43,10 @@ void FSpatialHash::SetCellSize(float NewCellSize)
 
 void FSpatialHash::Insert(int32 ParticleIndex, const FVector& Position)
 {
-	// 셀 좌표 계산 
+	// Calculate cell coordinates
 	FIntVector CellCoord = GetCellCoord(Position);
 
-	// 해당 셀에 인덱스 추가
+	// Add index to the corresponding cell
 	Grid.FindOrAdd(CellCoord).Add(ParticleIndex);
 }
 
@@ -54,15 +54,15 @@ void FSpatialHash::GetNeighbors(const FVector& Position, float Radius, TArray<in
 {
 	OutNeighbors.Reset();
 
-	// 검색할 셀 범위 계산
+	// Calculate cell range to search
 	int32 CellRadius = FMath::CeilToInt(Radius / CellSize);
 	FIntVector CenterCell = GetCellCoord(Position);
 
-	// 거리 필터링용 제곱 반경
+	// Squared radius for distance filtering
 	const float RadiusSq = Radius * Radius;
 	const bool bHasCachedPositions = CachedPositions.Num() > 0;
 
-	// 주변 셀들 순회
+	// Iterate through neighboring cells
 	for (int32 x = -CellRadius; x <= CellRadius; ++x)
 	{
 		for (int32 y = -CellRadius; y <= CellRadius; ++y)
@@ -73,7 +73,7 @@ void FSpatialHash::GetNeighbors(const FVector& Position, float Radius, TArray<in
 
 				if (const TArray<int32>* CellParticles = Grid.Find(CellCoord))
 				{
-					// 거리 필터링: 실제 반경 내 입자만 추가
+					// Distance filtering: only add particles within actual radius
 					if (bHasCachedPositions)
 					{
 						for (int32 Idx : *CellParticles)
@@ -86,7 +86,7 @@ void FSpatialHash::GetNeighbors(const FVector& Position, float Radius, TArray<in
 					}
 					else
 					{
-						// 폴백: 캐시 없으면 기존 방식
+						// Fallback: use existing method if no cache
 						OutNeighbors.Append(*CellParticles);
 					}
 				}
@@ -99,11 +99,11 @@ void FSpatialHash::QueryBox(const FBox& Box, TArray<int32>& OutIndices) const
 {
 	OutIndices.Reset();
 
-	// 박스를 셀 좌표로 변환
+	// Convert box to cell coordinates
 	FIntVector MinCell = GetCellCoord(Box.Min);
 	FIntVector MaxCell = GetCellCoord(Box.Max);
 
-	// 해당 범위 셀들만 순회
+	// Iterate only through cells in range
 	for (int32 x = MinCell.X; x <= MaxCell.X; ++x)
 	{
 		for (int32 y = MinCell.Y; y <= MaxCell.Y; ++y)
@@ -123,7 +123,7 @@ void FSpatialHash::BuildFromPositions(const TArray<FVector>& Positions)
 {
 	Clear();
 
-	// 위치 배열 캐싱 (거리 필터링용)
+	// Cache position array (for distance filtering)
 	CachedPositions = Positions;
 
 	for (int32 i = 0; i < Positions.Num(); ++i)

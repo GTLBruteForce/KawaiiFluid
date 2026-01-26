@@ -158,16 +158,16 @@ void FGPUSpawnManager::AddDespawnByIDRequest(int32 ParticleID)
 {
 	FScopeLock Lock(&DespawnByIDLock);
 
-	// 중복 체크 (binary search O(log n))
+	// Check for duplicates using binary search O(log n)
 	auto It = std::lower_bound(AlreadyRequestedIDs.GetData(),
 		AlreadyRequestedIDs.GetData() + AlreadyRequestedIDs.Num(), ParticleID);
 
 	if (It != AlreadyRequestedIDs.GetData() + AlreadyRequestedIDs.Num() && *It == ParticleID)
 	{
-		return;  // 이미 요청됨
+		return;  // Already requested
 	}
 
-	// 정렬 위치에 삽입
+	// Insert at sorted position
 	const int32 InsertIdx = It - AlreadyRequestedIDs.GetData();
 	AlreadyRequestedIDs.Insert(ParticleID, InsertIdx);
 
@@ -186,13 +186,13 @@ void FGPUSpawnManager::CleanupCompletedRequests(const TArray<int32>& AlivePartic
 
 	if (AliveParticleIDs.Num() == 0)
 	{
-		// 파티클이 없으면 모든 요청이 완료된 것
+		// If no particles exist, all requests are completed
 		AlreadyRequestedIDs.Empty();
 		return;
 	}
 
-	// 두 배열 모두 정렬됨 → std::set_intersection O(n+m)
-	// AlreadyRequestedIDs ∩ AliveParticleIDs = 아직 살아있는 요청 ID
+	// Both arrays are sorted → std::set_intersection O(n+m)
+	// AlreadyRequestedIDs ∩ AliveParticleIDs = IDs that are still alive
 	TArray<int32> StillPending;
 	StillPending.SetNumUninitialized(AlreadyRequestedIDs.Num());  // 최대 크기 할당
 
@@ -224,8 +224,8 @@ void FGPUSpawnManager::AddDespawnByIDRequests(const TArray<int32>& ParticleIDs)
 
 	const int32 OriginalCount = ParticleIDs.Num();
 
-	// ParticleIDs는 이미 정렬됨 (RemoveOldestParticles에서 정렬된 readback 사용)
-	// std::set_difference로 새로운 ID만 추출 O(n+m)
+	// ParticleIDs are already sorted (using sorted readback from RemoveOldestParticles)
+	// Extract only new IDs using std::set_difference O(n+m)
 	TArray<int32> NewIDs;
 	NewIDs.SetNumUninitialized(OriginalCount);  // 최대 크기 할당
 
@@ -239,10 +239,10 @@ void FGPUSpawnManager::AddDespawnByIDRequests(const TArray<int32>& ParticleIDs)
 
 	if (FilteredCount > 0)
 	{
-		// 새 ID들을 PendingDespawnByIDs에 추가
+		// Add new IDs to PendingDespawnByIDs
 		PendingDespawnByIDs.Append(NewIDs);
 
-		// AlreadyRequestedIDs에 merge (정렬 유지)
+		// Merge into AlreadyRequestedIDs (maintaining sorted order)
 		TArray<int32> Merged;
 		Merged.SetNumUninitialized(AlreadyRequestedIDs.Num() + FilteredCount);
 
@@ -513,7 +513,7 @@ void FGPUSpawnManager::AddDespawnByIDPass(FRDGBuilder& GraphBuilder, FRDGBufferR
 		ActiveDespawnByIDs.Num(), InOutParticleCount);
 
 	// Clear active IDs after processing
-	// AlreadyRequestedIDs는 AddDespawnByIDRequests에서 Readback 기반으로 cleanup됨
+	// AlreadyRequestedIDs is cleaned up via readback in AddDespawnByIDRequests
 	ActiveDespawnByIDs.Empty();
 }
 
@@ -556,16 +556,16 @@ FRDGBufferUAVRef FGPUSpawnManager::RegisterSourceCounterUAV(FRDGBuilder& GraphBu
 
 int32 FGPUSpawnManager::GetParticleCountForSource(int32 SourceID) const
 {
-	// SourceID 범위 체크
+	// Check SourceID range
 	if (SourceID < 0 || SourceID >= EGPUParticleSource::MaxSourceCount)
 	{
-		return -1;  // 잘못된 SourceID
+		return -1;  // Invalid SourceID
 	}
 
-	// GPU 버퍼가 아직 생성 안됐으면 데이터 없음
+	// If GPU buffer not yet created, no data available
 	if (!SourceCounterBuffer.IsValid())
 	{
-		return -1;  // 데이터 미준비
+		return -1;  // Data not ready
 	}
 
 	FScopeLock Lock(&SourceCountLock);
@@ -702,7 +702,7 @@ void FGPUSpawnManager::InitializeSourceCountersFromParticles(const TArray<FGPUFl
 		CachedSourceCounts = SourceCounts;
 	}
 
-	// GPU 버퍼 생성 또는 업데이트
+	// Create or update GPU buffer
 	TArray<uint32> CountsUint32;
 	CountsUint32.SetNumUninitialized(EGPUParticleSource::MaxSourceCount);
 	for (int32 i = 0; i < EGPUParticleSource::MaxSourceCount; ++i)
@@ -721,7 +721,7 @@ void FGPUSpawnManager::InitializeSourceCountersFromParticles(const TArray<FGPUFl
 			FRDGBufferRef CounterBuffer;
 			if (!Self->SourceCounterBuffer.IsValid())
 			{
-				// 버퍼가 없으면 초기 데이터와 함께 생성
+				// Create buffer with initial data if not exists
 				CounterBuffer = CreateStructuredBuffer(
 					GraphBuilder,
 					TEXT("GPUSourceCounters"),
@@ -735,7 +735,7 @@ void FGPUSpawnManager::InitializeSourceCountersFromParticles(const TArray<FGPUFl
 			}
 			else
 			{
-				// 버퍼가 있으면 업로드만
+				// Buffer exists, just upload data
 				CounterBuffer = GraphBuilder.RegisterExternalBuffer(Self->SourceCounterBuffer, TEXT("GPUSourceCounters"));
 				GraphBuilder.QueueBufferUpload(CounterBuffer, CountsCopy.GetData(), CountsCopy.Num() * sizeof(uint32));
 			}

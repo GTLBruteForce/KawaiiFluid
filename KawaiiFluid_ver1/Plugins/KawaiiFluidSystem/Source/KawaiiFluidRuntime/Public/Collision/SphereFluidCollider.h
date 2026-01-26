@@ -7,7 +7,7 @@
 #include "SphereFluidCollider.generated.h"
 
 /**
- * 구체 형태 유체 콜라이더
+ * @brief Sphere-shaped fluid collider.
  */
 UCLASS(ClassGroup=(KawaiiFluid), meta=(BlueprintSpawnableComponent))
 class KAWAIIFLUIDRUNTIME_API USphereFluidCollider : public UFluidCollider

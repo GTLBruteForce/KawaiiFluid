@@ -154,8 +154,8 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 	}
 
 	// =====================================================
-	// GPU 경로: RenderResource에 시뮬레이터 참조 설정
-	// 렌더 스레드에서 RenderResource를 통해 GPU 버퍼에 직접 접근
+	// GPU path: Set simulator reference in RenderResource
+	// Render thread accesses GPU buffers directly through RenderResource
 	// =====================================================
 	FGPUFluidSimulator* Simulator = DataProvider->GetGPUSimulator();
 
@@ -172,7 +172,7 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 	// Get particle count (atomic, thread-safe read)
 	const int32 GPUParticleCount = Simulator->GetParticleCount();
 
-	// 렌더 스레드에서 RenderResource를 통해 GPU 버퍼에 접근
+	// Access GPU buffers through RenderResource on render thread
 	if (FKawaiiFluidRenderResource* RR = GetFluidRenderResource())
 	{
 		RR->SetGPUSimulatorReference(Simulator, GPUParticleCount, RenderRadius);
@@ -189,7 +189,7 @@ void UKawaiiFluidMetaballRenderer::UpdateRendering(const IKawaiiFluidDataProvide
 	static int32 FrameCounter = 0;
 	if (++FrameCounter % 60 == 0)
 	{
-		UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: GPU mode - RenderResource에 시뮬레이터 참조 설정 (%d particles, radius: %.2f)"),
+		UE_LOG(LogTemp, Log, TEXT("MetaballRenderer: GPU mode - Set simulator reference in RenderResource (%d particles, radius: %.2f)"),
 			GPUParticleCount, RenderRadius);
 	}
 }

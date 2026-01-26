@@ -121,7 +121,7 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 	RDG_EVENT_SCOPE(GraphBuilder, "KawaiiFluid_PrepareRenderResources");
 	
 
-	// 중복 처리 방지를 위해 처리된 RenderResource 추적
+	// Track processed RenderResources to prevent duplicate processing
 	TSet<FKawaiiFluidRenderResource*> ProcessedResources;
 
 	const TArray<TObjectPtr<UKawaiiFluidRenderingModule>>& Modules = SubsystemPtr->GetAllRenderingModules();
@@ -141,14 +141,14 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 			continue;
 		}
 
-		// 이미 처리된 RenderResource는 스킵
+		// Skip already processed RenderResources
 		if (ProcessedResources.Contains(RenderResource))
 		{
 			continue;
 		}
 		ProcessedResources.Add(RenderResource);
 
-		// GPU-only: GPUSimulator에서 버퍼 추출
+		// GPU-only: Extract buffers from GPUSimulator
 		FGPUFluidSimulator* GPUSimulator = RenderResource->GetGPUSimulator();
 		const float ParticleRadius = RenderResource->GetUnifiedParticleRadius();
 
@@ -167,20 +167,20 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 
 		RDG_EVENT_SCOPE(GraphBuilder, "ExtractToRenderResource_GPU");
 
-		// Physics 버퍼 등록
+		// Register Physics buffer
 		FRDGBufferRef PhysicsBuffer = GraphBuilder.RegisterExternalBuffer(
 			PhysicsPooledBuffer,
 			TEXT("PhysicsParticles_Extract")
 		);
 		FRDGBufferSRVRef PhysicsBufferSRV = GraphBuilder.CreateSRV(PhysicsBuffer);
 
-		// Pooled 버퍼 가져오기
+		// Get Pooled buffers
 		TRefCountPtr<FRDGPooledBuffer> PositionPooledBuffer = RenderResource->GetPooledPositionBuffer();
 		TRefCountPtr<FRDGPooledBuffer> VelocityPooledBuffer = RenderResource->GetPooledVelocityBuffer();
 		TRefCountPtr<FRDGPooledBuffer> RenderParticlePooled = RenderResource->GetPooledRenderParticleBuffer();
 		TRefCountPtr<FRDGPooledBuffer> BoundsPooled = RenderResource->GetPooledBoundsBuffer();
 
-		// RenderParticle + Bounds 버퍼 추출 (SDF용)
+		// Extract RenderParticle + Bounds buffers (for SDF)
 		float BoundsMargin = ParticleRadius * 2.0f + 5.0f;
 
 		if (RenderParticlePooled.IsValid() && BoundsPooled.IsValid())
@@ -204,8 +204,8 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 			);
 		}
 
-		// SoA 버퍼 추출 (Position/Velocity)
-		
+		// Extract SoA buffers (Position/Velocity)
+
 		if (PositionPooledBuffer.IsValid() && VelocityPooledBuffer.IsValid())
 		{
 			FRDGBufferRef PositionBuffer = GraphBuilder.RegisterExternalBuffer(
@@ -226,7 +226,7 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 			);
 		}
 
-		// 버퍼 준비 완료
+		// Buffer preparation complete
 		RenderResource->SetBufferReadyForRendering(true);
 	}
 }

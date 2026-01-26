@@ -27,7 +27,7 @@ public:
 	FFluidPreviewScene(FPreviewScene::ConstructionValues CVS);
 	virtual ~FFluidPreviewScene() override;
 
-	/** GC 방지 */
+	/** Prevent GC */
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
 
 	//========================================

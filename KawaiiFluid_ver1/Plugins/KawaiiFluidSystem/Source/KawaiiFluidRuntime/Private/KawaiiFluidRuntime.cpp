@@ -9,7 +9,7 @@
 
 void FKawaiiFluidRuntimeModule::StartupModule()
 {
-	// 플러그인 셰이더 디렉토리 매핑
+	// Map plugin shader directory
 	FString PluginShaderPath = FPaths::Combine(IPluginManager::Get().FindPlugin(TEXT("KawaiiFluidSystem"))->GetBaseDir(), TEXT("Shaders"));
 	AddShaderSourceDirectoryMapping(TEXT("/Plugin/KawaiiFluidSystem"), PluginShaderPath);
 

@@ -10,8 +10,8 @@ class AKawaiiFluidVolume;
 class UKawaiiFluidVolumeComponent;
 
 /**
- * 플루이드 파티클 브러시 에디터 모드
- * 디테일 패널 버튼으로 활성화되며, 특정 FluidComponent를 타겟으로 동작
+ * Fluid particle brush editor mode
+ * Activated by detail panel button and operates on a specific FluidComponent target
  */
 class FFluidBrushEditorMode : public FEdMode
 {
@@ -45,64 +45,64 @@ public:
 	virtual void Tick(FEditorViewportClient* ViewportClient, float DeltaTime) override;
 	//~ End FEdMode Interface
 
-	/** 타겟 컴포넌트 설정 (KawaiiFluidComponent용) */
+	/** Set target component (for KawaiiFluidComponent) */
 	void SetTargetComponent(UKawaiiFluidComponent* Component);
 
-	/** 타겟 볼륨 설정 (KawaiiFluidVolume용) */
+	/** Set target volume (for KawaiiFluidVolume) */
 	void SetTargetVolume(AKawaiiFluidVolume* Volume);
 
-	/** 타겟 컴포넌트 반환 */
+	/** Get target component */
 	UKawaiiFluidComponent* GetTargetComponent() const { return TargetComponent.Get(); }
 
-	/** 타겟 볼륨 반환 */
+	/** Get target volume */
 	AKawaiiFluidVolume* GetTargetVolume() const { return TargetVolume.Get(); }
 
-	/** 현재 타겟이 Volume인지 확인 */
+	/** Check if currently targeting Volume */
 	bool IsTargetingVolume() const { return TargetVolume.IsValid(); }
 
 private:
-	/** 타겟 플루이드 컴포넌트 (KawaiiFluidComponent 모드) */
+	/** Target fluid component (KawaiiFluidComponent mode) */
 	TWeakObjectPtr<UKawaiiFluidComponent> TargetComponent;
 
-	/** 타겟 볼륨 (KawaiiFluidVolume 모드) */
+	/** Target volume (KawaiiFluidVolume mode) */
 	TWeakObjectPtr<AKawaiiFluidVolume> TargetVolume;
 
-	/** 타겟 볼륨 컴포넌트 (BrushSettings 접근용) */
+	/** Target volume component (for BrushSettings access) */
 	TWeakObjectPtr<UKawaiiFluidVolumeComponent> TargetVolumeComponent;
 
-	/** 현재 브러시 위치 */
+	/** Current brush location */
 	FVector BrushLocation {};
 
-	/** 브러시 히트 노말 (표면 방향) */
+	/** Brush hit normal (surface direction) */
 	FVector BrushNormal { FVector::UpVector };
 
-	/** 유효한 브러시 위치인지 */
+	/** Whether brush location is valid */
 	bool bValidLocation = false;
 
-	/** 페인팅 중인지 */
+	/** Whether currently painting */
 	bool bPainting = false;
 
-	/** 마지막 스트로크 시간 */
+	/** Last stroke time */
 	double LastStrokeTime = 0.0;
 
-	/** 선택 변경 델리게이트 핸들 */
+	/** Selection changed delegate handle */
 	FDelegateHandle SelectionChangedHandle;
 
-	/** 선택 변경 시 호출 */
+	/** Called on selection change */
 	void OnSelectionChanged(UObject* Object);
 
-	/** 타겟 컴포넌트 소유 액터 (선택 변경 감지용) */
+	/** Target component owner actor (for selection change detection) */
 	TWeakObjectPtr<AActor> TargetOwnerActor;
 
-	/** 브러시 위치 업데이트 */
+	/** Update brush location */
 	bool UpdateBrushLocation(FEditorViewportClient* ViewportClient, int32 MouseX, int32 MouseY);
 
-	/** 브러시 적용 */
+	/** Apply brush */
 	void ApplyBrush();
 
-	/** 브러시 미리보기 그리기 */
+	/** Draw brush preview */
 	void DrawBrushPreview(FPrimitiveDrawInterface* PDI);
 
-	/** 브러시 모드별 색상 반환 */
+	/** Get brush color by mode */
 	FLinearColor GetBrushColor() const;
 };

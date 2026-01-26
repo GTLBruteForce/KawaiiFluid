@@ -23,23 +23,23 @@ class UKawaiiFluidVolumeComponent;
 class AKawaiiFluidVolume;
 
 /**
- * 유체 시뮬레이션 데이터 모듈 (UObject 기반)
+ * Fluid simulation data module (UObject-based)
  *
- * 시뮬레이션에 필요한 데이터를 소유하고 Blueprint API를 제공합니다.
- * 실제 시뮬레이션 로직은 UKawaiiFluidSimulationContext가 처리하고,
- * 오케스트레이션은 UKawaiiFluidSimulatorSubsystem이 담당합니다.
+ * Owns data required for simulation and provides Blueprint API.
+ * Actual simulation logic is handled by UKawaiiFluidSimulationContext,
+ * orchestration is managed by UKawaiiFluidSimulatorSubsystem.
  *
- * 책임:
- * - 파티클 배열 소유
- * - SpatialHash 소유 (Independent 모드용)
- * - 콜라이더/상호작용 컴포넌트 레퍼런스 관리
- * - Preset 레퍼런스 관리
- * - 외력 누적
- * - 파티클 생성/삭제 API
+ * Responsibilities:
+ * - Owns particle array
+ * - Owns SpatialHash (for Independent mode)
+ * - Manages collider/interaction component references
+ * - Manages Preset reference
+ * - Accumulates external forces
+ * - Particle spawn/despawn API
  *
- * 사용:
- * - UKawaiiFluidComponent에 Instanced로 포함
- * - Blueprint에서 직접 함수 호출 가능
+ * Usage:
+ * - Included as Instanced in UKawaiiFluidComponent
+ * - Blueprint functions directly callable
  */
 UCLASS(DefaultToInstanced, EditInlineNew, BlueprintType)
 class KAWAIIFLUIDRUNTIME_API UKawaiiFluidSimulationModule : public UObject, public IKawaiiFluidDataProvider
@@ -61,34 +61,34 @@ public:
 #endif
 
 	//========================================
-	// 초기화 / 정리
+	// Initialization / Cleanup
 	//========================================
 
-	/** 모듈 초기화 */
+	/** Initialize module */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Module")
 	virtual void Initialize(UKawaiiFluidPresetDataAsset* InPreset);
 
-	/** 모듈 정리 */
+	/** Cleanup module */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Module")
 	void Shutdown();
 
-	/** 초기화 상태 확인 */
+	/** Check initialization state */
 	UFUNCTION(BlueprintPure, Category = "Fluid|Module")
 	bool IsInitialized() const { return bIsInitialized; }
 
 	//========================================
-	// Preset / 파라미터
+	// Preset / Parameters
 	//========================================
 
-	/** Preset 설정 */
+	/** Set preset */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Module")
 	void SetPreset(UKawaiiFluidPresetDataAsset* InPreset);
 
-	/** Preset 가져오기 */
+	/** Get preset */
 	UFUNCTION(BlueprintPure, Category = "Fluid|Module")
 	UKawaiiFluidPresetDataAsset* GetPreset() const { return Preset; }
 
-	/** 시뮬레이션 파라미터 빌드 */
+	/** Build simulation parameters */
 	virtual FKawaiiFluidSimulationParams BuildSimulationParams() const;
 
 	//========================================
@@ -96,20 +96,20 @@ public:
 	//========================================
 
 	/**
-	 * 유체 타입 (Water, Lava, Slime 등)
-	 * 충돌 이벤트에서 어떤 유체인지 식별하는 데 사용
-	 * FluidInteractionComponent의 OnBoneParticleCollision에서 이 타입이 전달됨
-	 * BP에서 Switch on EFluidType으로 분기 가능
+	 * Fluid type (Water, Lava, Slime, etc.)
+	 * Used to identify which fluid in collision events
+	 * This type is passed in FluidInteractionComponent's OnBoneParticleCollision
+	 * Can branch in BP using Switch on EFluidType
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Identification",
-	          meta = (ToolTip = "유체 타입.\n충돌 이벤트에서 어떤 유체와 충돌했는지 구분하는 데 사용됩니다.\nBP에서 Switch on EFluidType으로 분기할 수 있습니다."))
+	          meta = (ToolTip = "Fluid type.\nUsed to distinguish which fluid collided in collision events.\nCan branch in BP using Switch on EFluidType."))
 	EFluidType FluidType = EFluidType::None;
 
-	/** 유체 타입 반환 */
+	/** Get fluid type */
 	UFUNCTION(BlueprintPure, Category = "Fluid|Identification")
 	EFluidType GetFluidType() const { return FluidType; }
 
-	/** 유체 타입 설정 */
+	/** Set fluid type */
 	UFUNCTION(BlueprintCallable, Category = "Fluid|Identification")
 	void SetFluidType(EFluidType InFluidType) { FluidType = InFluidType; }
 

@@ -8,9 +8,8 @@
 #include "FluidCollider.generated.h"
 
 /**
- * 유체 콜라이더 베이스 클래스
- *
- * 유체 입자와 상호작용하는 충돌체의 기본 인터페이스
+ * @brief Base class for fluid colliders.
+ * @details Provides the base interface for collision objects that interact with fluid particles.
  */
 UCLASS(Abstract, BlueprintType, Blueprintable, ClassGroup=(KawaiiFluid), meta=(BlueprintSpawnableComponent))
 class KAWAIIFLUIDRUNTIME_API UFluidCollider : public UActorComponent
@@ -20,23 +19,23 @@ class KAWAIIFLUIDRUNTIME_API UFluidCollider : public UActorComponent
 public:
 	UFluidCollider();
 
-	/** 콜라이더 활성화 */
+	/** Enable/disable collider */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Collider")
 	bool bColliderEnabled;
 
-	/** 마찰 계수 */
+	/** Friction coefficient (0 = no friction, 1 = maximum friction) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Collider", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float Friction;
 
-	/** 반발 계수 */
+	/** Restitution coefficient (0 = no bounce, 1 = full elastic bounce) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Collider", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float Restitution;
 
-	/** 접착 가능 여부 */
+	/** Allow adhesion to this collider */
 	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Collider")
 	//bool bAllowAdhesion;
 
-	/** 접착력 배율 */
+	/** Adhesion force multiplier */
 	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Collider", meta = (ClampMin = "0.0", ClampMax = "2.0", EditCondition = "bAllowAdhesion"))
 	//float AdhesionMultiplier;
 
@@ -50,13 +49,13 @@ public:
 	 */
 	virtual void ResolveCollisions(TArray<FFluidParticle>& Particles, float SubstepDT);
 
-	/** 충돌 형상 캐싱 (프레임당 한 번 호출) */
+	/** Cache collision shapes (called once per frame) */
 	virtual void CacheCollisionShapes() {}
 
-	/** 캐시된 바운딩 박스 반환 */
+	/** Get cached bounding box */
 	virtual FBox GetCachedBounds() const { return FBox(ForceInit); }
 
-	/** 캐시가 유효한지 */
+	/** Check if cached data is valid */
 	virtual bool IsCacheValid() const { return false; }
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid Collider")
@@ -72,7 +71,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Fluid Collider")
 	virtual float GetSignedDistance(const FVector& Point, FVector& OutGradient) const;
 
-	/** 최근접점과 함께 해당 본 이름, 본 트랜스폼도 반환 (스켈레탈 메시용) */
+	/** Get closest point along with bone name and transform (for skeletal mesh colliders) */
 	UFUNCTION(BlueprintCallable, Category = "Fluid Collider")
 	virtual bool GetClosestPointWithBone(const FVector& Point, FVector& OutClosestPoint, FVector& OutNormal, float& OutDistance, FName& OutBoneName, FTransform& OutBoneTransform) const;
 

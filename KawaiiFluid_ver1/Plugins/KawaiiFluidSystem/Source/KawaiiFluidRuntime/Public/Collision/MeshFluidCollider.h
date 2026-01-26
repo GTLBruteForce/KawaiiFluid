@@ -6,7 +6,7 @@
 #include "Collision/FluidCollider.h"
 #include "MeshFluidCollider.generated.h"
 
-/** 캐싱된 캡슐 데이터 */
+/** Cached capsule collision data */
 struct FCachedCapsule
 {
 	FVector Start;
@@ -17,7 +17,7 @@ struct FCachedCapsule
 	int32 BoneIndex = -1;  // Index for GPU bone transform buffer
 };
 
-/** 캐싱된 스피어 데이터 */
+/** Cached sphere collision data */
 struct FCachedSphere
 {
 	FVector Center;
@@ -27,7 +27,7 @@ struct FCachedSphere
 	int32 BoneIndex = -1;  // Index for GPU bone transform buffer
 };
 
-/** 캐싱된 박스 데이터 */
+/** Cached box collision data */
 struct FCachedBox
 {
 	FVector Center;
@@ -38,27 +38,27 @@ struct FCachedBox
 	int32 BoneIndex = -1;  // Index for GPU bone transform buffer
 };
 
-/** Convex 평면 데이터 */
+/** Convex plane data */
 struct FCachedConvexPlane
 {
-	FVector Normal;      // 외부를 향하는 단위 법선
-	float Distance;      // 원점에서의 부호 있는 거리
+	FVector Normal;      // Outward-facing unit normal
+	float Distance;      // Signed distance from origin
 };
 
-/** 캐싱된 Convex Hull 데이터 */
+/** Cached convex hull collision data */
 struct FCachedConvex
 {
-	FVector Center;           // Bounding sphere 중심
-	float BoundingRadius;     // Bounding sphere 반경
-	TArray<FCachedConvexPlane> Planes;  // Convex 정의하는 평면들
+	FVector Center;           // Bounding sphere center
+	float BoundingRadius;     // Bounding sphere radius
+	TArray<FCachedConvexPlane> Planes;  // Planes defining the convex hull
 	FName BoneName;
 	FTransform BoneTransform;
 	int32 BoneIndex = -1;  // Index for GPU bone transform buffer
 };
 
 /**
- * 메시 기반 유체 콜라이더
- * 캐릭터나 복잡한 형태의 오브젝트와 상호작용
+ * @brief Mesh-based fluid collider.
+ * @details Handles collision with characters or complex objects using simplified collision shapes.
  */
 UCLASS(ClassGroup=(KawaiiFluid), meta=(BlueprintSpawnableComponent))
 class KAWAIIFLUIDRUNTIME_API UMeshFluidCollider : public UFluidCollider
@@ -85,13 +85,13 @@ public:
 	virtual bool IsPointInside(const FVector& Point) const override;
 	virtual void CacheCollisionShapes() override;
 
-	/** 캐시된 바운딩 박스 반환 */
+	/** Get cached bounding box */
 	virtual FBox GetCachedBounds() const override { return CachedBounds; }
 
-	/** 캐시가 유효한지 */
+	/** Check if cached data is valid */
 	virtual bool IsCacheValid() const override { return bCacheValid; }
 
-	/** GPU 충돌용 primitive 데이터 내보내기 */
+	/** Export primitive data for GPU collision */
 	void ExportToGPUPrimitives(
 		TArray<struct FGPUCollisionSphere>& OutSpheres,
 		TArray<struct FGPUCollisionCapsule>& OutCapsules,
@@ -103,7 +103,7 @@ public:
 		int32 OwnerID = 0  // Unique ID for filtering collision feedback by owner
 	) const;
 
-	/** GPU 충돌용 primitive 데이터 내보내기 (본 트랜스폼 포함) */
+	/** Export primitive data for GPU collision (with bone transforms) */
 	void ExportToGPUPrimitivesWithBones(
 		TArray<struct FGPUCollisionSphere>& OutSpheres,
 		TArray<struct FGPUCollisionCapsule>& OutCapsules,
@@ -123,7 +123,7 @@ protected:
 private:
 	void AutoFindMeshComponent();
 
-	// 캐싱된 충돌 형상
+	// Cached collision shapes
 	TArray<FCachedCapsule> CachedCapsules;
 	TArray<FCachedSphere> CachedSpheres;
 	TArray<FCachedBox> CachedBoxes;
@@ -131,7 +131,7 @@ private:
 	FBox CachedBounds;
 	bool bCacheValid;
 
-	// StaticMesh용 충돌 형상 추출
+	// Extract collision shapes from StaticMesh
 	void CacheStaticMeshCollision(UStaticMeshComponent* StaticMesh);
 	void CacheSkeletalMeshCollision(USkeletalMeshComponent* SkelMesh);
 };

@@ -10,7 +10,7 @@
 #include "DataDrivenShaderPlatformInfo.h"
 
 /**
- * 법선 재구성 컴퓨트 셰이더 (Normal Reconstruction Compute Shader)
+ * @brief Normal reconstruction compute shader.
  */
 class FFluidNormalCS : public FGlobalShader
 {
@@ -76,7 +76,7 @@ void RenderFluidNormalPass(
 	PassParameters->TextureSize = FVector2f(Extent.X, Extent.Y);
 	PassParameters->InverseTextureSize = FVector2f(1.0f / Extent.X, 1.0f / Extent.Y);
 
-	// 뷰 행렬 설정
+	// Setup view matrices
 	PassParameters->ProjectionMatrix = FMatrix44f(View.ViewMatrices.GetProjectionNoAAMatrix());
 	PassParameters->InverseProjectionMatrix =
 		FMatrix44f(View.ViewMatrices.GetInvProjectionMatrix());

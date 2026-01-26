@@ -51,8 +51,8 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 
 	if (RenderingModule && PreviewActor)
 	{
-		// Initialize with this as DataProvider (PreviewActor의 RootComponent에 ISM 부착)
-		// Preset은 SetPreset()에서 나중에 설정됨
+		// Initialize with this as DataProvider (ISM attached to PreviewActor's RootComponent)
+		// Preset will be set later in SetPreset()
 		RenderingModule->Initialize(GetWorld(), PreviewActor->GetRootComponent(), this, nullptr);
 
 		// Metaball settings come from Preset->RenderingParameters (set in SetPreset)
@@ -332,7 +332,7 @@ void FFluidPreviewScene::SpawnParticles(float DeltaTime)
 	{
 		return;
 	}
-	
+
 	// Check max particle count (skip if Recycle mode - let recycle handle overflow)
 	if (Settings.MaxParticleCount > 0 && !Settings.bContinuousSpawn)
 	{

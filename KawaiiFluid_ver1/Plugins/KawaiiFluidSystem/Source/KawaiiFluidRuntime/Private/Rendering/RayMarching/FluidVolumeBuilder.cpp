@@ -193,7 +193,7 @@ FRDGTextureRef FFluidVolumeBuilder::BuildSDFVolume(
 	}
 	else
 	{
-		// Dummy buffer (셰이더 validation용)
+		// Dummy buffer (for shader validation)
 		FRDGBufferRef DummyBuffer = GraphBuilder.CreateBuffer(
 			FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), 6),
 			TEXT("DummyAABB"));
@@ -366,7 +366,7 @@ FRDGBufferRef FFluidVolumeBuilder::ComputeFluidAABB(
 {
 	RDG_EVENT_SCOPE(GraphBuilder, "ComputeFluidAABB");
 
-	// 디버그 로그
+	// Debug logging
 	static int32 AABBDebugCounter = 0;
 	if (++AABBDebugCounter % 60 == 0)
 	{

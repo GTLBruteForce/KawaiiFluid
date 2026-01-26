@@ -14,12 +14,12 @@ class UInstancedStaticMeshComponent;
 class UStaticMesh;
 
 /**
- * 유체 렌더링 월드 서브시스템
+ * Fluid rendering world subsystem
  *
- * 역할:
- * - UKawaiiFluidRenderingModule 통합 관리
- * - SSFR 렌더링 파이프라인 제공 (ViewExtension)
- * - ISM 렌더링은 Unreal 기본 파이프라인 사용
+ * Responsibilities:
+ * - Manages UKawaiiFluidRenderingModule integration
+ * - Provides SSFR rendering pipeline (ViewExtension)
+ * - ISM rendering uses Unreal's default pipeline
  */
 UCLASS()
 class KAWAIIFLUIDRUNTIME_API UFluidRendererSubsystem : public UWorldSubsystem
@@ -34,27 +34,27 @@ public:
 	// End of USubsystem interface
 
 	//========================================
-	// RenderingModule 관리
+	// RenderingModule Management
 	//========================================
 
-	/** RenderingModule 등록 (자동 호출됨) */
+	/** Register RenderingModule (called automatically) */
 	void RegisterRenderingModule(UKawaiiFluidRenderingModule* Module);
 
-	/** RenderingModule 해제 */
+	/** Unregister RenderingModule */
 	void UnregisterRenderingModule(UKawaiiFluidRenderingModule* Module);
 
-	/** 등록된 모든 RenderingModule 반환 */
+	/** Get all registered RenderingModules */
 	const TArray<TObjectPtr<UKawaiiFluidRenderingModule>>& GetAllRenderingModules() const { return RegisteredRenderingModules; }
 
 	//========================================
-	// 렌더링 파라미터
+	// Rendering Parameters
 	//========================================
 
-	/** 글로벌 렌더링 파라미터 */
+	/** Global rendering parameters */
 	UPROPERTY(EditAnywhere, Transient, BlueprintReadWrite, Category = "Fluid Rendering")
 	FFluidRenderingParameters RenderingParameters;
 
-	/** View Extension 접근자 */
+	/** View Extension accessor */
 	TSharedPtr<FFluidSceneViewExtension, ESPMode::ThreadSafe> GetViewExtension() const { return ViewExtension; }
 
 
@@ -94,11 +94,11 @@ public:
 	void SetLightVPMatrixWrite(const FMatrix44f& Matrix) { LightVPMatrix_Write = Matrix; }
 
 private:
-	/** 등록된 RenderingModule들 */
+	/** Registered RenderingModules */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UKawaiiFluidRenderingModule>> RegisteredRenderingModules;
 
-	/** Scene View Extension (렌더링 파이프라인 인젝션) */
+	/** Scene View Extension (rendering pipeline injection) */
 	TSharedPtr<FFluidSceneViewExtension, ESPMode::ThreadSafe> ViewExtension;
 
 

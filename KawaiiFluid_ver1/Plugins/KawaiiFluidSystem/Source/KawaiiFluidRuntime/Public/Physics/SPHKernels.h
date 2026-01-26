@@ -5,73 +5,73 @@
 #include "CoreMinimal.h"
 
 /**
- * SPH 커널 함수 모음
+ * @brief Collection of SPH kernel functions.
  *
- * Poly6: 밀도 추정용 (부드러운 감소)
- * Spiky: 그래디언트 계산용 (가까운 거리에서 강한 반발력)
- * Viscosity: 점성 계산용
- * Adhesion: 접착력 계산용
- * Cohesion: 응집력(표면장력) 계산용
+ * Poly6: For density estimation (smooth decay)
+ * Spiky: For gradient computation (strong repulsion at close range)
+ * Viscosity: For viscosity computation
+ * Adhesion: For adhesion forces
+ * Cohesion: For cohesion forces (surface tension)
  */
 namespace SPHKernels
 {
 	//========================================
-	// Poly6 커널 (밀도 추정)
+	// Poly6 Kernel (density estimation)
 	// W(r, h) = 315 / (64 * π * h^9) * (h² - r²)³
 	//========================================
 
-	/** Poly6 커널 계수 */
+	/** Poly6 kernel coefficient */
 	KAWAIIFLUIDRUNTIME_API float Poly6Coefficient(float h);
 
-	/** Poly6 커널 값 */
+	/** Poly6 kernel value */
 	KAWAIIFLUIDRUNTIME_API float Poly6(float r, float h);
 
-	/** Poly6 커널 (벡터 입력) */
+	/** Poly6 kernel (vector input) */
 	KAWAIIFLUIDRUNTIME_API float Poly6(const FVector& r, float h);
 
 	//========================================
-	// Spiky 커널 (압력 그래디언트)
+	// Spiky Kernel (pressure gradient)
 	// ∇W(r, h) = -45 / (π * h^6) * (h - r)² * r̂
 	//========================================
 
-	/** Spiky 커널 그래디언트 계수 */
+	/** Spiky kernel gradient coefficient */
 	KAWAIIFLUIDRUNTIME_API float SpikyGradientCoefficient(float h);
 
-	/** Spiky 커널 그래디언트 */
+	/** Spiky kernel gradient */
 	KAWAIIFLUIDRUNTIME_API FVector SpikyGradient(const FVector& r, float h);
 
 	//========================================
-	// Viscosity 커널 라플라시안 (점성)
+	// Viscosity Kernel Laplacian (viscosity)
 	// ∇²W(r, h) = 45 / (π * h^6) * (h - r)
 	//========================================
 
-	/** Viscosity 커널 라플라시안 계수 */
+	/** Viscosity kernel Laplacian coefficient */
 	KAWAIIFLUIDRUNTIME_API float ViscosityLaplacianCoefficient(float h);
 
-	/** Viscosity 커널 라플라시안 */
+	/** Viscosity kernel Laplacian */
 	KAWAIIFLUIDRUNTIME_API float ViscosityLaplacian(float r, float h);
 
 	//========================================
-	// Adhesion 커널 (접착력)
+	// Adhesion Kernel (adhesion forces)
 	// Akinci et al. 2013
 	//========================================
 
-	/** Adhesion 커널 */
+	/** Adhesion kernel */
 	KAWAIIFLUIDRUNTIME_API float Adhesion(float r, float h);
 
 	//========================================
-	// Cohesion 커널 (응집력/표면장력)
+	// Cohesion Kernel (cohesion/surface tension)
 	// Akinci et al. 2013
 	//========================================
 
-	/** Cohesion 커널 */
+	/** Cohesion kernel */
 	KAWAIIFLUIDRUNTIME_API float Cohesion(float r, float h);
 
 	//========================================
-	// 유틸리티
+	// Utilities
 	//========================================
 
-	/** 커널 계수들 미리 계산 (최적화용) */
+	/** Precompute kernel coefficients (for optimization) */
 	struct FKernelCoefficients
 	{
 		float Poly6Coeff;

@@ -19,23 +19,23 @@ class UKawaiiFluidPresetDataAsset;
 //========================================
 
 /**
- * 특정 유체 영역에 진입했을 때 발생
- * @param FluidTag 유체 태그 (예: "Water", "Lava")
- * @param ParticleCount 충돌 중인 파티클 수
+ * Fired when entering a specific fluid region.
+ * @param FluidTag Fluid tag (e.g., "Water", "Lava")
+ * @param ParticleCount Number of particles in contact
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnFluidEnter, FName, FluidTag, int32, ParticleCount);
 
 /**
- * 특정 유체 영역에서 벗어났을 때 발생
- * @param FluidTag 유체 태그 (예: "Water", "Lava")
+ * Fired when exiting a specific fluid region.
+ * @param FluidTag Fluid tag (e.g., "Water", "Lava")
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFluidExit, FName, FluidTag);
 
 /**
- * 유체로부터 받는 힘이 업데이트될 때 발생 (매 틱)
- * @param Force 유체로부터 받는 힘 벡터 (cm/s²)
- * @param Pressure 평균 압력 값
- * @param ContactCount 접촉 중인 파티클 수
+ * Fired when fluid force is updated (every tick).
+ * @param Force Force vector from fluid (cm/s²)
+ * @param Pressure Average pressure value
+ * @param ContactCount Number of particles in contact
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnFluidForceUpdate, FVector, Force, float, Pressure, int32, ContactCount);
 
@@ -62,8 +62,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_SixParams(FOnBoneParticleCollision, int32, Bo
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FOnBoneFluidImpact, FName, BoneName, float, ImpactSpeed, float, ImpactForce, FVector, ImpactDirection);
 
 /**
- * 유체 상호작용 컴포넌트
- * 캐릭터/오브젝트에 붙여서 유체와 상호작용
+ * Fluid interaction component.
+ * Attach to characters/objects to enable fluid interaction.
  */
 UCLASS(ClassGroup=(KawaiiFluid), meta=(BlueprintSpawnableComponent))
 class KAWAIIFLUIDRUNTIME_API UFluidInteractionComponent : public UActorComponent

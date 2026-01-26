@@ -8,7 +8,7 @@
 #include "RenderGraphResources.h"
 
 /**
- * Fluid Thickness 렌더링을 위한 공유 파라미터 구조체
+ * Shared parameter structure for Fluid Thickness rendering
  */
 BEGIN_SHADER_PARAMETER_STRUCT(FFluidThicknessParameters, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float3>, ParticlePositions)
@@ -24,7 +24,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FFluidThicknessParameters, )
 END_SHADER_PARAMETER_STRUCT()
 
 /**
- * Fluid Thickness 렌더링 Vertex Shader
+ * Fluid Thickness rendering Vertex Shader
  */
 class FFluidThicknessVS : public FGlobalShader
 {
@@ -40,7 +40,7 @@ class FFluidThicknessVS : public FGlobalShader
 };
 
 /**
- * Fluid Thickness 렌더링 Pixel Shader
+ * Fluid Thickness rendering Pixel Shader
  */
 class FFluidThicknessPS : public FGlobalShader
 {

@@ -13,7 +13,7 @@
 #include "Engine/World.h"
 
 //========================================
-// 함수 이름 정의
+// Function name definitions
 //========================================
 
 const FName UNiagaraDataInterfaceKawaiiFluid::GetParticleCountName(TEXT("GetParticleCount"));
@@ -22,7 +22,7 @@ const FName UNiagaraDataInterfaceKawaiiFluid::GetParticleVelocityName(TEXT("GetP
 const FName UNiagaraDataInterfaceKawaiiFluid::GetParticleRadiusName(TEXT("GetParticleRadius"));
 
 //========================================
-// 생성자
+// Constructor
 //========================================
 
 UNiagaraDataInterfaceKawaiiFluid::UNiagaraDataInterfaceKawaiiFluid(const FObjectInitializer& ObjectInitializer)
@@ -33,18 +33,18 @@ UNiagaraDataInterfaceKawaiiFluid::UNiagaraDataInterfaceKawaiiFluid(const FObject
 }
 
 //========================================
-// Niagara Type Registry 등록 (필수!)
+// Niagara Type Registry registration (required!)
 //========================================
 
 void UNiagaraDataInterfaceKawaiiFluid::PostInitProperties()
 {
 	Super::PostInitProperties();
 
-	// CDO (Class Default Object)일 때만 Type Registry에 등록
+	// Register to Type Registry only when CDO (Class Default Object)
 	if (HasAnyFlags(RF_ClassDefaultObject))
 	{
-		// AllowAnyVariable: 변수 타입으로 사용 가능
-		// AllowParameter: User Parameter로 추가 가능
+		// AllowAnyVariable: Can be used as variable type
+		// AllowParameter: Can be added as User Parameter
 		ENiagaraTypeRegistryFlags Flags = 
 			ENiagaraTypeRegistryFlags::AllowAnyVariable | 
 			ENiagaraTypeRegistryFlags::AllowParameter;
@@ -56,7 +56,7 @@ void UNiagaraDataInterfaceKawaiiFluid::PostInitProperties()
 }
 
 //========================================
-// UPROPERTY 동기화
+// UPROPERTY synchronization
 //========================================
 
 bool UNiagaraDataInterfaceKawaiiFluid::CopyToInternal(UNiagaraDataInterface* Destination) const
@@ -75,7 +75,7 @@ bool UNiagaraDataInterfaceKawaiiFluid::CopyToInternal(UNiagaraDataInterface* Des
 }
 
 //========================================
-// 함수 시그니처 등록
+// Function signature registration
 //========================================
 
 #if WITH_EDITORONLY_DATA
@@ -134,7 +134,7 @@ void UNiagaraDataInterfaceKawaiiFluid::GetFunctionsInternal(TArray<FNiagaraFunct
 #endif
 
 //========================================
-// VM 함수 바인딩
+// VM function binding
 //========================================
 
 void UNiagaraDataInterfaceKawaiiFluid::GetVMExternalFunction(const FVMExternalFunctionBindingInfo& BindingInfo, 
@@ -160,21 +160,21 @@ void UNiagaraDataInterfaceKawaiiFluid::GetVMExternalFunction(const FVMExternalFu
 }
 
 //========================================
-// Per-Instance 데이터 관리
+// Per-Instance data management
 //========================================
 
 bool UNiagaraDataInterfaceKawaiiFluid::InitPerInstanceData(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance)
 {
 	FNDIKawaiiFluid_InstanceData* InstanceData = new (PerInstanceData) FNDIKawaiiFluid_InstanceData();
 
-	// Runtime 검증: User Parameter 연결 확인
+	// Runtime validation: Check User Parameter connection
 	if (SourceFluidActor.IsNull())
 	{
 		UE_LOG(LogTemp, Error, TEXT("UNiagaraDataInterfaceKawaiiFluid: SourceFluidActor is not set! Please assign an Actor in User Parameters."));
-		return true; // 초기화는 성공하지만 데이터 없음
+		return true; // Initialization succeeds but no data available
 	}
 
-	// Actor에서 UKawaiiFluidComponent 찾기
+	// Find UKawaiiFluidComponent from Actor
 	if (SourceFluidActor.IsValid())
 	{
 		AActor* Actor = SourceFluidActor.Get();
@@ -186,7 +186,7 @@ bool UNiagaraDataInterfaceKawaiiFluid::InitPerInstanceData(void* PerInstanceData
 				InstanceData->SourceComponent = FluidComp;
 				InstanceData->SourceModule = FluidComp->GetSimulationModule();
 
-				// 초기 CachedParticleCount 설정 (Tick 전에!)
+				// Set initial CachedParticleCount (before Tick!)
 				const TArray<FFluidParticle>& Particles = FluidComp->GetSimulationModule()->GetParticles();
 				InstanceData->CachedParticleCount = Particles.Num();
 
@@ -215,7 +215,7 @@ void UNiagaraDataInterfaceKawaiiFluid::DestroyPerInstanceData(void* PerInstanceD
 }
 
 //========================================
-// 매 프레임 업데이트
+// Per-frame update
 //========================================
 
 bool UNiagaraDataInterfaceKawaiiFluid::PerInstanceTick(void* PerInstanceData,
@@ -229,7 +229,7 @@ bool UNiagaraDataInterfaceKawaiiFluid::PerInstanceTick(void* PerInstanceData,
 		return false;
 	}
 
-	// 업데이트 간격 체크
+	// Check update interval
 	InstanceData->LastUpdateTime += DeltaSeconds;
 	if (UpdateInterval > 0.0f && InstanceData->LastUpdateTime < UpdateInterval)
 	{
@@ -237,23 +237,23 @@ bool UNiagaraDataInterfaceKawaiiFluid::PerInstanceTick(void* PerInstanceData,
 	}
 	InstanceData->LastUpdateTime = 0.0f;
 
-	// Module 유효성 체크
+	// Check module validity
 	UKawaiiFluidSimulationModule* SimModule = InstanceData->SourceModule.Get();
 	if (!SimModule)
 	{
 		return false;
 	}
 
-	// 파티클 데이터 가져오기
+	// Get particle data
 	const TArray<FFluidParticle>& Particles = SimModule->GetParticles();
 	InstanceData->CachedParticleCount = Particles.Num();
 
-	// 🔴 BREAKPOINT: PIE 실행 중에만 로그 출력
+	// BREAKPOINT: Log output only during PIE execution
 	#if !UE_BUILD_SHIPPING
 	static bool bFirstTick = true;
 	if (bFirstTick && Particles.Num() > 0)
 	{
-		// ✅ World가 Game World인지 확인 (PIE, Standalone 등)
+		// Check if World is Game World (PIE, Standalone, etc.)
 		UKawaiiFluidComponent* FluidComp = InstanceData->SourceComponent.Get();
 		if (FluidComp)
 		{
@@ -279,7 +279,7 @@ bool UNiagaraDataInterfaceKawaiiFluid::PerInstanceTick(void* PerInstanceData,
 }
 
 //========================================
-// GPU 버퍼 업데이트 (렌더 스레드)
+// GPU buffer update (render thread)
 //========================================
 
 void UNiagaraDataInterfaceKawaiiFluid::UpdateGPUBuffers_RenderThread(FNDIKawaiiFluid_InstanceData* InstanceData,
@@ -288,7 +288,7 @@ void UNiagaraDataInterfaceKawaiiFluid::UpdateGPUBuffers_RenderThread(FNDIKawaiiF
 {
 	int32 ParticleCount = Particles.Num();
 
-	// FFluidParticle을 FKawaiiRenderParticle로 변환
+	// Convert FFluidParticle to FKawaiiRenderParticle
 	TArray<FKawaiiRenderParticle> RenderParticles;
 	RenderParticles.Reserve(ParticleCount);
 
@@ -302,18 +302,18 @@ void UNiagaraDataInterfaceKawaiiFluid::UpdateGPUBuffers_RenderThread(FNDIKawaiiF
 		RenderParticles.Add(RenderParticle);
 	}
 
-	// 렌더 스레드로 전송
+	// Send to render thread
 	ENQUEUE_RENDER_COMMAND(UpdateKawaiiFluidBuffers)(
 		[InstanceData, RenderParticles, ParticleCount](FRHICommandListImmediate& RHICmdList)
 		{
-			// 버퍼 재할당이 필요한지 체크
+			// Check if buffer reallocation is needed
 			if (InstanceData->BufferCapacity < ParticleCount)
 			{
 				int32 NewCapacity = FMath::Max(ParticleCount, 1024);
 				InstanceData->BufferCapacity = NewCapacity;
 
-				// Particle Buffer 생성 (FKawaiiRenderParticle 크기 = 32 bytes)
-				// UE 5.7 API: FRHIBufferCreateDesc 사용 (builder 패턴)
+				// Create Particle Buffer (FKawaiiRenderParticle size = 32 bytes)
+				// UE 5.7 API: Use FRHIBufferCreateDesc (builder pattern)
 				FRHIBufferCreateDesc BufferDesc;
 				BufferDesc.Size = NewCapacity * sizeof(FKawaiiRenderParticle);
 				BufferDesc.Usage = BUF_ShaderResource | BUF_Dynamic;
@@ -321,7 +321,7 @@ void UNiagaraDataInterfaceKawaiiFluid::UpdateGPUBuffers_RenderThread(FNDIKawaiiF
 
 				InstanceData->ParticleBuffer = RHICmdList.CreateBuffer(BufferDesc);
 
-				// SRV 생성 (UE 5.7 API: FRHIViewDesc 사용)
+				// Create SRV (UE 5.7 API: Use FRHIViewDesc)
 				InstanceData->ParticleSRV = RHICmdList.CreateShaderResourceView(
 					InstanceData->ParticleBuffer,
 					FRHIViewDesc::CreateBufferSRV()
@@ -330,7 +330,7 @@ void UNiagaraDataInterfaceKawaiiFluid::UpdateGPUBuffers_RenderThread(FNDIKawaiiF
 				);
 			}
 
-			// FKawaiiRenderParticle 직접 복사
+			// Direct copy of FKawaiiRenderParticle
 			void* Data = RHICmdList.LockBuffer(InstanceData->ParticleBuffer, 0,
 			                                    ParticleCount * sizeof(FKawaiiRenderParticle),
 			                                    RLM_WriteOnly);
@@ -342,7 +342,7 @@ void UNiagaraDataInterfaceKawaiiFluid::UpdateGPUBuffers_RenderThread(FNDIKawaiiF
 }
 
 //========================================
-// VM 함수 구현 (CPU 시뮬레이션용)
+// VM function implementations (for CPU simulation)
 //========================================
 
 void UNiagaraDataInterfaceKawaiiFluid::VMGetParticleCount(FVectorVMExternalFunctionContext& Context)
@@ -357,12 +357,12 @@ void UNiagaraDataInterfaceKawaiiFluid::VMGetParticleCount(FVectorVMExternalFunct
 		OutCount.SetAndAdvance(Count);
 	}
 
-	// ✅ PIE 실행 중에만 로그 출력 (첫 호출 시)
+	// Log output only during PIE execution (first call)
 	#if !UE_BUILD_SHIPPING
 	static bool bFirstCall = true;
 	if (bFirstCall && Count > 0)
 	{
-		// World 상태 확인 (InstanceData의 SourceComponent 사용)
+		// Check world state (use SourceComponent from InstanceData)
 		UKawaiiFluidComponent* FluidComp = InstanceData->SourceComponent.Get();
 		if (FluidComp)
 		{
@@ -385,11 +385,11 @@ void UNiagaraDataInterfaceKawaiiFluid::VMGetParticlePosition(FVectorVMExternalFu
 	FNDIInputParam<int32> InIndex(Context);
 	FNDIOutputParam<FVector3f> OutPosition(Context);
 
-	// SimulationModule에서 파티클 데이터 가져오기
+	// Get particle data from SimulationModule
 	UKawaiiFluidSimulationModule* SimModule = InstanceData->SourceModule.Get();
 	if (!SimModule)
 	{
-		// Module 없으면 제로 반환
+		// Return zero if no module
 		for (int32 i = 0; i < Context.GetNumInstances(); ++i)
 		{
 			InIndex.GetAndAdvance();
@@ -400,7 +400,7 @@ void UNiagaraDataInterfaceKawaiiFluid::VMGetParticlePosition(FVectorVMExternalFu
 
 	const TArray<FFluidParticle>& Particles = SimModule->GetParticles();
 
-	// ✅ PIE 실행 중에만 로그 출력 (첫 호출 시)
+	// Log output only during PIE execution (first call)
 	#if !UE_BUILD_SHIPPING
 	static bool bFirstCall = true;
 	if (bFirstCall && Particles.Num() > 0)
@@ -442,11 +442,11 @@ void UNiagaraDataInterfaceKawaiiFluid::VMGetParticleVelocity(FVectorVMExternalFu
 	FNDIInputParam<int32> InIndex(Context);
 	FNDIOutputParam<FVector3f> OutVelocity(Context);
 
-	// SimulationModule에서 파티클 데이터 가져오기
+	// Get particle data from SimulationModule
 	UKawaiiFluidSimulationModule* SimModule = InstanceData->SourceModule.Get();
 	if (!SimModule)
 	{
-		// Module 없으면 제로 반환
+		// Return zero if no module
 		for (int32 i = 0; i < Context.GetNumInstances(); ++i)
 		{
 			InIndex.GetAndAdvance();
@@ -486,7 +486,7 @@ void UNiagaraDataInterfaceKawaiiFluid::VMGetParticleRadius(FVectorVMExternalFunc
 }
 
 //========================================
-// 기타 오버라이드
+// Other overrides
 //========================================
 
 bool UNiagaraDataInterfaceKawaiiFluid::Equals(const UNiagaraDataInterface* Other) const
@@ -506,7 +506,7 @@ void UNiagaraDataInterfaceKawaiiFluid::ProvidePerInstanceDataForRenderThread(voi
                                                                               void* PerInstanceData, 
                                                                               const FNiagaraSystemInstanceID& SystemInstance)
 {
-	// 렌더 스레드로 인스턴스 데이터 복사
+	// Copy instance data to render thread
 	FNDIKawaiiFluid_InstanceData* SourceData = static_cast<FNDIKawaiiFluid_InstanceData*>(PerInstanceData);
 	FNDIKawaiiFluid_InstanceData* DestData = new (DataForRenderThread) FNDIKawaiiFluid_InstanceData();
 	
@@ -514,7 +514,7 @@ void UNiagaraDataInterfaceKawaiiFluid::ProvidePerInstanceDataForRenderThread(voi
 }
 
 //========================================
-// GPU 함수 HLSL 생성 (에디터 전용)
+// GPU function HLSL generation (editor only)
 //========================================
 
 #if WITH_EDITORONLY_DATA
@@ -551,7 +551,7 @@ bool UNiagaraDataInterfaceKawaiiFluid::GetFunctionHLSL(const FNiagaraDataInterfa
 	}
 	else if (FunctionInfo.DefinitionName == GetParticleVelocityName)
 	{
-		// Velocity는 Data0.w + Data1.xy
+		// Velocity is Data0.w + Data1.xy
 		OutHLSL += FString::Printf(TEXT("void %s(int Index, out float3 Velocity) {\n"), 
 		                            *FunctionInfo.InstanceName);
 		OutHLSL += TEXT("    float4 Data0 = {ParameterName}_ParticleBuffer[Index * 2 + 0];\n");
@@ -562,7 +562,7 @@ bool UNiagaraDataInterfaceKawaiiFluid::GetFunctionHLSL(const FNiagaraDataInterfa
 	}
 	else if (FunctionInfo.DefinitionName == GetParticleRadiusName)
 	{
-		// Radius는 Data1.z (인덱스 0 기준)
+		// Radius is Data1.z (based on index 0)
 		OutHLSL += FString::Printf(TEXT("void %s(out float Radius) {\n"), 
 		                            *FunctionInfo.InstanceName);
 		OutHLSL += TEXT("    float4 Data1 = {ParameterName}_ParticleBuffer[0 * 2 + 1];\n");
@@ -581,7 +581,7 @@ bool UNiagaraDataInterfaceKawaiiFluid::AppendCompileHash(FNiagaraCompileHashVisi
 		return false;
 	}
 
-	// 버전 업데이트 (구조 변경)
+	// Version update (structure change)
 	InVisitor->UpdatePOD(TEXT("KawaiiFluidNiagaraDI"), (int32)2);
 	
 	return true;

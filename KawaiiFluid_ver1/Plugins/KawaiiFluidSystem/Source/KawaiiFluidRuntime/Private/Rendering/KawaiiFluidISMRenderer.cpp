@@ -215,7 +215,7 @@ void UKawaiiFluidISMRenderer::InitializeISM()
 		return;
 	}
 
-	// Component setup - FluidComponent에 직접 부착 (안정적인 계층 구조)
+	// Component setup - Attach directly to FluidComponent (stable hierarchy)
 	ISMComponent->SetupAttachment(CachedOwnerComponent);
 
 	// Use absolute coordinates (same as DummyComponent)

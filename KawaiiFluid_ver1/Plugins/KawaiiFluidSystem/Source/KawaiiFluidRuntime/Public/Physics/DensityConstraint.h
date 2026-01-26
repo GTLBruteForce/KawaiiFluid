@@ -20,12 +20,12 @@ struct FTensileInstabilityParams
 };
 
 /**
- * SPH 커널 계수 (사전 계산)
- * Pow() 호출 제거를 위해 미리 계산된 값들
+ * SPH kernel coefficients (precomputed)
+ * Precomputed values to eliminate Pow() calls
  */
 struct FSPHKernelCoeffs
 {
-	float h;              // 커널 반경 (m)
+	float h;              // Kernel radius (m)
 	float h2;             // h²
 	float Poly6Coeff;     // 315 / (64πh⁹)
 	float SpikyCoeff;     // -45 / (πh⁶)
@@ -37,10 +37,10 @@ struct FSPHKernelCoeffs
 };
 
 /**
- * PBF 밀도 제약 솔버
+ * @brief PBF density constraint solver.
  *
- * 제약 조건: C_i = (ρ_i / ρ_0) - 1 = 0
- * 각 입자의 밀도가 기준 밀도(ρ_0)를 유지하도록 위치 보정
+ * Constraint: C_i = (ρ_i / ρ_0) - 1 = 0
+ * Corrects particle positions to maintain rest density (ρ_0)
  */
 class KAWAIIFLUIDRUNTIME_API FDensityConstraint
 {
@@ -48,10 +48,10 @@ public:
 	FDensityConstraint();
 	FDensityConstraint(float InRestDensity, float InSmoothingRadius, float InEpsilon);
 
-	/** 밀도 제약 해결 (한 번의 반복) - XPBD */
+	/** Solve density constraint (single iteration) - XPBD */
 	void Solve(TArray<FFluidParticle>& Particles, float InSmoothingRadius, float InRestDensity, float InCompliance, float DeltaTime);
 
-	/** 밀도 제약 해결 (Tensile Instability 보정 포함) - XPBD + scorr */
+	/** Solve density constraint (with Tensile Instability correction) - XPBD + scorr */
 	void SolveWithTensileCorrection(
 		TArray<FFluidParticle>& Particles,
 		float InSmoothingRadius,
@@ -60,47 +60,47 @@ public:
 		float DeltaTime,
 		const FTensileInstabilityParams& TensileParams);
 
-	/** 파라미터 설정 */
+	/** Set parameters */
 	void SetRestDensity(float NewRestDensity);
 	void SetEpsilon(float NewEpsilon);
 
 private:
-	float RestDensity;      // 기준 밀도 (kg/m³)
-	float Epsilon;          // 안정성 상수
-	float SmoothingRadius;  // 커널 반경 (cm)
+	float RestDensity;      // Rest density (kg/m³)
+	float Epsilon;          // Stability constant
+	float SmoothingRadius;  // Kernel radius (cm)
 
 	//========================================
-	// SoA 캐시 (Structure of Arrays)
+	// SoA Cache (Structure of Arrays)
 	//========================================
-	TArray<float> PosX, PosY, PosZ;  // 예측 위치
-	TArray<float> Masses;             // 질량
-	TArray<float> Densities;          // 밀도
-	TArray<float> Lambdas;            // Lambda
-	TArray<float> DeltaPX, DeltaPY, DeltaPZ;  // 위치 보정량
+	TArray<float> PosX, PosY, PosZ;  // Predicted positions
+	TArray<float> Masses;             // Masses
+	TArray<float> Densities;          // Densities
+	TArray<float> Lambdas;            // Lambda values
+	TArray<float> DeltaPX, DeltaPY, DeltaPZ;  // Position corrections
 
 	//========================================
-	// SoA 관리 함수
+	// SoA Management Functions
 	//========================================
 	void ResizeSoAArrays(int32 NumParticles);
 	void CopyToSoA(const TArray<FFluidParticle>& Particles);
 	void ApplyFromSoA(TArray<FFluidParticle>& Particles);
 
 	//========================================
-	// SIMD 최적화 함수 (Solve 내부에서 사용)
+	// SIMD Optimized Functions (used internally by Solve)
 	//========================================
 
-	/** 1단계: 밀도 + Lambda 동시 계산 (SIMD) */
+	/** Step 1: Compute density + Lambda simultaneously (SIMD) */
 	void ComputeDensityAndLambda_SIMD(
 		const TArray<FFluidParticle>& Particles,
 		const FSPHKernelCoeffs& Coeffs);
 
-	/** 2단계: 위치 보정량 계산 (SIMD) */
+	/** Step 2: Compute position corrections (SIMD) */
 	void ComputeDeltaP_SIMD(
 		const TArray<FFluidParticle>& Particles,
 		const FSPHKernelCoeffs& Coeffs);
 
 	//========================================
-	// 레거시 함수 (하위 호환성)
+	// Legacy Functions (backward compatibility)
 	//========================================
 	void ComputeDensities(TArray<FFluidParticle>& Particles);
 	void ComputeLambdas(TArray<FFluidParticle>& Particles);

@@ -16,7 +16,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSlimeObjectExitedModule, AActor*,
 /**
  * Kawaii Slime Simulation Module
  *
- * UKawaiiFluidSimulationModule을 상속하여 슬라임 전용 기능을 추가합니다.
+ * Inherits from UKawaiiFluidSimulationModule and adds slime-specific features.
  *
  * Core Features (Section 3):
  * 1. Shape Matching - Form restoration (most important!)
@@ -38,17 +38,17 @@ public:
 	UKawaiiSlimeSimulationModule();
 
 	//========================================
-	// 초기화
+	// Initialization
 	//========================================
 
-	/** 모듈 초기화 (부모 + 슬라임 전용) */
+	/** Initialize module (parent + slime-specific) */
 	virtual void Initialize(UKawaiiFluidPresetDataAsset* InPreset) override;
 
 	//========================================
-	// Tick (슬라임 전용 로직)
+	// Tick (Slime-specific logic)
 	//========================================
 
-	/** 슬라임 전용 Tick - Component에서 호출 */
+	/** Slime-specific Tick - called from Component */
 	UFUNCTION(BlueprintCallable, Category = "Slime|Module")
 	void TickSlime(float DeltaTime);
 
@@ -244,7 +244,7 @@ public:
 	virtual FKawaiiFluidSimulationParams BuildSimulationParams() const override;
 
 	//========================================
-	// Owner Actor 설정 (Nucleus 업데이트용)
+	// Owner Actor Setup (for Nucleus update)
 	//========================================
 
 	/** Set owner actor reference */

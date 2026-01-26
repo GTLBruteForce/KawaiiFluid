@@ -9,8 +9,8 @@ class UFluidRendererSubsystem;
 struct FPostProcessingInputs;
 
 /**
- * SSFR 렌더링 파이프라인 인젝션을 위한 Scene View Extension
- * 언리얼 렌더링 파이프라인에 커스텀 렌더 패스 추가
+ * Scene View Extension for SSFR rendering pipeline injection
+ * Adds custom render passes to Unreal rendering pipeline
  */
 class KAWAIIFLUIDRUNTIME_API FFluidSceneViewExtension : public FSceneViewExtensionBase
 {
@@ -24,13 +24,13 @@ public:
 	virtual void BeginRenderViewFamily(FSceneViewFamily& InViewFamily) override;
 
 	/**
-	 * 렌더 스레드에서 ViewFamily 렌더링 전에 호출
-	 * GPU 시뮬레이터에서 RenderResource로 데이터 추출 수행
+	 * Called before ViewFamily rendering on render thread
+	 * Performs data extraction from GPU simulator to RenderResource
 	 */
 	virtual void PreRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily) override;
 
 	/**
-	 * PostProcessing Pass 구독
+	 * Subscribe to PostProcessing Pass
 	 * Tonemap: Custom mode (post-lighting)
 	 */
 	virtual void SubscribeToPostProcessingPass(
@@ -56,6 +56,6 @@ private:
 	/** Check if the view belongs to our Subsystem's World */
 	bool IsViewFromOurWorld(const FSceneView& InView) const;
 
-	/** Subsystem 약한 참조 */
+	/** Subsystem weak reference */
 	TWeakObjectPtr<UFluidRendererSubsystem> Subsystem;
 };

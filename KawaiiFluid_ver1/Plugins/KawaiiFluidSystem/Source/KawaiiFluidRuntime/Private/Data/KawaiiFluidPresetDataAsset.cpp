@@ -64,10 +64,10 @@ void UKawaiiFluidPresetDataAsset::PostEditChangeProperty(FPropertyChangedEvent& 
 		OnPropertyChanged.Broadcast(this);
 	}
 	
-	// 썸네일 정보가 있다면 변경 사실을 알림
+	// Notify thumbnail if available
 	if (ThumbnailInfo)
 	{
-		// 이 호출이 핵심입니다. 썸네일 캐시를 무효화하고 재렌더링을 트리거합니다.
+		// This call invalidates thumbnail cache and triggers re-rendering
 		ThumbnailInfo->PostEditChange();
 	}
 }

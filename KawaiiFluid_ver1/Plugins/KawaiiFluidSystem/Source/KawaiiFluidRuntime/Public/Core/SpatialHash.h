@@ -15,9 +15,9 @@
 #include "CoreMinimal.h"
 
 /**
- * CPU 공간 해싱 클래스
- * 이웃 입자 탐색을 O(n²) -> O(n)으로 최적화
- * GPU 시뮬레이션에서는 Z-Order Morton code sorting을 사용합니다.
+ * CPU spatial hashing class
+ * Optimizes neighbor particle search from O(n²) to O(n)
+ * GPU simulation uses Z-Order Morton code sorting instead.
  */
 class KAWAIIFLUIDRUNTIME_API FSpatialHash
 {
@@ -25,46 +25,46 @@ public:
 	FSpatialHash();
 	FSpatialHash(float InCellSize);
 
-	/** 그리드 초기화 */
+	/** Initialize grid */
 	void Clear();
 
-	/** 셀 크기 설정 */
+	/** Set cell size */
 	void SetCellSize(float NewCellSize);
 
-	/** 입자를 그리드에 삽입 */
+	/** Insert particle into grid */
 	void Insert(int32 ParticleIndex, const FVector& Position);
 
-	/** 특정 위치 주변의 이웃 입자 인덱스 반환 */
+	/** Get neighbor particle indices around a specific position */
 	void GetNeighbors(const FVector& Position, float Radius, TArray<int32>& OutNeighbors) const;
 
-	/** 박스 영역 내 파티클 인덱스 반환 (AABB 쿼리) */
+	/** Get particle indices within box region (AABB query) */
 	void QueryBox(const FBox& Box, TArray<int32>& OutIndices) const;
 
-	/** 모든 입자를 한 번에 삽입 (벌크 연산) */
+	/** Insert all particles at once (bulk operation) */
 	void BuildFromPositions(const TArray<FVector>& Positions);
 
-	/** 그리드 데이터 반환 (읽기 전용) */
+	/** Get grid data (read-only) */
 	const TMap<FIntVector, TArray<int32>>& GetGrid() const { return Grid; }
 
-	/** 셀 크기 반환 */
+	/** Get cell size */
 	float GetCellSize() const { return CellSize; }
 
 private:
-	/** 셀 크기 */
+	/** Cell size */
 	float CellSize;
 
-	/** 해시 그리드: 셀 좌표 -> 입자 인덱스 배열 */
+	/** Hash grid: cell coordinate -> particle index array */
 	TMap<FIntVector, TArray<int32>> Grid;
 
-	/** 캐싱된 입자 위치 (거리 필터링용) */
+	/** Cached particle positions (for distance filtering) */
 	TArray<FVector> CachedPositions;
 
-	/** 빈 셀 정리용 카운터 */
+	/** Counter for empty cell purging */
 	int32 RebuildCounter = 0;
 
-	/** 빈 셀 정리 주기 */
-	static constexpr int32 PurgeInterval = 300;  // 약 5초 (60fps 기준)
+	/** Empty cell purge interval */
+	static constexpr int32 PurgeInterval = 300;  // Approx 5 seconds (at 60fps)
 
-	/** 월드 좌표를 셀 좌표로 변환 */
+	/** Convert world coordinate to cell coordinate */
 	FIntVector GetCellCoord(const FVector& Position) const;
 };

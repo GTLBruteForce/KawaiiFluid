@@ -36,19 +36,19 @@ void FFluidComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 		return;
 	}
 
-	// Brush 카테고리
+	// Brush category
 	IDetailCategoryBuilder& BrushCategory = DetailBuilder.EditCategory(
 		"Brush",
 		LOCTEXT("BrushCategory", "Particle Brush"),
 		ECategoryPriority::Important);
 
-	// 버튼 행
+	// Button row
 	BrushCategory.AddCustomRow(LOCTEXT("BrushButtons", "Brush Buttons"))
 	.WholeRowContent()
 	[
 		SNew(SHorizontalBox)
 
-		// Start 버튼
+		// Start button
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		.Padding(0, 0, 4, 0)
@@ -60,7 +60,7 @@ void FFluidComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 			.Visibility(this, &FFluidComponentDetails::GetStartVisibility)
 		]
 
-		// Stop 버튼
+		// Stop button
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		.Padding(0, 0, 4, 0)
@@ -72,7 +72,7 @@ void FFluidComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 			.Visibility(this, &FFluidComponentDetails::GetStopVisibility)
 		]
 
-		// Clear 버튼
+		// Clear button
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		[
@@ -83,7 +83,7 @@ void FFluidComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 		]
 	];
 
-	// 파티클 개수 표시
+	// Particle count display
 	BrushCategory.AddCustomRow(LOCTEXT("ParticleCount", "Particle Count"))
 	.NameContent()
 	[
@@ -98,12 +98,12 @@ void FFluidComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 		{
 			if (TargetComponent.IsValid() && TargetComponent->GetSimulationModule())
 			{
-				// Per-source count: 이 컴포넌트가 소유한 파티클 수만 표시
+				// Per-source count: Display only particle count owned by this component
 				const int32 SourceID = TargetComponent->GetSimulationModule()->GetSourceID();
 				int32 Count = TargetComponent->GetSimulationModule()->GetParticleCountForSource(SourceID);
 				if (Count < 0)
 				{
-					return FText::FromString(TEXT("-"));  // 데이터 미준비
+					return FText::FromString(TEXT("-"));  // Data not ready
 				}
 				return FText::AsNumber(Count);
 			}
@@ -112,7 +112,7 @@ void FFluidComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 		.Font(IDetailLayoutBuilder::GetDetailFont())
 	];
 
-	// 도움말
+	// Help text
 	BrushCategory.AddCustomRow(LOCTEXT("BrushHelp", "Help"))
 	.Visibility(TAttribute<EVisibility>(this, &FFluidComponentDetails::GetStopVisibility))
 	.WholeRowContent()
@@ -169,7 +169,7 @@ FReply FFluidComponentDetails::OnClearParticlesClicked()
 {
 	if (TargetComponent.IsValid())
 	{
-		// 컴포넌트의 ClearAllParticles() 사용 - 렌더링도 같이 클리어됨
+		// Use component's ClearAllParticles() - clears rendering as well
 		TargetComponent->ClearAllParticles();
 		TargetComponent->Modify();
 	}

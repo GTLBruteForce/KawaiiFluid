@@ -16,13 +16,13 @@ void UKawaiiFluidRenderingModule::PostDuplicate(bool bDuplicateForPIE)
 {
 	Super::PostDuplicate(bDuplicateForPIE);
 
-	// PIE로 복제될 때 EditorWorld의 객체를 가리키는 stale pointer 초기화
-	// BeginPlay에서 Initialize()가 다시 호출되어 올바른 값으로 설정됨
+	// When duplicated for PIE, clear stale pointers to EditorWorld objects
+	// Initialize() will be called again in BeginPlay to set correct values
 	CachedWorld = nullptr;
 	CachedOwnerComponent = nullptr;
 	DataProviderPtr = nullptr;
 
-	// 자식 렌더러들도 정리 (ISMRenderer, MetaballRenderer는 subobject이므로 자동 복제됨)
+	// Cleanup child renderers (ISMRenderer, MetaballRenderer are subobjects and auto-duplicated)
 	if (ISMRenderer)
 	{
 		ISMRenderer->Cleanup();

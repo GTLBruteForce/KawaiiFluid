@@ -15,7 +15,7 @@ void FKawaiiFluidNiagaraModule::StartupModule()
 	UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidNiagara MODULE LOADING..."));
 	UE_LOG(LogTemp, Warning, TEXT("========================================"));
 	
-	// Niagara 모듈 확인
+	// Check Niagara module
 	if (FModuleManager::Get().IsModuleLoaded("Niagara"))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("  [OK] Niagara module is already loaded"));
@@ -25,7 +25,7 @@ void FKawaiiFluidNiagaraModule::StartupModule()
 		UE_LOG(LogTemp, Warning, TEXT("  [INFO] Niagara module not loaded yet"));
 	}
 	
-	// Data Interface 클래스 확인
+	// Check Data Interface class
 	UClass* DIClass = UNiagaraDataInterfaceKawaiiFluid::StaticClass();
 	if (DIClass)
 	{
@@ -34,7 +34,7 @@ void FKawaiiFluidNiagaraModule::StartupModule()
 		UE_LOG(LogTemp, Warning, TEXT("       - Package: %s"), *DIClass->GetPackage()->GetName());
 		UE_LOG(LogTemp, Warning, TEXT("       - Outer: %s"), DIClass->GetOuter() ? *DIClass->GetOuter()->GetName() : TEXT("None"));
 		
-		// UCLASS 메타데이터 확인
+		// Check UCLASS metadata
 		if (DIClass->HasAnyClassFlags(CLASS_Abstract))
 		{
 			UE_LOG(LogTemp, Error, TEXT("       - [WARN] Class is ABSTRACT!"));
@@ -48,14 +48,14 @@ void FKawaiiFluidNiagaraModule::StartupModule()
 			UE_LOG(LogTemp, Error, TEXT("       - [WARN] Class is HIDDEN!"));
 		}
 		
-		// CDO 강제 생성
+		// Force CDO creation
 		UObject* CDO = DIClass->GetDefaultObject();
 		if (CDO)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("       - CDO Created: %s"), *CDO->GetName());
 		}
 		
-		// UNiagaraDataInterface 상속 확인
+		// Check UNiagaraDataInterface inheritance
 		if (DIClass->IsChildOf(UNiagaraDataInterface::StaticClass()))
 		{
 			UE_LOG(LogTemp, Warning, TEXT("       - [OK] Inherits from UNiagaraDataInterface"));
@@ -70,7 +70,7 @@ void FKawaiiFluidNiagaraModule::StartupModule()
 		UE_LOG(LogTemp, Error, TEXT("  [FAIL] UNiagaraDataInterfaceKawaiiFluid class NOT found!"));
 	}
 	
-	// 모든 Data Interface 열거 (디버깅용)
+	// Enumerate all Data Interfaces (for debugging)
 	UE_LOG(LogTemp, Warning, TEXT("  [INFO] Enumerating all UNiagaraDataInterface subclasses..."));
 	TArray<UClass*> DataInterfaceClasses;
 	GetDerivedClasses(UNiagaraDataInterface::StaticClass(), DataInterfaceClasses, true);

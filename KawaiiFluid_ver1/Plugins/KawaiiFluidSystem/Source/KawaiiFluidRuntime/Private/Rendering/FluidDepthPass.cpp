@@ -35,7 +35,7 @@ void RenderFluidDepthPass(
 		return;
 	}
 
-	// Smoothing 용도의 Depth Texture 생성
+	// Create Depth Texture for smoothing
 	FRDGTextureDesc LinearDepthDesc = FRDGTextureDesc::Create2D(
 		View.UnscaledViewRect.Size(),
 		PF_R32_FLOAT,
@@ -44,7 +44,7 @@ void RenderFluidDepthPass(
 
 	OutLinearDepthTexture = GraphBuilder.CreateTexture(LinearDepthDesc, TEXT("FluidLinearDepth"));
 
-	// Velocity Texture 생성 (Screen-space flow용)
+	// Create Velocity Texture (for screen-space flow)
 	FRDGTextureDesc VelocityDesc = FRDGTextureDesc::Create2D(
 		View.UnscaledViewRect.Size(),
 		PF_G16R16F,  // RG16F for 2D screen velocity
@@ -62,7 +62,7 @@ void RenderFluidDepthPass(
 
 	OutOcclusionMaskTexture = GraphBuilder.CreateTexture(OcclusionMaskDesc, TEXT("FluidOcclusionMask"));
 
-	// Z-Test 용도의 Depth Texture 생성
+	// Create Depth Texture for Z-Test
 	FRDGTextureDesc HardwareDepthDesc = FRDGTextureDesc::Create2D(
 		View.UnscaledViewRect.Size(),
 		PF_DepthStencil,
@@ -82,7 +82,7 @@ void RenderFluidDepthPass(
 	// (all renderers in batch have identical parameters - that's why they're batched)
 	float ParticleRadius = Renderers[0]->GetLocalParameters().ParticleRenderRadius;
 
-	// 중복 처리 방지를 위해 처리된 RenderResource 추적
+	// Track processed RenderResources to prevent duplicate processing
 	TSet<FKawaiiFluidRenderResource*> ProcessedResources;
 
 	// Render each renderer's particles (batch-specific only)
@@ -93,7 +93,7 @@ void RenderFluidDepthPass(
 		FKawaiiFluidRenderResource* RR = Renderer->GetFluidRenderResource();
 		if (!RR || !RR->IsValid()) continue;
 
-		// 이미 처리된 RenderResource는 스킵
+		// Skip already processed RenderResources
 		if (ProcessedResources.Contains(RR))
 		{
 			continue;
@@ -119,11 +119,11 @@ void RenderFluidDepthPass(
 			continue;
 		}
 
-		// Position 버퍼 가져오기 (GPU/CPU 공통 - ViewExtension에서 항상 생성됨)
+		// Get Position buffer (GPU/CPU common - always created by ViewExtension)
 		TRefCountPtr<FRDGPooledBuffer> PositionPooledBuffer = RR->GetPooledPositionBuffer();
 		if (!PositionPooledBuffer.IsValid())
 		{
-			// ViewExtension에서 버퍼가 생성되지 않았으면 스킵
+			// Skip if buffer not created by ViewExtension
 			continue;
 		}
 
@@ -132,7 +132,7 @@ void RenderFluidDepthPass(
 			TEXT("SSFRParticlePositions"));
 		ParticleBufferSRV = GraphBuilder.CreateSRV(PositionBuffer);
 
-		// Velocity 버퍼 가져오기 (Flow texture용)
+		// Get Velocity buffer (for flow texture)
 		FRDGBufferSRVRef VelocityBufferSRV = nullptr;
 		TRefCountPtr<FRDGPooledBuffer> VelocityPooledBuffer = RR->GetPooledVelocityBuffer();
 		if (VelocityPooledBuffer.IsValid())
@@ -153,14 +153,14 @@ void RenderFluidDepthPass(
 			VelocityBufferSRV = GraphBuilder.CreateSRV(DummyVelocityBuffer);
 		}
 
-		// Anisotropy (GPU 모드에서만 유효)
+		// Anisotropy (valid only in GPU mode)
 		bUseAnisotropy = RR->GetAnisotropyBufferSRVs(
 			GraphBuilder,
 			AnisotropyAxis1SRV,
 			AnisotropyAxis2SRV,
 			AnisotropyAxis3SRV);
 
-		// 유효한 파티클이 없으면 스킵
+		// Skip if no valid particles
 		if (!ParticleBufferSRV || ParticleCount == 0)
 		{
 			continue;
@@ -189,8 +189,8 @@ void RenderFluidDepthPass(
 		// Velocity buffer for flow texture
 		PassParameters->ParticleVelocities = VelocityBufferSRV;
 
-		// SceneDepth UV 변환을 위한 ViewRect와 텍스처 크기
-		// FViewInfo::ViewRect = SceneDepth의 유효 영역 (Screen Percentage 적용됨)
+		// ViewRect and texture size for SceneDepth UV transformation
+		// FViewInfo::ViewRect = Valid region of SceneDepth (Screen Percentage applied)
 		const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
 		PassParameters->SceneViewRect = FVector2f(
 			ViewInfo.ViewRect.Width(),

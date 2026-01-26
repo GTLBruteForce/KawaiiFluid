@@ -107,9 +107,9 @@ public:
 	void SetTargetVolumeComponent(UKawaiiFluidVolumeComponent* InVolumeComponent) { TargetVolumeComponent = InVolumeComponent; }
 
 	//========================================
-	// Render Resource (배치 렌더링용)
-	// Context가 소유하여 같은 Context를 공유하는 렌더러들이
-	// 동일한 RenderResource를 사용 → Draw Call 감소
+	// Render Resource (for batch rendering)
+	// Owned by Context so renderers sharing the same Context
+	// use the same RenderResource → reduces Draw Calls
 	//========================================
 
 	/**
@@ -330,7 +330,7 @@ protected:
 	TSharedPtr<FGPUFluidSimulator> GPUSimulator;
 
 	//========================================
-	// Render Resource (배치 렌더링용)
+	// Render Resource (for batch rendering)
 	//========================================
 
 	/** Shared render resource for all renderers using this context */

@@ -6,7 +6,7 @@
 #include "Async/ParallelFor.h"
 
 //========================================
-// 상수
+// Constants
 //========================================
 namespace
 {
@@ -15,7 +15,7 @@ namespace
 }
 
 //========================================
-// SIMD 헬퍼
+// SIMD Helpers
 //========================================
 FORCEINLINE VectorRegister4Float VectorInvSqrtSafe(VectorRegister4Float V)
 {
@@ -25,7 +25,7 @@ FORCEINLINE VectorRegister4Float VectorInvSqrtSafe(VectorRegister4Float V)
 }
 
 //========================================
-// 생성자
+// Constructor
 //========================================
 FDensityConstraint::FDensityConstraint()
 	: RestDensity(1000.0f)
@@ -42,7 +42,7 @@ FDensityConstraint::FDensityConstraint(float InRestDensity, float InSmoothingRad
 }
 
 //========================================
-// SoA 관리
+// SoA Management
 //========================================
 void FDensityConstraint::ResizeSoAArrays(int32 NumParticles)
 {
@@ -86,7 +86,7 @@ void FDensityConstraint::ApplyFromSoA(TArray<FFluidParticle>& Particles)
 }
 
 //========================================
-// 메인 솔버
+// Main Solver
 //========================================
 void FDensityConstraint::Solve(TArray<FFluidParticle>& Particles, float InSmoothingRadius, float InRestDensity, float InCompliance, float DeltaTime)
 {
@@ -100,11 +100,11 @@ void FDensityConstraint::Solve(TArray<FFluidParticle>& Particles, float InSmooth
 	const int32 NumParticles = Particles.Num();
 	if (NumParticles == 0) return;
 
-	// 1. SoA 준비
+	// 1. Prepare SoA
 	ResizeSoAArrays(NumParticles);
 	CopyToSoA(Particles);
 
-	// 2. 커널 계수 계산
+	// 2. Compute kernel coefficients
 	const float h = SmoothingRadius * CM_TO_M;
 	const float h2 = h * h;
 	const float h6 = h2 * h2 * h2;
@@ -118,16 +118,16 @@ void FDensityConstraint::Solve(TArray<FFluidParticle>& Particles, float InSmooth
 	Coeffs.InvRestDensity = 1.0f / RestDensity;
 	Coeffs.SmoothingRadiusSq = SmoothingRadius * SmoothingRadius;
 
-	// 3. SIMD 계산
+	// 3. SIMD computation
 	ComputeDensityAndLambda_SIMD(Particles, Coeffs);
 	ComputeDeltaP_SIMD(Particles, Coeffs);
 
-	// 4. 결과 적용
+	// 4. Apply results
 	ApplyFromSoA(Particles);
 }
 
 //========================================
-// 메인 솔버 (Tensile Instability 보정 포함)
+// Main Solver (with Tensile Instability Correction)
 //========================================
 void FDensityConstraint::SolveWithTensileCorrection(
 	TArray<FFluidParticle>& Particles,
@@ -147,11 +147,11 @@ void FDensityConstraint::SolveWithTensileCorrection(
 	const int32 NumParticles = Particles.Num();
 	if (NumParticles == 0) return;
 
-	// 1. SoA 준비
+	// 1. Prepare SoA
 	ResizeSoAArrays(NumParticles);
 	CopyToSoA(Particles);
 
-	// 2. 커널 계수 계산
+	// 2. Compute kernel coefficients
 	const float h = SmoothingRadius * CM_TO_M;
 	const float h2 = h * h;
 	const float h6 = h2 * h2 * h2;
@@ -165,28 +165,28 @@ void FDensityConstraint::SolveWithTensileCorrection(
 	Coeffs.InvRestDensity = 1.0f / RestDensity;
 	Coeffs.SmoothingRadiusSq = SmoothingRadius * SmoothingRadius;
 
-	// 3. Tensile Instability 파라미터 설정
+	// 3. Configure Tensile Instability parameters
 	Coeffs.TensileParams = TensileParams;
 	if (TensileParams.bEnabled)
 	{
-		// W(Δq, h) 사전 계산 - Poly6 커널 사용
-		// Δq = DeltaQ * h (미터 단위)
+		// Precompute W(Δq, h) - using Poly6 kernel
+		// Δq = DeltaQ * h (in meters)
 		const float DeltaQ_m = TensileParams.DeltaQ * h;
 		const float DeltaQ2 = DeltaQ_m * DeltaQ_m;
 		const float Diff = h2 - DeltaQ2;
 		Coeffs.TensileParams.W_DeltaQ = Coeffs.Poly6Coeff * Diff * Diff * Diff;
 	}
 
-	// 4. SIMD 계산
+	// 4. SIMD computation
 	ComputeDensityAndLambda_SIMD(Particles, Coeffs);
 	ComputeDeltaP_SIMD(Particles, Coeffs);
 
-	// 5. 결과 적용
+	// 5. Apply results
 	ApplyFromSoA(Particles);
 }
 
 //========================================
-// 1단계: Density + Lambda (SIMD)
+// Step 1: Density + Lambda (SIMD)
 //========================================
 void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 	const TArray<FFluidParticle>& Particles,
@@ -194,7 +194,7 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 {
 	const int32 NumParticles = Particles.Num();
 
-	// RESTRICT 포인터
+	// RESTRICT pointers
 	const float* RESTRICT PosXPtr = PosX.GetData();
 	const float* RESTRICT PosYPtr = PosY.GetData();
 	const float* RESTRICT PosZPtr = PosZ.GetData();
@@ -202,7 +202,7 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 	float* RESTRICT DensityPtr = Densities.GetData();
 	float* RESTRICT LambdaPtr = Lambdas.GetData();
 
-	// SIMD 상수
+	// SIMD constants
 	const VectorRegister4Float VecH2 = VectorSetFloat1(Coeffs.h2);
 	const VectorRegister4Float VecH = VectorSetFloat1(Coeffs.h);
 	const VectorRegister4Float VecCmToM = VectorSetFloat1(CM_TO_M);
@@ -234,7 +234,7 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 		VectorRegister4Float VecGradC_iY = VecZero;
 		VectorRegister4Float VecGradC_iZ = VecZero;
 
-		// SIMD 4개씩 처리
+		// Process 4 at a time with SIMD
 		int32 n = 0;
 		for (; n + 4 <= NumNeighbors; n += 4)
 		{
@@ -259,10 +259,10 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 			VecR2 = VectorMultiplyAdd(VecDY, VecDY, VecR2);
 			VecR2 = VectorMultiplyAdd(VecDZ, VecDZ, VecR2);
 
-			// 범위 마스크
+			// Range mask
 			const VectorRegister4Float VecMask = VectorCompareLT(VecR2, VecSmoothingRadiusSq);
 
-			// Poly6 밀도
+			// Poly6 density
 			const VectorRegister4Float VecR2_m = VectorMultiply(VecR2, VecCmToMSq);
 			VectorRegister4Float VecDiff = VectorSubtract(VecH2, VecR2_m);
 			VectorRegister4Float VecDiff3 = VectorMultiply(VecDiff, VectorMultiply(VecDiff, VecDiff));
@@ -270,7 +270,7 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 			VecDensityContrib = VectorSelect(VecMask, VecDensityContrib, VecZero);
 			VecDensity = VectorAdd(VecDensity, VecDensityContrib);
 
-			// Spiky 그래디언트
+			// Spiky gradient
 			const VectorRegister4Float VecValidMask = VectorBitwiseAnd(VecMask, VectorCompareGT(VecR2, VecMinR2));
 			const VectorRegister4Float VecInvRLen = VectorInvSqrtSafe(VecR2);
 			const VectorRegister4Float VecRLen = VectorMultiply(VecR2, VecInvRLen);
@@ -289,19 +289,19 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 			const VectorRegister4Float VecGradC_jY = VectorMultiply(VectorNegate(VecGradWY), VecInvRestDensity);
 			const VectorRegister4Float VecGradC_jZ = VectorMultiply(VectorNegate(VecGradWZ), VecInvRestDensity);
 
-			// |∇Cⱼ|² 누적
+			// Accumulate |∇Cⱼ|²
 			VectorRegister4Float VecGradC_j2 = VectorMultiply(VecGradC_jX, VecGradC_jX);
 			VecGradC_j2 = VectorMultiplyAdd(VecGradC_jY, VecGradC_jY, VecGradC_j2);
 			VecGradC_j2 = VectorMultiplyAdd(VecGradC_jZ, VecGradC_jZ, VecGradC_j2);
 			VecSumGradC2 = VectorAdd(VecSumGradC2, VecGradC_j2);
 
-			// ∇Cᵢ 누적
+			// Accumulate ∇Cᵢ
 			VecGradC_iX = VectorAdd(VecGradC_iX, VectorMultiply(VecGradWX, VecInvRestDensity));
 			VecGradC_iY = VectorAdd(VecGradC_iY, VectorMultiply(VecGradWY, VecInvRestDensity));
 			VecGradC_iZ = VectorAdd(VecGradC_iZ, VectorMultiply(VecGradWZ, VecInvRestDensity));
 		}
 
-		// SIMD 결과 합산
+		// Reduce SIMD results
 		alignas(16) float Temp[4];
 		float Density = 0.0f, SumGradC2 = 0.0f;
 		float GradC_iX = 0.0f, GradC_iY = 0.0f, GradC_iZ = 0.0f;
@@ -321,7 +321,7 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 		VectorStoreAligned(VecGradC_iZ, Temp);
 		GradC_iZ = Temp[0] + Temp[1] + Temp[2] + Temp[3];
 
-		// 나머지 스칼라 처리
+		// Process remaining scalar elements
 		for (; n < NumNeighbors; ++n)
 		{
 			const int32 NeighborIdx = NeighborData[n];
@@ -361,11 +361,11 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 
 		DensityPtr[i] = Density;
 
-		// Lambda 계산 (XPBD)
+		// Compute Lambda (XPBD)
 		const float C_i = (Density * Coeffs.InvRestDensity) - 1.0f;
 		if (C_i < 0.0f)
 		{
-			// 압축 상태에서는 보정하지 않음 - Lambda 유지 (0으로 리셋하지 않음)
+			// No correction in compressed state - preserve Lambda (do not reset to 0)
 			return;
 		}
 
@@ -380,7 +380,7 @@ void FDensityConstraint::ComputeDensityAndLambda_SIMD(
 }
 
 //========================================
-// 2단계: DeltaP (SIMD) - Tensile Instability (scorr) 보정 포함
+// Step 2: DeltaP (SIMD) - with Tensile Instability (scorr) Correction
 //========================================
 void FDensityConstraint::ComputeDeltaP_SIMD(
 	const TArray<FFluidParticle>& Particles,
@@ -407,7 +407,7 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 	const VectorRegister4Float VecZero = VectorZeroFloat();
 	const VectorRegister4Float VecMinR2 = VectorSetFloat1(KINDA_SMALL_NUMBER);
 
-	// Tensile Instability 파라미터
+	// Tensile Instability parameters
 	const bool bUseTensileCorrection = Coeffs.TensileParams.bEnabled && Coeffs.TensileParams.W_DeltaQ > KINDA_SMALL_NUMBER;
 	const float TensileK = Coeffs.TensileParams.K;
 	const int32 TensileN = Coeffs.TensileParams.N;
@@ -479,17 +479,17 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 			VectorRegister4Float VecGradWY = VectorSelect(VecValidMask, VectorMultiply(VecCoeff, VecDY), VecZero);
 			VectorRegister4Float VecGradWZ = VectorSelect(VecValidMask, VectorMultiply(VecCoeff, VecDZ), VecZero);
 
-			// Lambda 합 계산 (기본)
+			// Compute Lambda sum (basic)
 			VectorRegister4Float VecLambdaSum = VectorAdd(VecLambda_i, VecLambda_j);
 
-			// Tensile Instability 보정 (scorr) 추가
+			// Add Tensile Instability correction (scorr)
 			// PBF Eq.13: scorr = -k * (W(r) / W(Δq))^n
 			if (bUseTensileCorrection)
 			{
 				// W(r) = Poly6(r, h)
 				const VectorRegister4Float VecR2_m = VectorMultiply(VecR2, VecCmToMSq);
 				VectorRegister4Float VecDiff_Poly6 = VectorSubtract(VecH2, VecR2_m);
-				VecDiff_Poly6 = VectorMax(VecDiff_Poly6, VecZero);  // h² - r² >= 0
+				VecDiff_Poly6 = VectorMax(VecDiff_Poly6, VecZero);  // Ensure h² - r² >= 0
 				const VectorRegister4Float VecDiff3 = VectorMultiply(VecDiff_Poly6, VectorMultiply(VecDiff_Poly6, VecDiff_Poly6));
 				const VectorRegister4Float VecW_r = VectorMultiply(VecPoly6Coeff, VecDiff3);
 
@@ -497,7 +497,7 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 				VectorRegister4Float VecRatio = VectorMultiply(VecW_r, VecInvW_DeltaQ);
 				VecRatio = VectorSelect(VecValidMask, VecRatio, VecZero);
 
-				// (W(r) / W(Δq))^n - SIMD에서 정수 거듭제곱
+				// (W(r) / W(Δq))^n - integer exponentiation in SIMD
 				VectorRegister4Float VecRatioPowN = VecRatio;
 				for (int32 p = 1; p < TensileN; ++p)
 				{
@@ -514,7 +514,7 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 			VecDeltaZ = VectorMultiplyAdd(VecLambdaSum, VecGradWZ, VecDeltaZ);
 		}
 
-		// SIMD 결과 합산
+		// Reduce SIMD results
 		alignas(16) float Temp[4];
 		float DeltaX = 0.0f, DeltaY = 0.0f, DeltaZ = 0.0f;
 
@@ -527,7 +527,7 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 		VectorStoreAligned(VecDeltaZ, Temp);
 		DeltaZ = Temp[0] + Temp[1] + Temp[2] + Temp[3];
 
-		// 나머지 스칼라 처리
+		// Process remaining scalar elements
 		for (; n < NumNeighbors; ++n)
 		{
 			const int32 NeighborIdx = NeighborData[n];
@@ -547,7 +547,7 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 
 				float LambdaSum = Lambda_i + LambdaPtr[NeighborIdx];
 
-				// Tensile Instability 보정 (scorr) - 스칼라 경로
+				// Tensile Instability correction (scorr) - scalar path
 				if (bUseTensileCorrection)
 				{
 					const float r2_m = r2_cm * CM_TO_M_SQ;
@@ -573,7 +573,7 @@ void FDensityConstraint::ComputeDeltaP_SIMD(
 }
 
 //========================================
-// 레거시 함수 (하위 호환성)
+// Legacy Functions (backward compatibility)
 //========================================
 
 void FDensityConstraint::ComputeDensities(TArray<FFluidParticle>& Particles)
@@ -623,7 +623,7 @@ float FDensityConstraint::ComputeParticleDensity(const FFluidParticle& Particle,
 float FDensityConstraint::ComputeParticleLambda(const FFluidParticle& Particle, const TArray<FFluidParticle>& Particles)
 {
 	float C_i = (Particle.Density / RestDensity) - 1.0f;
-	if (C_i < 0.0f) return Particle.Lambda;  // 압축 상태: Lambda 유지
+	if (C_i < 0.0f) return Particle.Lambda;  // Compressed state: preserve Lambda
 
 	float SumGradC2 = 0.0f;
 	FVector GradC_i = FVector::ZeroVector;

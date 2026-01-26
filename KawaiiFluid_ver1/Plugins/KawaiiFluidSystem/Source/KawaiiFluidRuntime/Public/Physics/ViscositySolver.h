@@ -6,13 +6,13 @@
 #include "Core/FluidParticle.h"
 
 /**
- * 점성 솔버
+ * @brief Viscosity solver.
  *
- * XSPH 기반 점성 구현
- * 입자들의 속도를 이웃들과 평균화하여 점성 효과 표현
+ * XSPH-based viscosity implementation.
+ * Represents viscosity effects by averaging particle velocities with their neighbors.
  *
- * 높은 점성 계수 = 꿀, 슬라임 같은 끈적한 유체
- * 낮은 점성 계수 = 물 같은 흐르는 유체
+ * High viscosity coefficient = viscous fluids like honey, slime
+ * Low viscosity coefficient = flowing fluids like water
  */
 class KAWAIIFLUIDRUNTIME_API FViscositySolver
 {
@@ -20,28 +20,28 @@ public:
 	FViscositySolver();
 
 	/**
-	 * XSPH 점성 적용
+	 * @brief Apply XSPH viscosity.
 	 *
 	 * v_i = v_i + c * Σ(v_j - v_i) * W(r_ij, h)
 	 *
-	 * @param Particles 입자 배열
-	 * @param ViscosityCoeff 점성 계수 (0.0 ~ 1.0)
-	 * @param SmoothingRadius 커널 반경
+	 * @param Particles Particle array
+	 * @param ViscosityCoeff Viscosity coefficient (0.0 ~ 1.0)
+	 * @param SmoothingRadius Kernel radius
 	 */
 	void ApplyXSPH(TArray<FFluidParticle>& Particles, float ViscosityCoeff, float SmoothingRadius);
 
 	/**
-	 * 점탄성 스프링 적용 (선택적 - 슬라임용)
-	 * 입자들 사이에 스프링 연결을 유지하여 늘어났다 돌아오는 효과
+	 * @brief Apply viscoelastic springs (optional - for slime).
+	 * Maintains spring connections between particles for stretch-and-return effects.
 	 *
-	 * @param Particles 입자 배열
-	 * @param SpringStiffness 스프링 강성
-	 * @param DeltaTime 시간 간격
+	 * @param Particles Particle array
+	 * @param SpringStiffness Spring stiffness
+	 * @param DeltaTime Time step
 	 */
 	void ApplyViscoelasticSprings(TArray<FFluidParticle>& Particles, float SpringStiffness, float DeltaTime);
 
 private:
-	/** 점탄성 스프링 연결 */
+	/** Viscoelastic spring connection */
 	struct FSpringConnection
 	{
 		int32 ParticleA;
@@ -52,16 +52,16 @@ private:
 		FSpringConnection(int32 A, int32 B, float Length) : ParticleA(A), ParticleB(B), RestLength(Length) {}
 	};
 
-	/** 스프링 연결 목록 */
+	/** Spring connection list */
 	TArray<FSpringConnection> Springs;
 
-	/** 스프링 생성 거리 임계값 */
+	/** Spring creation distance threshold */
 	float SpringThreshold;
 
 public:
-	/** 스프링 연결 업데이트 (이웃 기반) */
+	/** Update spring connections (neighbor-based) */
 	void UpdateSprings(const TArray<FFluidParticle>& Particles, float SmoothingRadius);
 
-	/** 모든 스프링 제거 */
+	/** Remove all springs */
 	void ClearSprings();
 };

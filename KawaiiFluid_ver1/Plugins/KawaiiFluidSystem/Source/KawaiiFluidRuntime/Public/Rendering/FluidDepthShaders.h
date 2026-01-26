@@ -14,7 +14,7 @@
 class FUseAnisotropyDim : SHADER_PERMUTATION_BOOL("USE_ANISOTROPY");
 
 /**
- * Fluid Depth 렌더링을 위한 공유 파라미터 구조체
+ * Shared parameter structure for Fluid Depth rendering
  */
 BEGIN_SHADER_PARAMETER_STRUCT(FFluidDepthParameters, )
 	SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float3>, ParticlePositions)
@@ -35,7 +35,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FFluidDepthParameters, )
 END_SHADER_PARAMETER_STRUCT()
 
 /**
- * Fluid Depth 렌더링 Vertex Shader
+ * Fluid Depth rendering Vertex Shader
  */
 class FFluidDepthVS : public FGlobalShader
 {
@@ -59,7 +59,7 @@ class FFluidDepthVS : public FGlobalShader
 };
 
 /**
- * Fluid Depth 렌더링 Pixel Shader
+ * Fluid Depth rendering Pixel Shader
  */
 class FFluidDepthPS : public FGlobalShader
 {

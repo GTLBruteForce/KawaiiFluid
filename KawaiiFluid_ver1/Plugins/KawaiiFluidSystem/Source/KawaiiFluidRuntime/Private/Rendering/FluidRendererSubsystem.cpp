@@ -37,7 +37,7 @@ void UFluidRendererSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
-	// Scene View Extension 생성 및 등록
+	// Create and register Scene View Extension
 	ViewExtension = FSceneViewExtensions::NewExtension<FFluidSceneViewExtension>(this);
 
 	UE_LOG(LogTemp, Log, TEXT("FluidRendererSubsystem Initialized"));
@@ -45,7 +45,7 @@ void UFluidRendererSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UFluidRendererSubsystem::Deinitialize()
 {
-	// View Extension 해제
+	// Release View Extension
 	ViewExtension.Reset();
 
 	RegisteredRenderingModules.Empty();

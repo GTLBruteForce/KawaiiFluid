@@ -9,13 +9,13 @@ class UKawaiiFluidVolumeComponent;
 class AKawaiiFluidVolume;
 
 /**
- * KawaiiFluidVolumeComponent 디테일 패널 커스터마이제이션
- * 브러시 모드 시작/종료 버튼 및 파티클 개수 표시 추가
+ * KawaiiFluidVolumeComponent detail panel customization
+ * Adds brush mode start/stop buttons and particle count display
  */
 class FFluidVolumeComponentDetails : public IDetailCustomization
 {
 public:
-	/** IDetailCustomization 팩토리 */
+	/** IDetailCustomization factory */
 	static TSharedRef<IDetailCustomization> MakeInstance();
 
 	//~ Begin IDetailCustomization Interface
@@ -23,27 +23,27 @@ public:
 	//~ End IDetailCustomization Interface
 
 private:
-	/** 타겟 볼륨 컴포넌트 */
+	/** Target volume component */
 	TWeakObjectPtr<UKawaiiFluidVolumeComponent> TargetComponent;
 
-	/** 타겟 볼륨 액터 (Brush API 접근용) */
+	/** Target volume actor (for Brush API access) */
 	TWeakObjectPtr<AKawaiiFluidVolume> TargetVolume;
 
-	/** 브러시 시작 버튼 클릭 */
+	/** Brush start button clicked */
 	FReply OnStartBrushClicked();
 
-	/** 브러시 종료 버튼 클릭 */
+	/** Brush stop button clicked */
 	FReply OnStopBrushClicked();
 
-	/** 파티클 전체 삭제 버튼 클릭 */
+	/** Clear all particles button clicked */
 	FReply OnClearParticlesClicked();
 
-	/** Start 버튼 표시 여부 */
+	/** Start button visibility */
 	EVisibility GetStartVisibility() const;
 
-	/** Stop 버튼 표시 여부 */
+	/** Stop button visibility */
 	EVisibility GetStopVisibility() const;
 
-	/** 브러시 모드 활성화 상태 확인 */
+	/** Check if brush mode is active */
 	bool IsBrushActive() const;
 };

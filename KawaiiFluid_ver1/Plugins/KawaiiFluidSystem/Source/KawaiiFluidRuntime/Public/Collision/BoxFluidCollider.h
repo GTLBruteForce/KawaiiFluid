@@ -7,7 +7,7 @@
 #include "BoxFluidCollider.generated.h"
 
 /**
- * 박스 형태 유체 콜라이더
+ * @brief Box-shaped fluid collider.
  */
 UCLASS(ClassGroup=(KawaiiFluid), meta=(BlueprintSpawnableComponent))
 class KAWAIIFLUIDRUNTIME_API UBoxFluidCollider : public UFluidCollider

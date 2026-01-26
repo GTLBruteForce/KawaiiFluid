@@ -19,16 +19,16 @@ FKawaiiFluidRenderResource::FKawaiiFluidRenderResource()
 
 FKawaiiFluidRenderResource::~FKawaiiFluidRenderResource()
 {
-	// 렌더 리소스가 제대로 정리되었는지 확인
+	// Ensure render resource has been properly cleaned up
 	check(!IsInitialized() && "RenderResource must be released before destruction!");
 }
 
 void FKawaiiFluidRenderResource::InitRHI(FRHICommandListBase& RHICmdList)
 {
-	// 초기에는 작은 버퍼 생성 (실제 데이터 업데이트 시 리사이즈됨)
+	// Initially create small buffer (will resize when actual data is updated)
 	if (BufferCapacity == 0)
 	{
-		BufferCapacity = 100; // 기본 100개 파티클
+		BufferCapacity = 100; // Default 100 particles
 	}
 
 	ResizeBuffer(RHICmdList, BufferCapacity);
@@ -36,13 +36,13 @@ void FKawaiiFluidRenderResource::InitRHI(FRHICommandListBase& RHICmdList)
 
 void FKawaiiFluidRenderResource::ReleaseRHI()
 {
-	// Legacy AoS 버퍼 해제
+	// Release Legacy AoS buffers
 	ParticleBuffer.SafeRelease();
 	ParticleSRV.SafeRelease();
 	ParticleUAV.SafeRelease();
 	PooledParticleBuffer.SafeRelease();
 
-	// SoA 버퍼 해제
+	// Release SoA buffers
 	PooledPositionBuffer.SafeRelease();
 	PooledVelocityBuffer.SafeRelease();
 
@@ -69,17 +69,17 @@ bool FKawaiiFluidRenderResource::NeedsResize(int32 NewCount) const
 
 void FKawaiiFluidRenderResource::ResizeBuffer(FRHICommandListBase& RHICmdList, int32 NewCapacity)
 {
-	// 기존 버퍼 해제 (Legacy AoS)
+	// Release existing buffers (Legacy AoS)
 	ParticleBuffer.SafeRelease();
 	ParticleSRV.SafeRelease();
 	ParticleUAV.SafeRelease();
 	PooledParticleBuffer.SafeRelease();
 
-	// SoA 버퍼 해제
+	// Release SoA buffers
 	PooledPositionBuffer.SafeRelease();
 	PooledVelocityBuffer.SafeRelease();
 
-	// Bounds/RenderParticle 버퍼 해제
+	// Release Bounds/RenderParticle buffers
 	PooledBoundsBuffer.SafeRelease();
 	PooledRenderParticleBuffer.SafeRelease();
 
@@ -97,7 +97,7 @@ void FKawaiiFluidRenderResource::ResizeBuffer(FRHICommandListBase& RHICmdList, i
 	FRDGBuilder GraphBuilder(ImmediateCmdList);
 
 	//========================================
-	// Legacy AoS 버퍼 생성 (호환성 유지)
+	// Create Legacy AoS buffers (maintain compatibility)
 	//========================================
 	FRDGBufferDesc RDGBufferDesc = FRDGBufferDesc::CreateStructuredDesc(ElementSize, NewCapacity);
 	RDGBufferDesc.Usage |= EBufferUsageFlags::UnorderedAccess;
@@ -108,10 +108,10 @@ void FKawaiiFluidRenderResource::ResizeBuffer(FRHICommandListBase& RHICmdList, i
 	GraphBuilder.QueueBufferExtraction(RDGBuffer, &PooledParticleBuffer, ERHIAccess::SRVMask);
 
 	//========================================
-	// SoA 버퍼 생성 (메모리 대역폭 최적화)
+	// Create SoA buffers (memory bandwidth optimization)
 	//========================================
 
-	// Position 버퍼 (float3 = 12 bytes)
+	// Position buffer (float3 = 12 bytes)
 	FRDGBufferDesc PositionBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), NewCapacity);
 	PositionBufferDesc.Usage |= EBufferUsageFlags::UnorderedAccess;
 	FRDGBufferRef PositionRDGBuffer = GraphBuilder.CreateBuffer(PositionBufferDesc, TEXT("RenderPositionsSoA"));
@@ -120,7 +120,7 @@ void FKawaiiFluidRenderResource::ResizeBuffer(FRHICommandListBase& RHICmdList, i
 	AddClearUAVPass(GraphBuilder, PositionUAV, 0u);
 	GraphBuilder.QueueBufferExtraction(PositionRDGBuffer, &PooledPositionBuffer, ERHIAccess::SRVMask);
 
-	// Velocity 버퍼 (float3 = 12 bytes)
+	// Velocity buffer (float3 = 12 bytes)
 	FRDGBufferDesc VelocityBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), NewCapacity);
 	VelocityBufferDesc.Usage |= EBufferUsageFlags::UnorderedAccess;
 	FRDGBufferRef VelocityRDGBuffer = GraphBuilder.CreateBuffer(VelocityBufferDesc, TEXT("RenderVelocitiesSoA"));
@@ -130,7 +130,7 @@ void FKawaiiFluidRenderResource::ResizeBuffer(FRHICommandListBase& RHICmdList, i
 	GraphBuilder.QueueBufferExtraction(VelocityRDGBuffer, &PooledVelocityBuffer, ERHIAccess::SRVMask);
 
 	//========================================
-	// Bounds 버퍼 (float3 * 2 = Min, Max)
+	// Bounds buffer (float3 * 2 = Min, Max)
 	//========================================
 	FRDGBufferDesc BoundsBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), 2);
 	BoundsBufferDesc.Usage |= EBufferUsageFlags::UnorderedAccess;
@@ -141,7 +141,7 @@ void FKawaiiFluidRenderResource::ResizeBuffer(FRHICommandListBase& RHICmdList, i
 	GraphBuilder.QueueBufferExtraction(BoundsRDGBuffer, &PooledBoundsBuffer, ERHIAccess::SRVMask);
 
 	//========================================
-	// RenderParticle 버퍼 (FKawaiiRenderParticle)
+	// RenderParticle buffer (FKawaiiRenderParticle)
 	//========================================
 	FRDGBufferDesc RenderParticleBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FKawaiiRenderParticle), NewCapacity);
 	RenderParticleBufferDesc.Usage |= EBufferUsageFlags::UnorderedAccess;
@@ -189,7 +189,7 @@ void FKawaiiFluidRenderResource::SetGPUSimulatorReference(
 
 	if (InSimulator)
 	{
-		// 버퍼 크기 조정 필요 시 렌더 스레드에서 ResizeBuffer 호출
+		// Call ResizeBuffer on render thread if buffer resize needed
 		const bool bNeedsResizeNow = NeedsResize(InParticleCount);
 		if (bNeedsResizeNow)
 		{
@@ -303,7 +303,7 @@ void FKawaiiFluidRenderResource::SetRenderParticleBuffer(TRefCountPtr<FRDGPooled
 }
 
 //========================================
-// Z-Order 버퍼 접근 (Ray Marching 볼륨 빌딩용)
+// Z-Order buffer access (for Ray Marching volume building)
 //========================================
 
 TRefCountPtr<FRDGPooledBuffer> FKawaiiFluidRenderResource::GetPooledCellStartBuffer() const

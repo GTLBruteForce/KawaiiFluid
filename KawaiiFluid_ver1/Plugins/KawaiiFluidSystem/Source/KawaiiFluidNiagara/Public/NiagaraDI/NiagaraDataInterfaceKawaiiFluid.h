@@ -15,31 +15,31 @@ struct FKawaiiRenderParticle;
 struct FFluidParticle;
 
 /**
- * Per-Instance 데이터 구조체
- * Niagara 시스템 인스턴스마다 하나씩 생성됨
+ * Per-Instance data structure
+ * One instance is created for each Niagara system instance
  */
 struct FNDIKawaiiFluid_InstanceData
 {
-	/** 참조하는 FluidComponent (약한 포인터) */
+	/** Referenced FluidComponent (weak pointer) */
 	TWeakObjectPtr<UKawaiiFluidComponent> SourceComponent;
 
-	/** SimulationModule 캐시 (Component에서 가져옴) */
+	/** SimulationModule cache (retrieved from Component) */
 	TWeakObjectPtr<UKawaiiFluidSimulationModule> SourceModule;
 
-	/** 마지막 업데이트 시간 */
+	/** Last update time */
 	float LastUpdateTime = 0.0f;
 
-	/** 캐시된 파티클 수 */
+	/** Cached particle count */
 	int32 CachedParticleCount = 0;
 
-	/** GPU 버퍼 (Position + Velocity) */
+	/** GPU buffer (Position + Velocity) */
 	FBufferRHIRef ParticleBuffer;
 	FShaderResourceViewRHIRef ParticleSRV;
 
-	/** 버퍼 용량 (재할당 최소화) */
+	/** Buffer capacity (minimize reallocation) */
 	int32 BufferCapacity = 0;
 
-	/** 버퍼가 유효한지 */
+	/** Check if buffer is valid */
 	bool IsBufferValid() const
 	{
 		return ParticleBuffer.IsValid() && ParticleSRV.IsValid();
@@ -48,9 +48,9 @@ struct FNDIKawaiiFluid_InstanceData
 
 /**
  * Kawaii Fluid Data Interface
- * CPU에서 생성한 파티클 데이터를 Niagara GPU 파티클로 전달
+ * Passes CPU-generated particle data to Niagara GPU particles
  *
- * @note UKawaiiFluidComponent의 SimulationModule을 사용합니다
+ * @note Uses SimulationModule from UKawaiiFluidComponent
  */
 UCLASS(EditInlineNew, Category = "KawaiiFluid", meta = (DisplayName = "Kawaii Fluid Data"))
 class KAWAIIFLUIDNIAGARA_API UNiagaraDataInterfaceKawaiiFluid : public UNiagaraDataInterface
@@ -58,33 +58,33 @@ class KAWAIIFLUIDNIAGARA_API UNiagaraDataInterfaceKawaiiFluid : public UNiagaraD
 	GENERATED_UCLASS_BODY()
 
 	/**
-	 * 연결할 FluidComponent를 가진 Actor
-	 * @note 반드시 UKawaiiFluidComponent를 가진 Actor를 선택하세요
+	 * Actor with FluidComponent to connect
+	 * @note Must select an Actor with UKawaiiFluidComponent
 	 */
 	UPROPERTY(EditAnywhere, Category = "Kawaii Fluid", meta = (AllowedClasses = "/Script/Engine.Actor"))
 	TSoftObjectPtr<AActor> SourceFluidActor;
 
-	/** 자동 업데이트 활성화 (false면 수동 호출 필요) */
+	/** Enable auto update (manual call required if false) */
 	UPROPERTY(EditAnywhere, Category = "Kawaii Fluid")
 	bool bAutoUpdate = true;
 
-	/** 업데이트 빈도 (초, 0 = 매 프레임) */
+	/** Update frequency (seconds, 0 = every frame) */
 	UPROPERTY(EditAnywhere, Category = "Kawaii Fluid", meta = (ClampMin = "0.0"))
 	float UpdateInterval = 0.0f;
 
 	//========================================
-	// UNiagaraDataInterface 오버라이드
+	// UNiagaraDataInterface overrides
 	//========================================
 
-	/** VM 함수 바인딩 (CPU 시뮬레이션용) */
+	/** VM function binding (for CPU simulation) */
 	virtual void GetVMExternalFunction(const FVMExternalFunctionBindingInfo& BindingInfo, 
 	                                    void* InstanceData, 
 	                                    FVMExternalFunction& OutFunc) override;
 
-	/** 실행 타겟 지원 여부 */
+	/** Check if execution target is supported */
 	virtual bool CanExecuteOnTarget(ENiagaraSimTarget Target) const override { return true; }
 
-	/** GPU 시뮬레이션 함수 등록 */
+	/** GPU simulation function registration */
 #if WITH_EDITORONLY_DATA
 	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, 
 	                                         FString& OutHLSL) override;
@@ -95,33 +95,33 @@ class KAWAIIFLUIDNIAGARA_API UNiagaraDataInterfaceKawaiiFluid : public UNiagaraD
 	virtual bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const override;
 #endif
 
-	/** Per-Instance 데이터 크기 */
+	/** Per-Instance data size */
 	virtual int32 PerInstanceDataSize() const override
 	{
 		return sizeof(FNDIKawaiiFluid_InstanceData);
 	}
 
-	/** Per-Instance 데이터 초기화 */
+	/** Per-Instance data initialization */
 	virtual bool InitPerInstanceData(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance) override;
 
-	/** Per-Instance 데이터 파괴 */
+	/** Per-Instance data destruction */
 	virtual void DestroyPerInstanceData(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance) override;
 
-	/** 매 프레임 업데이트 (게임 스레드) */
+	/** Per-frame update (game thread) */
 	virtual bool PerInstanceTick(void* PerInstanceData, 
 	                              FNiagaraSystemInstance* SystemInstance, 
 	                              float DeltaSeconds) override;
 
-	/** 거리 필드 필요 여부 */
+	/** Check if distance field is required */
 	virtual bool RequiresDistanceFieldData() const override { return false; }
 
-	/** PreSimulate Tick 필요 */
+	/** PreSimulate Tick required */
 	virtual bool HasPreSimulateTick() const override { return true; }
 
-	/** 복사 가능 */
+	/** Copyable */
 	virtual bool Equals(const UNiagaraDataInterface* Other) const override;
 
-	/** GPU 컴퓨트 파라미터 설정 */
+	/** GPU compute parameter setup */
 	virtual void ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, 
 	                                                    void* PerInstanceData, 
 	                                                    const FNiagaraSystemInstanceID& SystemInstance) override;
@@ -130,49 +130,49 @@ class KAWAIIFLUIDNIAGARA_API UNiagaraDataInterfaceKawaiiFluid : public UNiagaraD
 	// UObject Interface
 	//========================================
 
-	/** Niagara Type Registry 등록 (필수!) */
+	/** Niagara Type Registry registration (required!) */
 	virtual void PostInitProperties() override;
 
 	//========================================
-	// UNiagaraDataInterface 오버라이드
+	// UNiagaraDataInterface overrides
 	//========================================
 
-	/** 데이터 복사 (UPROPERTY 동기화) */
+	/** Data copy (UPROPERTY synchronization) */
 	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const override;
 
 	//========================================
-	// VM 함수들 (CPU 시뮬레이션용)
+	// VM functions (for CPU simulation)
 	//========================================
 
-	/** 파티클 개수 가져오기 */
+	/** Get particle count */
 	void VMGetParticleCount(FVectorVMExternalFunctionContext& Context);
 
-	/** 특정 인덱스의 파티클 위치 가져오기 */
+	/** Get particle position at specific index */
 	void VMGetParticlePosition(FVectorVMExternalFunctionContext& Context);
 
-	/** 특정 인덱스의 파티클 속도 가져오기 */
+	/** Get particle velocity at specific index */
 	void VMGetParticleVelocity(FVectorVMExternalFunctionContext& Context);
 
-	/** 파티클 반경 가져오기 */
+	/** Get particle radius */
 	void VMGetParticleRadius(FVectorVMExternalFunctionContext& Context);
 
 protected:
 #if WITH_EDITORONLY_DATA
-	/** 함수 시그니처 등록 (에디터 전용) */
+	/** Function signature registration (editor only) */
 	virtual void GetFunctionsInternal(TArray<FNiagaraFunctionSignature>& OutFunctions) const override;
 #endif
 
 	//========================================
-	// 내부 헬퍼 함수
+	// Internal helper functions
 	//========================================
 
 private:
-	/** GPU 버퍼 업데이트 (렌더 스레드) */
+	/** GPU buffer update (render thread) */
 	void UpdateGPUBuffers_RenderThread(FNDIKawaiiFluid_InstanceData* InstanceData,
 	                                     const TArray<FFluidParticle>& Particles,
 	                                     float Radius);
 
-	/** 함수 이름 상수 */
+	/** Function name constants */
 	static const FName GetParticleCountName;
 	static const FName GetParticlePositionName;
 	static const FName GetParticleVelocityName;

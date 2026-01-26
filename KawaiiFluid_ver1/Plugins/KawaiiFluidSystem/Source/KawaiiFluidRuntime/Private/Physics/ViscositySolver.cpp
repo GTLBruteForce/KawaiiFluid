@@ -28,18 +28,18 @@ void FViscositySolver::ApplyXSPH(TArray<FFluidParticle>& Particles, float Viscos
 		return;
 	}
 
-	// [개선 1] 커널 계수 캐싱 - 프레임당 한 번만 계산
+	// [Optimization 1] Cache kernel coefficients - compute once per frame
 	SPHKernels::FKernelCoefficients KernelCoeffs;
 	KernelCoeffs.Precompute(SmoothingRadius);
 
-	// 반경 제곱 (sqrt 호출 회피용)
+	// Radius squared (to avoid sqrt calls)
 	const float RadiusSquared = SmoothingRadius * SmoothingRadius;
 
-	// 임시 배열에 새 속도 저장
+	// Store new velocities in temporary array
 	TArray<FVector> NewVelocities;
 	NewVelocities.SetNum(ParticleCount);
 
-	// [개선 4] 작업량 균등화 - Unbalanced 플래그로 이웃 수 편차 대응
+	// [Optimization 4] Load balancing - use Unbalanced flag to handle varying neighbor counts
 	ParallelFor(ParticleCount, [&](int32 i)
 	{
 		const FFluidParticle& Particle = Particles[i];
@@ -56,41 +56,41 @@ void FViscositySolver::ApplyXSPH(TArray<FFluidParticle>& Particles, float Viscos
 			const FFluidParticle& Neighbor = Particles[NeighborIdx];
 			const FVector r = Particle.Position - Neighbor.Position;
 
-			// [개선 2] 반경 기반 필터링 - r² > h² 이면 조기 스킵 (sqrt 회피)
+			// [Optimization 2] Radius-based filtering - early skip if r² > h² (avoid sqrt)
 			const float rSquared = r.SizeSquared();
 			if (rSquared > RadiusSquared)
 			{
 				continue;
 			}
 
-			// [개선 1] 캐싱된 계수로 Poly6 직접 계산
+			// [Optimization 1] Directly compute Poly6 with cached coefficients
 			// W(r, h) = Poly6Coeff * (h² - r²)³
-			// 단위 변환: cm -> m (계수는 이미 m 단위로 계산됨)
+			// Unit conversion: cm -> m (coefficients already computed in m units)
 			const float h2_m = KernelCoeffs.h2;
 			const float r2_m = rSquared * ViscosityConstants::CM_TO_M_SQ;
 			const float diff = h2_m - r2_m;
 			const float Weight = (diff > 0.0f) ? KernelCoeffs.Poly6Coeff * diff * diff * diff : 0.0f;
 
-			// 속도 차이
+			// Velocity difference
 			const FVector VelocityDiff = Neighbor.Velocity - Particle.Velocity;
 
 			VelocityCorrection += VelocityDiff * Weight;
 			WeightSum += Weight;
 		}
 
-		// 정규화 (선택적)
+		// Normalization (optional)
 		if (WeightSum > 0.0f)
 		{
 			VelocityCorrection /= WeightSum;
 		}
 
-		// XSPH 점성 적용: v_new = v + c * Σ(v_j - v_i) * W
+		// Apply XSPH viscosity: v_new = v + c * Σ(v_j - v_i) * W
 		NewVelocities[i] = Particle.Velocity + ViscosityCoeff * VelocityCorrection;
 
 	}, EParallelForFlags::Unbalanced);
 
-	// [개선 3] 속도 적용 루프 단순화 - ParallelFor 대신 단순 for 루프
-	// 단순 복사 작업은 스케줄러 오버헤드가 더 큼
+	// [Optimization 3] Simplify velocity application loop - use simple for loop instead of ParallelFor
+	// Simple copy operations have more scheduler overhead than benefit
 	for (int32 i = 0; i < ParticleCount; ++i)
 	{
 		Particles[i].Velocity = NewVelocities[i];
@@ -122,13 +122,13 @@ void FViscositySolver::ApplyViscoelasticSprings(TArray<FFluidParticle>& Particle
 			continue;
 		}
 
-		// 변위
+		// Displacement
 		float Displacement = CurrentLength - Spring.RestLength;
 
-		// 스프링 힘: F = -k * x
+		// Spring force: F = -k * x
 		FVector Force = SpringStiffness * Displacement * (Delta / CurrentLength);
 
-		// 속도에 힘 적용 (질량으로 나눔)
+		// Apply force to velocity (divide by mass)
 		ParticleA.Velocity -= Force * DeltaTime / ParticleA.Mass;
 		ParticleB.Velocity += Force * DeltaTime / ParticleB.Mass;
 	}
@@ -136,7 +136,7 @@ void FViscositySolver::ApplyViscoelasticSprings(TArray<FFluidParticle>& Particle
 
 void FViscositySolver::UpdateSprings(const TArray<FFluidParticle>& Particles, float SmoothingRadius)
 {
-	// 기존 스프링 중 유효한 것만 유지
+	// Keep only valid springs
 	Springs.RemoveAll([&](const FSpringConnection& Spring)
 	{
 		if (!Particles.IsValidIndex(Spring.ParticleA) || !Particles.IsValidIndex(Spring.ParticleB))
@@ -149,11 +149,11 @@ void FViscositySolver::UpdateSprings(const TArray<FFluidParticle>& Particles, fl
 			Particles[Spring.ParticleB].Position
 		);
 
-		// 너무 멀어지면 스프링 끊기
+		// Break spring if too far apart
 		return Distance > SmoothingRadius * 2.0f;
 	});
 
-	// 새 스프링 추가 (가까운 이웃들 사이)
+	// Add new springs (between close neighbors)
 	TSet<uint64> ExistingPairs;
 	for (const FSpringConnection& Spring : Springs)
 	{
@@ -176,7 +176,7 @@ void FViscositySolver::UpdateSprings(const TArray<FFluidParticle>& Particles, fl
 			const FFluidParticle& Neighbor = Particles[NeighborIdx];
 			float Distance = FVector::Dist(Particle.Position, Neighbor.Position);
 
-			// 스프링 생성 조건
+			// Spring creation condition
 			if (Distance < SmoothingRadius * SpringThreshold)
 			{
 				int32 MinIdx = FMath::Min(i, NeighborIdx);

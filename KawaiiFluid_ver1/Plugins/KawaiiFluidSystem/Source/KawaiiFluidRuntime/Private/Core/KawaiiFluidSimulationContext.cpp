@@ -173,7 +173,7 @@ namespace
 			return;
 		}
 
-		// Convex 디버그 로그
+		// Convex debug log
 		static int32 ConvexLogCounter = 0;
 		if (++ConvexLogCounter % 300 == 1)
 		{
@@ -193,7 +193,7 @@ namespace
 		Convex.PlaneStartIndex = OutPrimitives.ConvexPlanes.Num();
 		Convex.PlaneCount = Planes.Num();
 
-		// PlaneStartIndex 디버그 로그
+		// PlaneStartIndex debug log
 		if (ConvexLogCounter % 300 == 1)
 		{
 			UE_LOG(LogTemp, Log, TEXT("[Convex] PlaneStartIndex=%d, PlaneCount=%d, TotalPlanesBeforeAppend=%d"),
@@ -352,7 +352,7 @@ void UKawaiiFluidSimulationContext::ReleaseGPUSimulator()
 }
 
 //=============================================================================
-// Render Resource Methods (배치 렌더링용)
+// Render Resource Methods (for batch rendering)
 //=============================================================================
 
 void UKawaiiFluidSimulationContext::InitializeRenderResource()
@@ -784,7 +784,7 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 			}
 		}
 
-		// Simulation Volume 내 StaticMesh들의 Simple Collision 자동 수집
+		// Auto-collect Simple Collision from StaticMeshes within Simulation Volume
 		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(SimGPU_WorldCollision);
 			AppendGPUWorldCollisionPrimitives(
@@ -1224,26 +1224,26 @@ void UKawaiiFluidSimulationContext::SolveDensityConstraints(
 		return;
 	}
 
-	// XPBD: Lambda 초기화 (매 타임스텝 시작 시 0으로 리셋)
+	// XPBD: Initialize Lambda (reset to 0 at start of each timestep)
 	ParallelFor(Particles.Num(), [&](int32 i)
 	{
 		Particles[i].Lambda = 0.0f;
 	});
 
-	// Tensile Instability 파라미터 설정 (PBF Eq.13-14)
+	// Tensile Instability parameter setup (PBF Eq.13-14)
 	const bool bUseTensileCorrection = Preset->bEnableTensileCorrection;
 
 	// Scale Compliance based on SmoothingRadius for stability across different particle sizes
 	const float ScaledCompliance = SPHScaling::GetScaledCompliance(
 		Preset->Compressibility, Preset->SmoothingRadius, Preset->ComplianceExponent);
 
-	// XPBD 반복 솔버 (점성 유체: 2-3회, 물: 4-6회)
+	// XPBD iterative solver (viscous fluid: 2-3 iterations, water: 4-6 iterations)
 	const int32 SolverIterations = Preset->SolverIterations;
 	for (int32 Iter = 0; Iter < SolverIterations; ++Iter)
 	{
 		if (bUseTensileCorrection)
 		{
-			// Tensile Instability 보정 포함 솔버
+			// Solver with Tensile Instability correction
 			FTensileInstabilityParams TensileParams;
 			TensileParams.bEnabled = true;
 			TensileParams.K = Preset->TensileInstabilityK;
@@ -1261,7 +1261,7 @@ void UKawaiiFluidSimulationContext::SolveDensityConstraints(
 		}
 		else
 		{
-			// 기본 솔버
+			// Default solver
 			DensityConstraint->Solve(
 				Particles,
 				Preset->SmoothingRadius,
@@ -1291,7 +1291,7 @@ void UKawaiiFluidSimulationContext::AppendGPUWorldCollisionPrimitives(
 	float DefaultFriction,
 	float DefaultRestitution)
 {
-	// 진단 로그 (60프레임마다)
+	// Diagnostic log (every 60 frames)
 	static int32 DiagLogCounter = 0;
 	const bool bShouldLog = (++DiagLogCounter % 60 == 1);
 
@@ -1410,7 +1410,7 @@ void UKawaiiFluidSimulationContext::AppendGPUWorldCollisionPrimitives(
 
 			ValidStaticMeshCount++;
 
-			// 개별 StaticMesh 디버그 로그
+			// Individual StaticMesh debug log
 			if (bShouldLog)
 			{
 				const FVector MeshLocation = StaticMeshComp->GetComponentLocation();
@@ -1425,7 +1425,7 @@ void UKawaiiFluidSimulationContext::AppendGPUWorldCollisionPrimitives(
 					AggGeom.SphereElems.Num(), AggGeom.SphylElems.Num(),
 					AggGeom.BoxElems.Num(), AggGeom.ConvexElems.Num());
 
-				// 각 프리미티브 상세 정보
+				// Detailed primitive information
 				for (int32 i = 0; i < AggGeom.SphereElems.Num(); ++i)
 				{
 					const FKSphereElem& Sphere = AggGeom.SphereElems[i];
@@ -1445,7 +1445,7 @@ void UKawaiiFluidSimulationContext::AppendGPUWorldCollisionPrimitives(
 						i, Convex.VertexData.Num(), Convex.IndexData.Num());
 					if (Convex.VertexData.Num() > 0)
 					{
-						// 바운딩 박스 계산
+						// Calculate bounding box
 						FBox ConvexBounds(ForceInit);
 						for (const FVector& V : Convex.VertexData)
 						{
@@ -1469,7 +1469,7 @@ void UKawaiiFluidSimulationContext::AppendGPUWorldCollisionPrimitives(
 			);
 		}
 
-		// 로그 출력 (캐시 갱신 시에만, 60프레임마다)
+		// Log output (only on cache refresh, every 60 frames)
 		static int32 WorldCollisionLogCounter = 0;
 		if (++WorldCollisionLogCounter % 60 == 1)
 		{
@@ -1705,7 +1705,7 @@ void UKawaiiFluidSimulationContext::HandleWorldCollision_Sweep(
 				// Therefore: Position = PredictedPosition - DesiredVelocity * dt
 				Particle.Position = Particle.PredictedPosition - DesiredVelocity * SubstepDT;
 
-				// 충돌 이벤트 버퍼에 추가 (나중에 ProcessCollisionFeedback에서 처리)
+				// Add to collision event buffer (processed later in ProcessCollisionFeedback)
 				if (Params.bEnableCollisionEvents && Params.CPUCollisionFeedbackBufferPtr && Params.CPUCollisionFeedbackLockPtr)
 				{
 					const float Speed = Particle.Velocity.Size();
@@ -1720,9 +1720,9 @@ void UKawaiiFluidSimulationContext::HandleWorldCollision_Sweep(
 						Event.HitLocation = HitResult.Location;
 						Event.HitNormal = HitResult.ImpactNormal;
 						Event.HitSpeed = Speed;
-						// HitInteractionComponent는 ProcessCollisionFeedback에서 조회
+						// HitInteractionComponent is looked up in ProcessCollisionFeedback
 
-						// 버퍼에 추가 (thread-safe)
+						// Add to buffer (thread-safe)
 						FScopeLock Lock(Params.CPUCollisionFeedbackLockPtr);
 						Params.CPUCollisionFeedbackBufferPtr->Add(Event);
 					}
@@ -2043,7 +2043,7 @@ void UKawaiiFluidSimulationContext::HandleWorldCollision_SDF(
 				// Back-calculate Position so FinalizePositions derives DesiredVelocity
 				Particle.Position = Particle.PredictedPosition - DesiredVelocity * SubstepDT;
 
-				// 충돌 이벤트 버퍼에 추가 (나중에 ProcessCollisionFeedback에서 처리)
+				// Add to collision event buffer (processed later in ProcessCollisionFeedback)
 				if (Params.bEnableCollisionEvents && Params.CPUCollisionFeedbackBufferPtr && Params.CPUCollisionFeedbackLockPtr)
 				{
 					const float Speed = Particle.Velocity.Size();
@@ -2058,9 +2058,9 @@ void UKawaiiFluidSimulationContext::HandleWorldCollision_SDF(
 						Event.HitLocation = BestClosestPoint;
 						Event.HitNormal = BestNormal;
 						Event.HitSpeed = Speed;
-						// HitInteractionComponent는 ProcessCollisionFeedback에서 조회
+						// HitInteractionComponent is looked up in ProcessCollisionFeedback
 
-						// 버퍼에 추가 (thread-safe)
+						// Add to buffer (thread-safe)
 						FScopeLock Lock(Params.CPUCollisionFeedbackLockPtr);
 						Params.CPUCollisionFeedbackBufferPtr->Add(Event);
 					}

@@ -106,14 +106,14 @@ public:
 
 	/**
 	 * Cleanup AlreadyRequestedIDs based on currently alive particles.
-	 * 두 배열 모두 ParticleID로 정렬되어 있으므로 std::set_intersection 사용 O(n+m).
+	 * Both arrays are sorted by ParticleID, so std::set_intersection is used O(n+m).
 	 * @param AliveParticleIDs - Sorted array of IDs currently alive on GPU
 	 */
 	void CleanupCompletedRequests(const TArray<int32>& AliveParticleIDs);
 
 	/**
 	 * Add multiple despawn requests by particle IDs (thread-safe, more efficient)
-	 * CleanupCompletedRequests는 ProcessStatsReadback에서 Readback 완료 시 호출됨
+	 * CleanupCompletedRequests is called from ProcessStatsReadback when readback completes
 	 * @param ParticleIDs - Array of particle IDs to despawn
 	 */
 	void AddDespawnByIDRequests(const TArray<int32>& ParticleIDs);
@@ -294,7 +294,7 @@ private:
 	//=========================================================================
 	TArray<int32> PendingDespawnByIDs;
 	TArray<int32> ActiveDespawnByIDs;
-	TArray<int32> AlreadyRequestedIDs;  // 정렬된 상태로 유지, std::set_* 연산 사용
+	TArray<int32> AlreadyRequestedIDs;  // Maintained in sorted order, uses std::set_* operations
 	mutable FCriticalSection DespawnByIDLock;
 
 	// Lock-free flag for quick pending check

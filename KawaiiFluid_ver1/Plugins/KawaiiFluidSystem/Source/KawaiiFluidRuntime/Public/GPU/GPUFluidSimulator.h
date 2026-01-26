@@ -142,7 +142,7 @@ public:
 		bNeedsFullUpload = true;
 		InvalidatePreviousPositions();
 
-		// SpawnManager 상태도 리셋 (NextParticleID, AlreadyRequestedIDs 등)
+		// Also reset SpawnManager state (NextParticleID, AlreadyRequestedIDs, etc.)
 		if (SpawnManager)
 		{
 			SpawnManager->Reset();
@@ -171,7 +171,7 @@ public:
 	void SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FGPUFluidSimulationParams& Params);
 
 	//=============================================================================
-	// Frame Lifecycle (프레임당 1번씩 호출, Subsystem에서 사용)
+	// Frame Lifecycle (called once per frame, used by Subsystem)
 	//=============================================================================
 
 	/**
@@ -584,7 +584,7 @@ public:
 	/**
 	 * Add despawn requests by particle IDs (thread-safe)
 	 * Uses binary search on GPU for O(log n) matching per particle
-	 * CleanupCompletedRequests는 ProcessStatsReadback에서 Readback 완료 시 호출됨
+	 * CleanupCompletedRequests is called from ProcessStatsReadback when readback completes
 	 * @param ParticleIDs - Array of particle IDs to despawn
 	 */
 	void AddDespawnByIDRequests(const TArray<int32>& ParticleIDs);
@@ -871,17 +871,17 @@ private:
 	void ReleaseCollisionFeedbackBuffers();
 
 	/**
-	 * 즉시 PersistentParticleBuffer 생성 (시뮬레이션 없이 렌더링 가능하도록)
-	 * UploadParticles 후 Simulate() 호출 전에도 렌더링할 수 있게 함
+	 * Create PersistentParticleBuffer immediately (enable rendering without simulation)
+	 * Allows rendering even before Simulate() is called after UploadParticles
 	 */
 	void CreateImmediatePersistentBuffer();
 
 	/**
-	 * 복사본으로부터 즉시 PersistentParticleBuffer 생성
-	 * Deadlock 방지: BufferLock 없이 호출 가능 (이미 복사된 데이터 사용)
-	 * FinalizeUpload()에서 Lock 범위 밖에서 호출됨
-	 * @param InParticles - 파티클 데이터 복사본 (const ref, 내부에서 필요시 복사)
-	 * @param InParticleCount - 파티클 수
+	 * Create PersistentParticleBuffer immediately from a copy
+	 * Deadlock prevention: Can be called without BufferLock (uses already copied data)
+	 * Called outside Lock scope in FinalizeUpload()
+	 * @param InParticles - Copy of particle data (const ref, copied internally if needed)
+	 * @param InParticleCount - Number of particles
 	 */
 	void CreateImmediatePersistentBufferFromCopy(const TArray<FGPUFluidParticle>& InParticles, int32 InParticleCount);
 

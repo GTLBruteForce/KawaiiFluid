@@ -40,19 +40,19 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 	// Get the owning Volume actor for Brush API access
 	TargetVolume = Cast<AKawaiiFluidVolume>(TargetComponent->GetOwner());
 
-	// Brush Editor 카테고리 (Fluid Volume 카테고리들 위에 배치)
+	// Brush Editor category (placed above Fluid Volume categories)
 	IDetailCategoryBuilder& BrushCategory = DetailBuilder.EditCategory(
 		"Brush Editor",
 		LOCTEXT("BrushEditorCategory", "Brush Editor"),
 		ECategoryPriority::Important);
 
-	// 버튼 행
+	// Button row
 	BrushCategory.AddCustomRow(LOCTEXT("BrushButtons", "Brush Buttons"))
 	.WholeRowContent()
 	[
 		SNew(SHorizontalBox)
 
-		// Start 버튼
+		// Start button
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		.Padding(0, 0, 4, 0)
@@ -64,7 +64,7 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			.Visibility(this, &FFluidVolumeComponentDetails::GetStartVisibility)
 		]
 
-		// Stop 버튼
+		// Stop button
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		.Padding(0, 0, 4, 0)
@@ -76,7 +76,7 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			.Visibility(this, &FFluidVolumeComponentDetails::GetStopVisibility)
 		]
 
-		// Clear 버튼
+		// Clear button
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		[
@@ -87,7 +87,7 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 		]
 	];
 
-	// 파티클 개수 표시
+	// Particle count display
 	BrushCategory.AddCustomRow(LOCTEXT("ParticleCount", "Particle Count"))
 	.NameContent()
 	[
@@ -117,7 +117,7 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 		.Font(IDetailLayoutBuilder::GetDetailFont())
 	];
 
-	// 도움말
+	// Help text
 	BrushCategory.AddCustomRow(LOCTEXT("BrushHelp", "Help"))
 	.Visibility(TAttribute<EVisibility>(this, &FFluidVolumeComponentDetails::GetStopVisibility))
 	.WholeRowContent()
@@ -146,7 +146,7 @@ FReply FFluidVolumeComponentDetails::OnStartBrushClicked()
 		if (FFluidBrushEditorMode* BrushMode = static_cast<FFluidBrushEditorMode*>(
 			ModeTools.GetActiveMode(FFluidBrushEditorMode::EM_FluidBrush)))
 		{
-			// Volume 타겟 설정 (Phase 2에서 구현될 SetTargetVolume 호출)
+			// Set Volume target (calls SetTargetVolume implemented in Phase 2)
 			BrushMode->SetTargetVolume(TargetVolume.Get());
 		}
 	}
@@ -175,7 +175,7 @@ FReply FFluidVolumeComponentDetails::OnClearParticlesClicked()
 {
 	if (TargetVolume.IsValid())
 	{
-		// Volume의 ClearAllParticles() 사용 - 렌더링도 같이 클리어됨
+		// Use Volume's ClearAllParticles() - clears rendering as well
 		TargetVolume->ClearAllParticles();
 		TargetVolume->Modify();
 	}
