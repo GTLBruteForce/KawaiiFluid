@@ -53,12 +53,14 @@ float MaxSurfaceTensionForce;
 //=============================================================================
 struct FGPUBoundaryParticle
 {
-	float3 Position;
-	float Psi;
-	float3 Normal;
-	int OwnerID;
-	float3 Velocity;
-	float FrictionCoeff;  // Coulomb friction coefficient (0~2)
+	float3 Position;      // 12 bytes - World position
+	float Psi;            // 4 bytes  - Boundary particle "mass" (total: 16)
+	float3 Normal;        // 12 bytes - Surface normal
+	int OwnerID;          // 4 bytes  - Owner component ID (total: 32)
+	float3 Velocity;      // 12 bytes - World velocity
+	float FrictionCoeff;  // 4 bytes  - Coulomb friction coefficient (total: 48)
+	int BoneIndex;        // 4 bytes  - Skeleton bone index (-1 for static mesh)
+	float3 Padding;       // 12 bytes - Alignment padding (total: 64)
 };
 
 StructuredBuffer<FGPUBoundaryParticle> BoundaryParticles;

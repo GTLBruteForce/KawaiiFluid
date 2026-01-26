@@ -391,12 +391,11 @@ void BoundaryAttachmentUpdateCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		// This represents how fast the character/bone is moving
 		float3 boneVelocity = foundBoundaryVelocity;
 		float3 boneDelta = boneVelocity * DeltaTime;
-		float boneMoveDistance = length(boneDelta);
+		float boneSpeed = length(boneVelocity);  // cm/s
 
 		// Detach threshold: if character moves too fast, particle can't keep up
-		float detachThreshold = AdhesionStrength * 30.0f;
-
-		if (boneMoveDistance > detachThreshold)
+		// DetachSpeedThreshold is in cm/s (set in editor)
+		if (boneSpeed > DetachSpeedThreshold)
 		{
 			// Character moved too fast → DETACH
 			particle.AttachOwnerID = -1;
@@ -420,18 +419,17 @@ void BoundaryAttachmentUpdateCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			// Physics already applied, this just adds the character movement on top
 			particle.Position += boneDelta;
 			particle.PredictedPosition += boneDelta;
-
-			// Update LocalPosition to track current position on bone
-			float4x4 invTransform = GetBoneOrComponentInverseTransform(particle.AttachBoneIndex, particle.AttachOwnerID);
-			float3 newLocalPos = InverseTransformPosition(particle.Position, invTransform);
-			particle.AttachLocalPosition = newLocalPos;
-
-			// Keep velocity unchanged - let physics handle it naturally
 		}
 	}
 
 	//=========================================================================
-	// STEP 3: Attach/Detach logic (distance check uses UPDATED position)
+	// STEP 3: Update attachment info based on nearest boundary
+	//
+	// After physics moves the particle, find the nearest boundary and:
+	// - If within AttachRadius: update OwnerID/BoneIndex/LocalPosition
+	// - If outside AttachRadius * DetachDistanceMultiplier: detach
+	//
+	// This allows particles to "slide" between bones while staying attached
 	//=========================================================================
 	bool bWithinAttachRadius = (nearestBoundaryIdx >= 0) &&
 	                           (foundDistance <= AttachRadius) &&
@@ -441,7 +439,7 @@ void BoundaryAttachmentUpdateCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	if (bWithinAttachRadius)
 	{
 		//=====================================================================
-		// WITHIN ATTACH RADIUS: Attach or maintain attachment
+		// WITHIN ATTACH RADIUS: Attach or update attachment
 		//=====================================================================
 
 		if (!bCurrentlyAttached)
@@ -471,7 +469,6 @@ void BoundaryAttachmentUpdateCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			{
 				//=== NEW ATTACH ===
 				// Convert particle world position to bone's local space
-				// Physics continues to apply - no forced position reset
 				float4x4 invTransform = GetBoneOrComponentInverseTransform(foundBoneIndex, foundOwnerID);
 				float3 localPos = InverseTransformPosition(particle.Position, invTransform);
 
@@ -484,24 +481,30 @@ void BoundaryAttachmentUpdateCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 				particle.AttachLocalPosition = localPos;
 				particle.AttachLocalDistance = foundDistance;
 
-				// NO forced position update - let physics handle movement
-				// Particle will naturally slide on boundary surface
-
 				InterlockedAdd(AttachmentCounter[4], 1, dummy);  // New attachment
 			}
 		}
 		else if (!bDetachedThisFrame)
 		{
-			// Already attached and still within attach radius
+			//=== UPDATE ATTACHMENT ===
+			// Particle is already attached, update to nearest boundary
+			// This allows sliding between bones while staying attached
+			float4x4 invTransform = GetBoneOrComponentInverseTransform(foundBoneIndex, foundOwnerID);
+			float3 localPos = InverseTransformPosition(particle.Position, invTransform);
+
+			// Update attachment info to current nearest boundary
+			particle.AttachOwnerID = foundOwnerID;
+			particle.AttachBoneIndex = foundBoneIndex;
+			particle.AttachLocalPosition = localPos;
+			particle.AttachLocalDistance = foundDistance;
+
 			InterlockedAdd(AttachmentCounter[7], 1, dummy);  // Maintained
 		}
 	}
 	else if (bCurrentlyAttached && !bDetachedThisFrame)
 	{
 		//=====================================================================
-		// ATTACHED BUT OUTSIDE ATTACH RADIUS: Particle slid too far → Detach
-		// This happens when physics (gravity) causes particle to slide away
-		// from boundary particles over multiple frames
+		// ATTACHED BUT OUTSIDE ATTACH RADIUS: Check detach threshold
 		//=====================================================================
 		float detachThreshold = AttachRadius * DetachDistanceMultiplier;
 
@@ -524,7 +527,16 @@ void BoundaryAttachmentUpdateCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		}
 		else
 		{
-			// Still attached but outside attach radius - wait for sliding to reach threshold
+			// Between AttachRadius and detachThreshold - update attachment info
+			// Still attached, just outside preferred radius
+			float4x4 invTransform = GetBoneOrComponentInverseTransform(foundBoneIndex, foundOwnerID);
+			float3 localPos = InverseTransformPosition(particle.Position, invTransform);
+
+			particle.AttachOwnerID = foundOwnerID;
+			particle.AttachBoneIndex = foundBoneIndex;
+			particle.AttachLocalPosition = localPos;
+			particle.AttachLocalDistance = foundDistance;
+
 			InterlockedAdd(AttachmentCounter[7], 1, dummy);  // Maintained
 		}
 	}

@@ -24,6 +24,7 @@ class KAWAIIFLUIDRUNTIME_API UKawaiiFluidPresetDataAsset : public UDataAsset
 {
 	GENERATED_BODY()
 
+
 public:
 	UKawaiiFluidPresetDataAsset();
 
@@ -329,7 +330,7 @@ public:
 	 * Higher = more tolerant of stretching before detach
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid|Boundary Attachment",
-		meta = (EditCondition = "bEnableBoundaryAttachment", ClampMin = "1.5", ClampMax = "10.0"))
+		meta = (EditCondition = "bEnableBoundaryAttachment", ClampMin = "1.5", ClampMax = "100.0"))
 	float BoundaryDetachDistanceMultiplier = 3.0f;
 
 	/**

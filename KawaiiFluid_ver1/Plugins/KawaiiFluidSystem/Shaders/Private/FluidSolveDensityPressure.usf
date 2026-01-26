@@ -61,12 +61,14 @@ float3 MortonBoundsExtent;  // Simulation bounds extent (Max - Min)
 //=============================================================================
 struct FGPUBoundaryParticle
 {
-	float3 Position;    // World position
-	float Psi;          // Boundary particle "mass" (volume contribution)
-	float3 Normal;      // Surface normal
-	int OwnerID;        // Owner component ID
-	float3 Velocity;    // World velocity (for moving boundaries)
-	float FrictionCoeff; // Coulomb friction coefficient (0~2)
+	float3 Position;      // 12 bytes - World position
+	float Psi;            // 4 bytes  - Boundary particle "mass" (total: 16)
+	float3 Normal;        // 12 bytes - Surface normal
+	int OwnerID;          // 4 bytes  - Owner component ID (total: 32)
+	float3 Velocity;      // 12 bytes - World velocity
+	float FrictionCoeff;  // 4 bytes  - Coulomb friction coefficient (total: 48)
+	int BoneIndex;        // 4 bytes  - Skeleton bone index (-1 for static mesh)
+	float3 Padding;       // 12 bytes - Alignment padding (total: 64)
 };
 
 StructuredBuffer<FGPUBoundaryParticle> BoundaryParticles;
@@ -236,9 +238,11 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	FGPUFluidParticle particle = Particles[idx];
 
-	// Check if this particle is CPU-attached (follows bone position directly)
-	// Boundary-attached particles still receive physics
-	bool bIsAttached = HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED);
+	// Check if this particle is attached (CPU or boundary)
+	// CRITICAL: Both CPU-attached AND boundary-attached particles must be excluded
+	// from density/pressure calculation to prevent clustering → high density → explosion!
+	bool bIsAttached = HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED) ||
+	                   HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED);
 
 	// Skip sleeping particles - they are excluded from constraint solving
 	// This reduces micro-jitter and improves performance (NVIDIA Flex technique)
@@ -337,6 +341,14 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 						for (uint neighborIdx = cellStart; neighborIdx <= maxNeighborIdx; ++neighborIdx)
 						{
 							FGPUFluidParticle neighbor = Particles[neighborIdx];
+
+							// Skip attached neighbors - they cluster at bone and cause explosion
+							if (HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED) ||
+							    HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED))
+							{
+								continue;
+							}
+
 							float3 neighborPos = neighbor.PredictedPosition;
 							float3 r_cm = pos - neighborPos;
 							float r2_cm = dot(r_cm, r_cm);
@@ -412,6 +424,14 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							}
 
 							FGPUFluidParticle neighbor = Particles[neighborIdx];
+
+							// Skip attached neighbors - they cluster at bone and cause explosion
+							if (HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED) ||
+							    HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED))
+							{
+								continue;
+							}
+
 							float3 neighborPos = neighbor.PredictedPosition;
 							float3 r_cm = pos - neighborPos;
 							float r2_cm = dot(r_cm, r_cm);
@@ -488,6 +508,14 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			uint neighborIdx = NeighborList[baseIdx + n];
 
 			FGPUFluidParticle neighbor = Particles[neighborIdx];
+
+			// Skip attached neighbors - they cluster at bone and cause explosion
+			if (HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED) ||
+			    HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_BOUNDARY_ATTACHED))
+			{
+				continue;
+			}
+
 			float3 neighborPos = neighbor.PredictedPosition;
 			float3 r_cm = pos - neighborPos;
 			float r2_cm = dot(r_cm, r_cm);

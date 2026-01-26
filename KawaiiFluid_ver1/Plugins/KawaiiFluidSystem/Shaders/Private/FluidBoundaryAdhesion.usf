@@ -172,6 +172,13 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
+	// CRITICAL: Early return if no boundary particles
+	// Prevents (BoundaryParticleCount - 1) underflow causing GPU crash
+	if (BoundaryParticleCount <= 0)
+	{
+		return;
+	}
+
 	FGPUFluidParticle particle = Particles[idx];
 
 	// Skip if already attached to primitive (existing adhesion system handles this)

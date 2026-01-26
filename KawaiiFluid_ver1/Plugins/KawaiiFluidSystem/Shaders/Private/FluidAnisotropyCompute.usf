@@ -11,21 +11,31 @@
 //-----------------------------------------------------------------------------
 
 // GPU Fluid Particle Structure (must match FGPUFluidParticle in C++)
+// 96 bytes with embedded attachment data
 struct FGPUFluidParticle
 {
 	float3 Position;           // 12 bytes
-	float Mass;                // 4 bytes
+	float Mass;                // 4 bytes (total: 16)
 
 	float3 PredictedPosition;  // 12 bytes
-	float Density;             // 4 bytes
+	float Density;             // 4 bytes (total: 32)
 
 	float3 Velocity;           // 12 bytes
-	float Lambda;              // 4 bytes
+	float Lambda;              // 4 bytes (total: 48)
 
 	int ParticleID;            // 4 bytes
-	int SourceID;              // 4 bytes - Source identification (PresetIndex | ComponentIndex << 16)
+	int SourceID;              // 4 bytes
 	uint Flags;                // 4 bytes
-	uint NeighborCount;        // 4 bytes
+	uint NeighborCount;        // 4 bytes (total: 64)
+
+	// === Embedded Attachment Data (32 bytes) ===
+	int AttachOwnerID;         // 4 bytes
+	int AttachBoneIndex;       // 4 bytes
+	float AttachmentTime;      // 4 bytes
+	float AttachLocalDistance; // 4 bytes (total: 80)
+
+	float3 AttachLocalPosition; // 12 bytes
+	float AttachPadding;       // 4 bytes (total: 96)
 };
 
 // GPU Particle Attachment Structure (must match FGPUParticleAttachment in C++)
@@ -100,12 +110,14 @@ float3 MortonBoundsMin;       // Grid origin for Morton code calculation
 //-----------------------------------------------------------------------------
 struct FGPUBoundaryParticle
 {
-	float3 Position;    // World position
-	float Psi;          // Boundary particle "mass" (volume contribution)
-	float3 Normal;      // Surface normal
-	int OwnerID;        // Owner component ID
-	float3 Velocity;    // World velocity (for moving boundaries)
-	float Padding;      // Alignment padding
+	float3 Position;      // 12 bytes - World position
+	float Psi;            // 4 bytes  - Boundary particle "mass" (total: 16)
+	float3 Normal;        // 12 bytes - Surface normal
+	int OwnerID;          // 4 bytes  - Owner component ID (total: 32)
+	float3 Velocity;      // 12 bytes - World velocity
+	float FrictionCoeff;  // 4 bytes  - Coulomb friction coefficient (total: 48)
+	int BoneIndex;        // 4 bytes  - Skeleton bone index (-1 for static mesh)
+	float3 Padding;       // 12 bytes - Alignment padding (total: 64)
 };
 
 // Legacy brute-force mode
