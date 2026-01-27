@@ -1,6 +1,15 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 // GPU Fluid Physics - Predict Positions Pass
 // Applies forces and predicts particle positions for XPBD
+//
+// [IMPORTANT] Cohesion Force is now applied here (Phase 2) instead of PostSimulation (Phase 5)
+// This follows the NVIDIA Flex / standard PBF approach where all external forces are integrated
+// before constraint solving. Applying cohesion after solving causes jittering because:
+// 1. Solver resolves density constraint (pushes particles apart)
+// 2. Cohesion pulls them back together (post-hoc velocity change)
+// 3. Next frame: Solver fights against cohesion-induced clustering → oscillation
+//
+// By moving cohesion to Phase 2, the solver considers the "pull" when finding equilibrium.
 
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"
@@ -15,6 +24,19 @@ int ParticleCount;
 float DeltaTime;
 float3 Gravity;
 float3 ExternalForce;
+
+// Cohesion Force parameters (moved from PostSimulation)
+float CohesionStrength;      // Surface tension strength (0 = disabled)
+float SmoothingRadius;       // SPH kernel radius (cm)
+float RestDensity;           // Rest density (kg/m³) for K_ij correction
+float MaxCohesionForce;      // Stability clamp
+
+// Previous frame neighbor cache (double buffering for cohesion)
+// Using previous frame's neighbor list is standard practice - 1 frame delay is acceptable
+StructuredBuffer<uint> PrevNeighborList;    // [ParticleCount * MAX_NEIGHBORS_PER_PARTICLE]
+StructuredBuffer<uint> PrevNeighborCounts;  // [ParticleCount]
+int bUsePrevNeighborCache;                  // 0 = skip cohesion (first frame)
+int PrevParticleCount;                      // Safety: bounds check
 
 //=============================================================================
 // Main Compute Shader
@@ -41,8 +63,94 @@ void PredictPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
-	// Apply forces: gravity + external force
-	float3 totalForce = Gravity + ExternalForce;
+	//=========================================================================
+	// Cohesion Force Calculation (using previous frame's neighbor cache)
+	// Akinci 2013 surface tension model without curvature term
+	//=========================================================================
+	float3 cohesionForce = float3(0.0f, 0.0f, 0.0f);
+	
+	if (CohesionStrength > 0.0f && bUsePrevNeighborCache && idx < (uint)PrevParticleCount)
+	{
+		float h_m = SmoothingRadius * CM_TO_M;  // Convert cm to m for kernel
+		float m_i = particle.Mass;
+		float rho_i = max(particle.Density, SMALL_NUMBER);
+		float smoothingRadiusSq_cm = SmoothingRadius * SmoothingRadius;
+		
+		uint cachedCount = PrevNeighborCounts[idx];
+		uint baseIdx = idx * MAX_NEIGHBORS_PER_PARTICLE;
+		
+		for (uint n = 0; n < cachedCount; ++n)
+		{
+			uint neighborIdx = PrevNeighborList[baseIdx + n];
+			
+			// Bounds check and skip self
+			if (neighborIdx == idx || neighborIdx >= (uint)ParticleCount)
+			{
+				continue;
+			}
+			
+			FGPUFluidParticle neighbor = Particles[neighborIdx];
+			
+			// Skip CPU-attached neighbors
+			if (HasFlag(neighbor.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+			{
+				continue;
+			}
+			
+			// Use current frame's Position (not PredictedPosition which isn't computed yet)
+			float3 r_cm = particle.Position - neighbor.Position;
+			float r2_cm = dot(r_cm, r_cm);
+			
+			if (r2_cm < SMALL_NUMBER || r2_cm > smoothingRadiusSq_cm)
+			{
+				continue;
+			}
+			
+			float rLenInv_cm = rsqrt(r2_cm);
+			float dist_cm = r2_cm * rLenInv_cm;
+			float dist_m = dist_cm * CM_TO_M;
+			
+			if (dist_m < h_m)
+			{
+				float m_j = neighbor.Mass;
+				float rho_j = max(neighbor.Density, SMALL_NUMBER);
+				
+				// K_ij correction factor for particle deficiency (Akinci 2013)
+				float K_ij = (2.0f * RestDensity) / (rho_i + rho_j);
+				K_ij = clamp(K_ij, 0.5f, 2.0f);
+				
+				// Cohesion kernel: attractive force that peaks at ~0.5h
+				float cohesionWeight = CohesionKernel(dist_m, h_m);
+				
+				if (abs(cohesionWeight) > SMALL_NUMBER * 0.001f)
+				{
+					// Direction: particle → neighbor (attraction)
+					float3 direction = -r_cm * rLenInv_cm;
+					
+					// Force magnitude: F = m_i * m_j * C(r)
+					float forceMag = m_i * m_j * cohesionWeight;
+					cohesionForce += K_ij * CohesionStrength * forceMag * direction;
+				}
+			}
+		}
+		
+		// Clamp for stability
+		float forceLen = length(cohesionForce);
+		if (forceLen > MaxCohesionForce && forceLen > SMALL_NUMBER)
+		{
+			cohesionForce = (cohesionForce / forceLen) * MaxCohesionForce;
+		}
+		
+		// Convert to acceleration (cm/s²) and apply mass
+		// cohesionForce is in (kg * kg * kernel) space, divide by mass for acceleration
+		// Then multiply by 100 to convert m/s² to cm/s²
+		cohesionForce = (cohesionForce / max(m_i, SMALL_NUMBER)) * 100.0f;
+	}
+
+	//=========================================================================
+	// Apply All Forces: Gravity + External + Cohesion
+	//=========================================================================
+	float3 totalForce = Gravity + ExternalForce + cohesionForce;
 	float3 acceleration = totalForce; // Assuming mass = 1 for simplicity, or: totalForce / particle.Mass
 
 	// Semi-implicit Euler integration

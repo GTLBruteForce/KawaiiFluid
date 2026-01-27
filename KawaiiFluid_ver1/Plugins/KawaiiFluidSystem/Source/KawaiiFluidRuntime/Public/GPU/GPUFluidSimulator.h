@@ -773,6 +773,14 @@ private:
 		FRDGBufferRef ParticleBuffer,
 		const FSimulationSpatialData& SpatialData);
 
+	/** 
+	 * Swap neighbor cache buffers for Cohesion Force double buffering.
+	 * Called in EndFrame after RDG execution completes.
+	 * Moves current frame's NeighborListBuffer/NeighborCountsBuffer to PrevNeighbor buffers.
+	 * This allows PredictPositions (Phase 2) to use previous frame's neighbors for Cohesion Force.
+	 */
+	void SwapNeighborCacheBuffers();
+
 	/** Resize GPU buffers to new capacity */
 	void ResizeBuffers(FRHICommandListBase& RHICmdList, int32 NewCapacity);
 
@@ -1034,6 +1042,14 @@ private:
 	TRefCountPtr<FRDGPooledBuffer> NeighborListBuffer;
 	TRefCountPtr<FRDGPooledBuffer> NeighborCountsBuffer;
 	int32 NeighborBufferParticleCapacity = 0;
+
+	// Previous frame neighbor cache buffers (for Cohesion Force in PredictPositions)
+	// Double buffering: Current frame builds new cache, PredictPositions uses previous frame's cache
+	// This allows Cohesion to be applied as a Force (Phase 2) rather than post-simulation velocity change
+	TRefCountPtr<FRDGPooledBuffer> PrevNeighborListBuffer;
+	TRefCountPtr<FRDGPooledBuffer> PrevNeighborCountsBuffer;
+	int32 PrevNeighborBufferParticleCount = 0;   // Particle count when prev cache was built
+	bool bPrevNeighborCacheValid = false;        // False on first frame (skip Cohesion)
 
 	// Particle Sleeping (NVIDIA Flex stabilization)
 	TRefCountPtr<FRDGPooledBuffer> SleepCountersBuffer;

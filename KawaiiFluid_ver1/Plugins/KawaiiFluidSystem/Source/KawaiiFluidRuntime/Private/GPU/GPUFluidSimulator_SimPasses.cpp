@@ -29,18 +29,76 @@ void FGPUFluidSimulator::AddPredictPositionsPass(
 	PassParameters->Gravity = Params.Gravity;
 	PassParameters->ExternalForce = ExternalForce;
 
-	// Debug: log gravity and delta time
+	//=========================================================================
+	// Cohesion Force Parameters (moved from PostSimulation to Phase 2)
+	// This prevents jittering by letting the solver consider cohesion forces
+	//=========================================================================
+	PassParameters->CohesionStrength = Params.CohesionStrength;
+	PassParameters->SmoothingRadius = Params.SmoothingRadius;
+	PassParameters->RestDensity = Params.RestDensity;
+	
+	// MaxCohesionForce: stability clamp based on physical parameters
+	const float h_m = Params.SmoothingRadius * 0.01f;  // cm to m
+	PassParameters->MaxCohesionForce = Params.CohesionStrength * Params.RestDensity * h_m * h_m * h_m * 1000.0f;
+
+	//=========================================================================
+	// Previous Frame Neighbor Cache (Double Buffering for Cohesion)
+	// Standard practice: use previous frame's neighbor list to avoid dependency
+	//=========================================================================
+	const bool bCanUsePrevNeighborCache = bPrevNeighborCacheValid && 
+	                                       PrevNeighborListBuffer.IsValid() && 
+	                                       PrevNeighborCountsBuffer.IsValid() &&
+	                                       PrevNeighborBufferParticleCount > 0;
+
+	if (bCanUsePrevNeighborCache)
+	{
+		// Register previous frame's persistent neighbor cache buffers
+		FRDGBufferRef PrevNeighborListRDG = GraphBuilder.RegisterExternalBuffer(
+			PrevNeighborListBuffer, TEXT("GPUFluidPrevNeighborList"));
+		FRDGBufferRef PrevNeighborCountsRDG = GraphBuilder.RegisterExternalBuffer(
+			PrevNeighborCountsBuffer, TEXT("GPUFluidPrevNeighborCounts"));
+		
+		PassParameters->PrevNeighborList = GraphBuilder.CreateSRV(PrevNeighborListRDG);
+		PassParameters->PrevNeighborCounts = GraphBuilder.CreateSRV(PrevNeighborCountsRDG);
+		PassParameters->bUsePrevNeighborCache = 1;
+		PassParameters->PrevParticleCount = PrevNeighborBufferParticleCount;
+	}
+	else
+	{
+		// First frame or invalid cache: create dummy buffers, skip cohesion
+		// This is safe - cohesion is not critical for the first frame
+		FRDGBufferRef DummyList = GraphBuilder.CreateBuffer(
+			FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("DummyPrevNeighborList"));
+		FRDGBufferRef DummyCounts = GraphBuilder.CreateBuffer(
+			FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("DummyPrevNeighborCounts"));
+		
+		// Initialize dummy buffers to zero
+		uint32 Zero = 0;
+		GraphBuilder.QueueBufferUpload(DummyList, &Zero, sizeof(uint32));
+		GraphBuilder.QueueBufferUpload(DummyCounts, &Zero, sizeof(uint32));
+		
+		PassParameters->PrevNeighborList = GraphBuilder.CreateSRV(DummyList);
+		PassParameters->PrevNeighborCounts = GraphBuilder.CreateSRV(DummyCounts);
+		PassParameters->bUsePrevNeighborCache = 0;
+		PassParameters->PrevParticleCount = 0;
+	}
+
+	// Debug: log cohesion state
 	static int32 DebugCounter = 0;
 	if (++DebugCounter % 60 == 0)
 	{
-		//UE_LOG(LogGPUFluidSimulator, Log, TEXT("PredictPositions: Gravity=(%.2f, %.2f, %.2f), DeltaTime=%.4f, Particles=%d"),Params.Gravity.X, Params.Gravity.Y, Params.Gravity.Z, Params.DeltaTime, CurrentParticleCount);
+		UE_LOG(LogGPUFluidSimulator, Log, 
+			TEXT("PredictPositions: Cohesion=%s (Strength=%.2f, PrevCache=%d particles)"),
+			bCanUsePrevNeighborCache ? TEXT("ON") : TEXT("OFF"),
+			Params.CohesionStrength,
+			PrevNeighborBufferParticleCount);
 	}
 
 	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FPredictPositionsCS::ThreadGroupSize);
 
 	FComputeShaderUtils::AddPass(
 		GraphBuilder,
-		RDG_EVENT_NAME("GPUFluid::PredictPositions"),
+		RDG_EVENT_NAME("GPUFluid::PredictPositions (Cohesion=%s)", bCanUsePrevNeighborCache ? TEXT("ON") : TEXT("OFF")),
 		ComputeShader,
 		PassParameters,
 		FIntVector(NumGroups, 1, 1)
@@ -505,8 +563,10 @@ void FGPUFluidSimulator::AddApplyViscosityAndCohesionPass(
 	// Skip if no particles
 	if (CurrentParticleCount <= 0) return;
 
-	// Skip if both viscosity and cohesion are disabled
-	if (Params.ViscosityCoefficient <= 0.0f && Params.CohesionStrength <= 0.0f)
+	// Skip if viscosity is disabled
+	// Note: Cohesion is now handled in PredictPositions (Phase 2), not here
+	// This pass is now "Viscosity-only" (Cohesion code remains but CohesionStrength=0)
+	if (Params.ViscosityCoefficient <= 0.0f)
 	{
 		return;
 	}
@@ -533,9 +593,15 @@ void FGPUFluidSimulator::AddApplyViscosityAndCohesionPass(
 	PassParameters->ViscLaplacianCoeff = 45.0f / (UE_PI * FMath::Pow(h_m, 6.0f));
 
 	// Cohesion parameters
-	PassParameters->CohesionStrength = Params.CohesionStrength;
+	// =====================================================
+	// COHESION FORCE MIGRATION: Phase 5 -> Phase 2 (PredictPositions)
+	// Cohesion is now applied as a Force in PredictPositions using previous frame's neighbor cache.
+	// This prevents the jittering caused by applying Cohesion AFTER the density constraint solver.
+	// Set CohesionStrength = 0 here to disable Phase 5 Cohesion (keep only Viscosity).
+	// =====================================================
+	PassParameters->CohesionStrength = 0.0f;  // Disabled: Cohesion now in Phase 2 (PredictPositions)
 	PassParameters->RestDensity = Params.RestDensity;
-	PassParameters->MaxSurfaceTensionForce = Params.CohesionStrength * Params.RestDensity * h_m * h_m * h_m * 1000.0f;
+	PassParameters->MaxSurfaceTensionForce = 0.0f;  // Disabled with Cohesion
 
 	// Boundary Particles for viscosity contribution
 	// Priority: 1) Skinned boundary (same-frame), 2) Static boundary (persistent GPU)

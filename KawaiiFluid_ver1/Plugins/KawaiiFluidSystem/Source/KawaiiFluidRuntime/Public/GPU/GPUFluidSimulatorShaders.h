@@ -92,6 +92,22 @@ public:
 		SHADER_PARAMETER(float, DeltaTime)
 		SHADER_PARAMETER(FVector3f, Gravity)
 		SHADER_PARAMETER(FVector3f, ExternalForce)
+		
+		// Cohesion Force parameters (moved from PostSimulation to Phase 2)
+		// Cohesion is now applied as a Force during prediction, not as velocity change after solving
+		// This prevents jittering caused by solver fighting against post-hoc cohesion
+		SHADER_PARAMETER(float, CohesionStrength)
+		SHADER_PARAMETER(float, SmoothingRadius)
+		SHADER_PARAMETER(float, RestDensity)
+		SHADER_PARAMETER(float, MaxCohesionForce)
+		
+		// Previous frame neighbor cache (for Cohesion Force calculation)
+		// Double buffering: PredictPositions uses previous frame's neighbor list
+		// This is standard practice - 1 frame delay is acceptable and avoids dependency issues
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, PrevNeighborList)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, PrevNeighborCounts)
+		SHADER_PARAMETER(int32, bUsePrevNeighborCache)   // 0 = skip cohesion (first frame)
+		SHADER_PARAMETER(int32, PrevParticleCount)       // Safety: bounds check
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;
@@ -107,6 +123,7 @@ public:
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+		OutEnvironment.SetDefine(TEXT("MAX_NEIGHBORS_PER_PARTICLE"), GPU_MAX_NEIGHBORS_PER_PARTICLE);
 	}
 };
 

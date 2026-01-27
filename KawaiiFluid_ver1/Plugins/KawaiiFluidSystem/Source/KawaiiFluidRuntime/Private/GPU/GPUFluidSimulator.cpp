@@ -726,6 +726,14 @@ void FGPUFluidSimulator::EndFrame()
 			}
 
 			Self->bHasValidGPUResults.store(true);
+
+			// =====================================================
+			// Swap Neighbor Cache Buffers for Cohesion Double Buffering
+			// MUST be called after RDG execution completes (buffers are extracted)
+			// This moves current frame's neighbor cache to PrevNeighborCache
+			// so PredictPositions (Phase 2) can use it next frame for Cohesion Force
+			// =====================================================
+			Self->SwapNeighborCacheBuffers();
 		}
 	);
 
@@ -1617,6 +1625,54 @@ void FGPUFluidSimulator::ExtractPersistentBuffers(
 				GraphBuilder.QueueBufferExtraction(SpatialData.CellEndBuffer, &PersistentCellEndBuffer, ERHIAccess::SRVCompute);
 			}
 		}
+	}
+
+	// =====================================================
+	// Extract Neighbor Cache for Cohesion Force Double Buffering
+	// These buffers will be swapped in EndFrame() after RDG execution completes
+	// PredictPositions (Phase 2) uses PrevNeighborCache to apply Cohesion as a Force
+	// =====================================================
+	// Note: NeighborListBuffer/NeighborCountsBuffer are already extracted in ExecuteConstraintSolverLoop
+	// We just need to track the particle count for validation in SwapNeighborCacheBuffers
+}
+
+void FGPUFluidSimulator::SwapNeighborCacheBuffers()
+{
+	// =====================================================
+	// Double Buffering for Cohesion Force in PredictPositions
+	// 
+	// Problem: PredictPositions runs BEFORE neighbor search, but Cohesion needs neighbors
+	// Solution: Use previous frame's neighbor cache (Double Buffering)
+	// 
+	// Timeline:
+	//   Frame N:   BuildNeighbors -> Solve -> Extract NeighborBuffer
+	//   EndFrame:  NeighborBuffer -> PrevNeighborBuffer (this function)
+	//   Frame N+1: PredictPositions uses PrevNeighborBuffer for Cohesion
+	// =====================================================
+	
+	// Only swap if current frame's neighbor cache is valid
+	if (!NeighborListBuffer.IsValid() || !NeighborCountsBuffer.IsValid())
+	{
+		// No neighbor cache available (maybe no particles or first frame)
+		bPrevNeighborCacheValid = false;
+		return;
+	}
+	
+	// Move current neighbor cache to previous
+	// Note: We don't need to explicitly release old PrevNeighbor buffers
+	// TRefCountPtr handles reference counting automatically
+	PrevNeighborListBuffer = NeighborListBuffer;
+	PrevNeighborCountsBuffer = NeighborCountsBuffer;
+	PrevNeighborBufferParticleCount = CurrentParticleCount;
+	bPrevNeighborCacheValid = true;
+	
+	// DEBUG: Log swap operation (first 10 frames only)
+	static int32 SwapLogCounter = 0;
+	if (++SwapLogCounter <= 10)
+	{
+		UE_LOG(LogGPUFluidSimulator, Log, 
+			TEXT("SwapNeighborCacheBuffers: PrevNeighborCache now valid with %d particles"),
+			PrevNeighborBufferParticleCount);
 	}
 }
 
