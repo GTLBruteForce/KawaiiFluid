@@ -1,0 +1,38 @@
+// Copyright 2026 Team_Bruteforce. All Rights Reserved.
+// GPU Fluid Physics - Copy Attachments Pass
+// Copies attachment data from source buffer to destination buffer
+// Used for preserving existing attachment data when appending new particles
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"
+
+//=============================================================================
+// Shader Parameters
+//=============================================================================
+
+StructuredBuffer<FGPUBoundaryAttachment> SourceAttachments;
+RWStructuredBuffer<FGPUBoundaryAttachment> DestAttachments;
+int SourceOffset;
+int DestOffset;
+int CopyCount;
+
+//=============================================================================
+// Main Compute Shader
+//=============================================================================
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void CopyAttachmentsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint idx = DispatchThreadId.x;
+	if (idx >= (uint)CopyCount)
+	{
+		return;
+	}
+
+	// Copy attachment from source to destination with offsets
+	uint srcIdx = SourceOffset + idx;
+	uint dstIdx = DestOffset + idx;
+
+	DestAttachments[dstIdx] = SourceAttachments[srcIdx];
+}
