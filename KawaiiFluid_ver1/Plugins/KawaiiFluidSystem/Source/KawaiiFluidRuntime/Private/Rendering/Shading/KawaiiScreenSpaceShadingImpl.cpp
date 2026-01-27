@@ -11,6 +11,8 @@
 #include "GlobalShader.h"
 #include "RHIStaticStates.h"
 #include "TextureResource.h"
+#include "HAL/IConsoleManager.h"
+#include "EngineGlobals.h"
 
 static TAutoConsoleVariable<int32> CVarFluidScreenSpaceReflectionDebugMode(
 	TEXT("r.Fluid.ScreenSpaceReflectionDebugMode"),
