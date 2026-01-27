@@ -89,7 +89,7 @@ IMPLEMENT_GLOBAL_SHADER(FFluidNarrowRangeFilterLDS_CS,
                         SF_Compute);
 
 //=============================================================================
-// Thickness Gaussian Blur Compute Shaders (Separable - Horizontal + Vertical)
+// Thickness Gaussian Blur (Separable - Horizontal Pass)
 //=============================================================================
 
 class FFluidThicknessGaussianBlurHorizontalCS : public FGlobalShader
@@ -120,6 +120,10 @@ class FFluidThicknessGaussianBlurHorizontalCS : public FGlobalShader
 IMPLEMENT_GLOBAL_SHADER(FFluidThicknessGaussianBlurHorizontalCS,
                         "/Plugin/KawaiiFluidSystem/Private/FluidSmoothing.usf", "ThicknessGaussianBlurHorizontalCS",
                         SF_Compute);
+
+//=============================================================================
+// Thickness Gaussian Blur (Separable - Vertical Pass)
+//=============================================================================
 
 class FFluidThicknessGaussianBlurVerticalCS : public FGlobalShader
 {
@@ -355,10 +359,10 @@ void RenderFluidNarrowRangeSmoothingPass(
 }
 
 //=============================================================================
-// Thickness Smoothing Pass (Separable Gaussian Blur - 20x faster)
+// Thickness Smoothing Pass (Separable Gaussian Blur)
 //
 // Uses Horizontal + Vertical passes instead of 2D kernel
-// O(n²) → O(2n): 41x41=1681 samples → 41+41=82 samples
+// O(n²) → O(2n): 41x41=1681 samples → 41+41=82 samples (20x faster)
 //=============================================================================
 
 void RenderFluidThicknessSmoothingPass(

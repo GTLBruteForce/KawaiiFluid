@@ -291,7 +291,7 @@ void NarrowRangeFilterLDS_CS(
 }
 
 //=============================================================================
-// Separable Gaussian Blur for Thickness (Optimized)
+// Separable Gaussian Blur for Thickness
 //
 // Split into Horizontal + Vertical passes for O(2n) instead of O(n²)
 // 41x41 = 1,681 samples → 41+41 = 82 samples (20x faster)

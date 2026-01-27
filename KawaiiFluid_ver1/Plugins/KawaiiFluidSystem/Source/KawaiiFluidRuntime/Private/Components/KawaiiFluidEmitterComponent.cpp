@@ -607,27 +607,42 @@ int32 UKawaiiFluidEmitterComponent::SpawnParticlesCubeHexagonal(FVector Center, 
 				FVector RotatedPos = Rotation.RotateVector(LocalPos);
 				FVector WorldPos = Center + RotatedPos;
 
-				// Apply jitter
+				// Apply jitter with distance-based falloff (center: 100%, surface: 0%)
+				// This prevents surface particles from protruding and causing jagged edges
 				if (bUseJitter && JitterRange > 0.0f)
 				{
-					WorldPos += FVector(
-						FMath::FRandRange(-JitterRange, JitterRange),
-						FMath::FRandRange(-JitterRange, JitterRange),
-						FMath::FRandRange(-JitterRange, JitterRange)
-					);
+					// Calculate distance to nearest face
+					const float DistToSurfaceX = HalfSize.X - FMath::Abs(LocalPos.X);
+					const float DistToSurfaceY = HalfSize.Y - FMath::Abs(LocalPos.Y);
+					const float DistToSurfaceZ = HalfSize.Z - FMath::Abs(LocalPos.Z);
+					const float MinDistToSurface = FMath::Min3(DistToSurfaceX, DistToSurfaceY, DistToSurfaceZ);
+
+					// Falloff based on smallest half-size dimension
+					const float MaxDist = FMath::Min3(HalfSize.X, HalfSize.Y, HalfSize.Z);
+					const float JitterFactor = FMath::Clamp(MinDistToSurface / MaxDist, 0.0f, 1.0f);
+					const float ActualJitter = JitterRange * JitterFactor;
+
+					if (ActualJitter > 0.0f)
+					{
+						WorldPos += FVector(
+							FMath::FRandRange(-ActualJitter, ActualJitter),
+							FMath::FRandRange(-ActualJitter, ActualJitter),
+							FMath::FRandRange(-ActualJitter, ActualJitter)
+						);
+					}
 				}
 
 				Positions.Add(WorldPos);
 				Velocities.Add(InInitialVelocity);
 			}
-			
+
 			// Break outer loop if limit reached
 			if (MaxParticleCount > 0 && Positions.Num() >= MaxParticleCount)
 			{
 				break;
 			}
 		}
-		
+
 		if (MaxParticleCount > 0 && Positions.Num() >= MaxParticleCount)
 		{
 			break;
@@ -701,14 +716,29 @@ int32 UKawaiiFluidEmitterComponent::SpawnParticlesCylinderHexagonal(FVector Cent
 				FVector RotatedPos = Rotation.RotateVector(LocalPos);
 				FVector WorldPos = Center + RotatedPos;
 
-				// Apply jitter
+				// Apply jitter with distance-based falloff (center: 100%, surface: 0%)
+				// This prevents surface particles from protruding and causing jagged edges
 				if (bUseJitter && JitterRange > 0.0f)
 				{
-					WorldPos += FVector(
-						FMath::FRandRange(-JitterRange, JitterRange),
-						FMath::FRandRange(-JitterRange, JitterRange),
-						FMath::FRandRange(-JitterRange, JitterRange)
-					);
+					// Calculate distance to nearest surface (radial or caps)
+					const float XYDist = FMath::Sqrt(XYDistSq);
+					const float DistToRadialSurface = Radius - XYDist;
+					const float DistToCapSurface = HalfHeight - FMath::Abs(LocalPos.Z);
+					const float MinDistToSurface = FMath::Min(DistToRadialSurface, DistToCapSurface);
+
+					// Falloff based on smaller dimension (radius or half-height)
+					const float MaxDist = FMath::Min(Radius, HalfHeight);
+					const float JitterFactor = FMath::Clamp(MinDistToSurface / MaxDist, 0.0f, 1.0f);
+					const float ActualJitter = JitterRange * JitterFactor;
+
+					if (ActualJitter > 0.0f)
+					{
+						WorldPos += FVector(
+							FMath::FRandRange(-ActualJitter, ActualJitter),
+							FMath::FRandRange(-ActualJitter, ActualJitter),
+							FMath::FRandRange(-ActualJitter, ActualJitter)
+						);
+					}
 				}
 
 				Positions.Add(WorldPos);

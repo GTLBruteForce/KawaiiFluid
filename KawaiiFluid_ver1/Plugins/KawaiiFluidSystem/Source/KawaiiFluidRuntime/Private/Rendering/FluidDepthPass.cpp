@@ -16,6 +16,30 @@
 #include "CommonRenderResources.h"
 
 //=============================================================================
+// Static Dummy Velocity Buffer (avoid per-frame allocation)
+//=============================================================================
+static TRefCountPtr<FRDGPooledBuffer> GDummyVelocityPooledBuffer;
+
+static FRDGBufferSRVRef GetOrCreateDummyVelocitySRV(FRDGBuilder& GraphBuilder)
+{
+	// Create persistent dummy buffer on first use
+	if (!GDummyVelocityPooledBuffer.IsValid())
+	{
+		FRDGBufferDesc DummyVelDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), 1);
+		FRDGBufferRef DummyBuffer = GraphBuilder.CreateBuffer(DummyVelDesc, TEXT("GlobalDummyVelocityBuffer"));
+		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyBuffer), 0);
+		GraphBuilder.QueueBufferExtraction(DummyBuffer, &GDummyVelocityPooledBuffer);
+		return GraphBuilder.CreateSRV(DummyBuffer);
+	}
+
+	// Reuse existing buffer
+	FRDGBufferRef DummyBuffer = GraphBuilder.RegisterExternalBuffer(
+		GDummyVelocityPooledBuffer,
+		TEXT("GlobalDummyVelocityBuffer"));
+	return GraphBuilder.CreateSRV(DummyBuffer);
+}
+
+//=============================================================================
 // Batched Depth Pass
 //=============================================================================
 
@@ -82,6 +106,16 @@ void RenderFluidDepthPass(
 	// (all renderers in batch have identical parameters - that's why they're batched)
 	float ParticleRadius = Renderers[0]->GetLocalParameters().ParticleRenderRadius;
 
+	// Pre-compute view matrices (same for all renderers in this View)
+	const FMatrix ViewMatrix = View.ViewMatrices.GetViewMatrix();
+	const FMatrix ProjectionMatrix = View.ViewMatrices.GetProjectionNoAAMatrix();
+	const FMatrix ViewProjectionMatrix = View.ViewMatrices.GetViewProjectionMatrix();
+
+	// Pre-compute ViewRect parameters (same for all renderers)
+	const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
+	const FVector2f SceneViewRectSize(ViewInfo.ViewRect.Width(), ViewInfo.ViewRect.Height());
+	const FVector2f SceneTextureSizeVec(SceneDepthTexture->Desc.Extent.X, SceneDepthTexture->Desc.Extent.Y);
+
 	// Track processed RenderResources to prevent duplicate processing
 	TSet<FKawaiiFluidRenderResource*> ProcessedResources;
 
@@ -144,13 +178,8 @@ void RenderFluidDepthPass(
 		}
 		else
 		{
-			// Create dummy velocity buffer (single zero vector) when velocity data not available
-			// This prevents shader crashes when flow texture is disabled
-			FRDGBufferDesc DummyVelDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), 1);
-			FRDGBufferRef DummyVelocityBuffer = GraphBuilder.CreateBuffer(DummyVelDesc, TEXT("DummyVelocityBuffer"));
-			// Clear to zero
-			AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyVelocityBuffer), 0);
-			VelocityBufferSRV = GraphBuilder.CreateSRV(DummyVelocityBuffer);
+			// Use persistent dummy velocity buffer (avoids per-frame allocation)
+			VelocityBufferSRV = GetOrCreateDummyVelocitySRV(GraphBuilder);
 		}
 
 		// Anisotropy (valid only in GPU mode)
@@ -166,12 +195,7 @@ void RenderFluidDepthPass(
 			continue;
 		}
 
-		// View matrices
-		FMatrix ViewMatrix = View.ViewMatrices.GetViewMatrix();
-		FMatrix ProjectionMatrix = View.ViewMatrices.GetProjectionNoAAMatrix();
-		FMatrix ViewProjectionMatrix = View.ViewMatrices.GetViewProjectionMatrix();
-		
-		// Shader Parameters
+		// Shader Parameters (matrices pre-computed outside loop)
 		auto* PassParameters = GraphBuilder.AllocParameters<FFluidDepthParameters>();
 		PassParameters->ParticlePositions = ParticleBufferSRV;
 		PassParameters->ParticleRadius = ParticleRadius;
@@ -189,15 +213,9 @@ void RenderFluidDepthPass(
 		// Velocity buffer for flow texture
 		PassParameters->ParticleVelocities = VelocityBufferSRV;
 
-		// ViewRect and texture size for SceneDepth UV transformation
-		// FViewInfo::ViewRect = Valid region of SceneDepth (Screen Percentage applied)
-		const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
-		PassParameters->SceneViewRect = FVector2f(
-			ViewInfo.ViewRect.Width(),
-			ViewInfo.ViewRect.Height());
-		PassParameters->SceneTextureSize = FVector2f(
-			SceneDepthTexture->Desc.Extent.X,
-			SceneDepthTexture->Desc.Extent.Y);
+		// ViewRect and texture size (pre-computed outside loop)
+		PassParameters->SceneViewRect = SceneViewRectSize;
+		PassParameters->SceneTextureSize = SceneTextureSizeVec;
 
 		PassParameters->RenderTargets[0] = FRenderTargetBinding(
 			OutLinearDepthTexture,

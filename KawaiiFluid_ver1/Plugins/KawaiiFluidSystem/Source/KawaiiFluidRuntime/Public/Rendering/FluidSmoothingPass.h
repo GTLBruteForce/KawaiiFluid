@@ -33,14 +33,13 @@ void RenderFluidNarrowRangeSmoothingPass(
 	float GrazingBoost = 1.0f);
 
 /**
- * Simple Gaussian Blur for Fluid Thickness Smoothing
+ * Separable Gaussian Blur for Fluid Thickness Smoothing
  *
- * Applies a simple Gaussian blur to the thickness buffer to smooth out
- * individual particle profiles. Unlike depth smoothing, this does not
- * use bilateral filtering since thickness values are additive.
+ * Uses horizontal + vertical passes for O(2n) instead of O(n²).
+ * Smooths out individual particle contributions for cleaner Beer's Law absorption.
  *
- * @param BlurRadius  Spatial blur radius in pixels
- * @param NumIterations  Number of blur iterations
+ * @param BlurRadius  Spatial filter radius in pixels
+ * @param NumIterations  Number of blur iterations (1-5)
  */
 void RenderFluidThicknessSmoothingPass(
 	FRDGBuilder& GraphBuilder,

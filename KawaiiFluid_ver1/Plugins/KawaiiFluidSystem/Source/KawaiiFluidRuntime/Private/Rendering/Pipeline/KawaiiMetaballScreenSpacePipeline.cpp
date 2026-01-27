@@ -117,7 +117,8 @@ static bool GenerateIntermediateTextures(
 		return false;
 	}
 
-	// 5. Thickness Smoothing Pass - smooth out individual particle profiles
+	// 5. Thickness Smoothing Pass (Separable Gaussian Blur)
+	// Smooths out individual particle contributions for cleaner Beer's Law absorption
 	FRDGTextureRef SmoothedThicknessTexture = nullptr;
 	RenderFluidThicknessSmoothingPass(GraphBuilder, View, ThicknessTexture, SmoothedThicknessTexture,
 	                                  BlurRadius, 2);  // 2 iterations for thickness
