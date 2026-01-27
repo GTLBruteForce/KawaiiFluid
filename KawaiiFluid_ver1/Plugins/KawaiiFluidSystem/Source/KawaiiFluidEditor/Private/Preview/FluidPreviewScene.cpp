@@ -171,10 +171,10 @@ void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 
 	if (CurrentPreset)
 	{
-		// Initialize GPU simulator with preview settings MaxParticleCount
+		// Initialize GPU simulator with fixed buffer size
 		if (SimulationContext)
 		{
-			SimulationContext->InitializeGPUSimulator(GetPreviewSettings().MaxParticleCount);
+			SimulationContext->InitializeGPUSimulator(FFluidPreviewSettings::GPUBufferSize);
 			SimulationContext->InitializeSolvers(CurrentPreset);
 			SimulationContext->SetCachedPreset(CurrentPreset);
 		}
@@ -214,16 +214,13 @@ void FFluidPreviewScene::RefreshFromPreset()
 		return;
 	}
 
-	// Reinitialize GPU simulator if MaxParticleCount changed
+	// Ensure GPU simulator is initialized
 	if (SimulationContext)
 	{
-		FGPUFluidSimulator* GPUSimulator = SimulationContext->GetGPUSimulator();
-		const int32 CurrentMaxParticles = GPUSimulator ? GPUSimulator->GetMaxParticleCount() : 0;
-
-		if (CurrentMaxParticles != GetPreviewSettings().MaxParticleCount)
+		// Ensure GPU simulator exists with fixed buffer size
+		if (!SimulationContext->IsGPUSimulatorReady())
 		{
-			SimulationContext->ReleaseGPUSimulator();
-			SimulationContext->InitializeGPUSimulator(GetPreviewSettings().MaxParticleCount);
+			SimulationContext->InitializeGPUSimulator(FFluidPreviewSettings::GPUBufferSize);
 		}
 
 		SimulationContext->InitializeSolvers(CurrentPreset);

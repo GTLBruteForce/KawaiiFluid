@@ -87,7 +87,7 @@ struct FFluidPreviewSettings
 
 	/** Stream cross-sectional radius */
 	UPROPERTY(EditAnywhere, Category = "Stream",
-		meta = (EditCondition = "EmitterMode == EPreviewEmitterMode::Stream", EditConditionHides, ClampMin = "1.0"))
+		meta = (EditCondition = "EmitterMode == EPreviewEmitterMode::Stream", EditConditionHides, ClampMin = "1.0", ClampMax = "200.0"))
 	float StreamRadius = 15.0f;
 
 	//========================================
@@ -107,10 +107,13 @@ struct FFluidPreviewSettings
 	// Limits
 	//========================================
 
-	/** Maximum particles for preview (0 = unlimited) */
+	/** Maximum particles for preview (0 = unlimited, clamped to GPU buffer size) */
 	UPROPERTY(EditAnywhere, Category = "Limits",
-		meta = (ClampMin = "0"))
+		meta = (ClampMin = "0", ClampMax = "100000"))
 	int32 MaxParticleCount = 10000;
+
+	/** GPU buffer size (fixed allocation) */
+	static constexpr int32 GPUBufferSize = 100000;
 
 	/** Recycle oldest particles when MaxParticleCount is exceeded (instead of stopping spawn)
 	 *  Only applicable to Stream mode - Fill mode spawns once and doesn't need recycling */
