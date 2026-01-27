@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "../KawaiiRenderParticle.ush"
+#include "KawaiiRenderParticle.ush"
 #include "FluidSpatialHash.ush"
 
 //=============================================================================
