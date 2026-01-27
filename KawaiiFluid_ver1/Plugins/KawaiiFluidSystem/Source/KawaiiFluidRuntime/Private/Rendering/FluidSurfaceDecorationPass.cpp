@@ -10,6 +10,8 @@
 #include "RHIStaticStates.h"
 #include "TextureResource.h"
 #include "Engine/Engine.h"
+#include "EngineGlobals.h"
+#include "Engine/Texture.h"
 
 //=============================================================================
 // Console Variables

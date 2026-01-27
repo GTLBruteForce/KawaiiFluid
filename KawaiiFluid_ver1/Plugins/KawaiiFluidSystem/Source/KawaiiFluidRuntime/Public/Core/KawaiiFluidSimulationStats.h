@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Stats/Stats.h"
+#include "HAL/IConsoleManager.h"
 
 //=============================================================================
 // Stat Group Declarations
