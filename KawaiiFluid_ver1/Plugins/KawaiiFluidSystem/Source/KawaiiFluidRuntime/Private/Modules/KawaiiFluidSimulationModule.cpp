@@ -1457,20 +1457,17 @@ int32 UKawaiiFluidSimulationModule::RemoveOldestParticlesForSource(int32 SourceI
 			return 0;
 		}
 
-		const int32 SourceCount = ParticleIDsPtr->Num();
-		const int32 RemoveCount = FMath::Min(Count, SourceCount);
+		// Use filtered version to skip already requested IDs
+		// Pass entire array as candidates, function will filter and take only Count new IDs
+		const int32 ActualRemoved = GPUSim->AddDespawnByIDRequestsFiltered(*ParticleIDsPtr, Count);
 
-		// Read back sorted by ParticleID from GPU - first N entries are oldest particles O(1)
-		TArray<int32> IDsToRemove;
-		IDsToRemove.SetNumUninitialized(RemoveCount);
-		FMemory::Memcpy(IDsToRemove.GetData(), ParticleIDsPtr->GetData(), RemoveCount * sizeof(int32));
+		if (ActualRemoved > 0)
+		{
+			UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticlesForSource: SourceID=%d, Requested %d, Actually added %d"),
+				SourceID, Count, ActualRemoved);
+		}
 
-		GPUSim->AddDespawnByIDRequests(IDsToRemove);
-
-		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticlesForSource: SourceID=%d, Removing %d (IDs: %d~%d), Total=%d"),
-			SourceID, RemoveCount, IDsToRemove[0], IDsToRemove.Last(), SourceCount);
-
-		return RemoveCount;
+		return ActualRemoved;
 	}
 
 	return 0;

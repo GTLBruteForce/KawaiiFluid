@@ -659,6 +659,14 @@ public:
 	void AddDespawnByIDRequests(const TArray<int32>& ParticleIDs);
 
 	/**
+	 * Add despawn requests, filtering out already requested IDs
+	 * @param CandidateIDs - Sorted array of candidate particle IDs
+	 * @param MaxCount - Maximum number of new IDs to add
+	 * @return Number of new IDs actually added
+	 */
+	int32 AddDespawnByIDRequestsFiltered(const TArray<int32>& CandidateIDs, int32 MaxCount);
+
+	/**
 	 * Lightweight API for despawn operations - returns positions, IDs and source IDs
 	 * Uses cached data from ProcessStatsReadback (no sync GPU readback needed)
 	 * @param OutPositions - Output array of particle positions

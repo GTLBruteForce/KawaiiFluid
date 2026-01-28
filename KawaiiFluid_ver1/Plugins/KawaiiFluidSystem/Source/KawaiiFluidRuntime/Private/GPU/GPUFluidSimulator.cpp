@@ -1945,6 +1945,15 @@ void FGPUFluidSimulator::AddDespawnByIDRequests(const TArray<int32>& ParticleIDs
 	}
 }
 
+int32 FGPUFluidSimulator::AddDespawnByIDRequestsFiltered(const TArray<int32>& CandidateIDs, int32 MaxCount)
+{
+	if (SpawnManager.IsValid() && CandidateIDs.Num() > 0 && MaxCount > 0)
+	{
+		return SpawnManager->AddDespawnByIDRequestsFiltered(CandidateIDs, MaxCount);
+	}
+	return 0;
+}
+
 bool FGPUFluidSimulator::GetParticlePositionsAndIDs(TArray<FVector3f>& OutPositions, TArray<int32>& OutParticleIDs, TArray<int32>& OutSourceIDs)
 {
 	if (!bHasValidGPUResults.load())

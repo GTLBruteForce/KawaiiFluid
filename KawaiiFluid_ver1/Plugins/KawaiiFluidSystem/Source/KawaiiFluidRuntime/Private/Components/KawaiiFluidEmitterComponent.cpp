@@ -423,6 +423,11 @@ void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 	LayerDistanceAccumulator = ResidualDistance;
 
 	// === Recycle (Stream mode only): After spawning, remove oldest particles if over MaxParticleCount ===
+	// TODO: Implement Quota system for multiple emitters sharing a Volume
+	//       - Currently each emitter recycles its own particles when Volume is near limit
+	//       - Problem: If Emitter A spawns more aggressively, it dominates the Volume
+	//       - Solution: Per-emitter quota based on (EmitterMax / Sum of all EmitterMax) * VolumeMax
+	//       - Or priority-based quota allocation
 	if (bRecycleOldestParticles && MaxParticleCount > 0)
 	{
 		UKawaiiFluidSimulationModule* Module = GetSimulationModule();
@@ -430,10 +435,31 @@ void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 		{
 			const int32 CurrentCount = Module->GetParticleCountForSource(CachedSourceID);
 			// -1 = readback not ready, skip recycle this frame
-			if (CurrentCount >= 0 && CurrentCount > MaxParticleCount)
+			if (CurrentCount >= 0)
 			{
-				const int32 ToRemove = CurrentCount - MaxParticleCount;
-				Module->RemoveOldestParticlesForSource(CachedSourceID, ToRemove);
+				const int32 SpawnedThisFrame = AllPositions.Num();
+				const int32 Margin = SpawnedThisFrame * 3;
+
+				// Check Volume total particle count
+				int32 VolumeMax = MaxParticleCount;
+				int32 VolumeTotalCount = CurrentCount;
+				if (FGPUFluidSimulator* GPUSim = Module->GetGPUSimulator())
+				{
+					VolumeMax = GPUSim->GetMaxParticleCount();
+					VolumeTotalCount = GPUSim->GetParticleCount();
+				}
+
+				// Recycle if approaching either limit:
+				// 1. This emitter's particle count near EmitterMax
+				// 2. Volume total particle count near VolumeMax
+				const bool bEmitterNearLimit = (CurrentCount >= MaxParticleCount - Margin);
+				const bool bVolumeNearLimit = (VolumeTotalCount >= VolumeMax - Margin);
+
+				if (bEmitterNearLimit || bVolumeNearLimit)
+				{
+					const int32 ToRemove = SpawnedThisFrame;
+					Module->RemoveOldestParticlesForSource(CachedSourceID, ToRemove);
+				}
 			}
 		}
 	}

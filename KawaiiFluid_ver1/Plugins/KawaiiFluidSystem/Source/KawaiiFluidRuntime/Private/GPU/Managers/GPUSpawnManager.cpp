@@ -268,6 +268,57 @@ void FGPUSpawnManager::AddDespawnByIDRequests(const TArray<int32>& ParticleIDs)
 		OriginalCount, FilteredCount, OriginalCount - FilteredCount, PendingDespawnByIDs.Num());
 }
 
+int32 FGPUSpawnManager::AddDespawnByIDRequestsFiltered(const TArray<int32>& CandidateIDs, int32 MaxCount)
+{
+	if (CandidateIDs.Num() == 0 || MaxCount <= 0)
+	{
+		return 0;
+	}
+
+	FScopeLock Lock(&DespawnByIDLock);
+
+	// Filter out already requested IDs using set_difference O(n+m)
+	TArray<int32> NewIDs;
+	NewIDs.SetNumUninitialized(CandidateIDs.Num());
+
+	int32* DiffEnd = std::set_difference(
+		CandidateIDs.GetData(), CandidateIDs.GetData() + CandidateIDs.Num(),
+		AlreadyRequestedIDs.GetData(), AlreadyRequestedIDs.GetData() + AlreadyRequestedIDs.Num(),
+		NewIDs.GetData());
+
+	const int32 AvailableCount = DiffEnd - NewIDs.GetData();
+	const int32 ActualCount = FMath::Min(AvailableCount, MaxCount);
+
+	if (ActualCount <= 0)
+	{
+		UE_LOG(LogGPUSpawnManager, Log, TEXT("AddDespawnByIDRequestsFiltered: %d candidates, 0 available (all already requested)"), CandidateIDs.Num());
+		return 0;
+	}
+
+	// Take only the first ActualCount IDs
+	NewIDs.SetNum(ActualCount);
+
+	// Add to pending
+	PendingDespawnByIDs.Append(NewIDs);
+
+	// Merge into AlreadyRequestedIDs (maintaining sorted order)
+	TArray<int32> Merged;
+	Merged.SetNumUninitialized(AlreadyRequestedIDs.Num() + ActualCount);
+
+	std::merge(
+		AlreadyRequestedIDs.GetData(), AlreadyRequestedIDs.GetData() + AlreadyRequestedIDs.Num(),
+		NewIDs.GetData(), NewIDs.GetData() + ActualCount,
+		Merged.GetData());
+
+	AlreadyRequestedIDs = MoveTemp(Merged);
+	bHasPendingDespawnByIDRequests.store(true);
+
+	UE_LOG(LogGPUSpawnManager, Log, TEXT("AddDespawnByIDRequestsFiltered: %d candidates, %d available, %d added (pending: %d)"),
+		CandidateIDs.Num(), AvailableCount, ActualCount, PendingDespawnByIDs.Num());
+
+	return ActualCount;
+}
+
 int32 FGPUSpawnManager::SwapDespawnByIDBuffers()
 {
 	FScopeLock Lock(&DespawnByIDLock);

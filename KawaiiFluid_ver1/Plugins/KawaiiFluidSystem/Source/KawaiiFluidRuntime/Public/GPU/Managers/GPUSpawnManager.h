@@ -130,6 +130,14 @@ public:
 	bool HasPendingDespawnByIDRequests() const { return bHasPendingDespawnByIDRequests.load(); }
 
 	/**
+	 * Add despawn requests, filtering out already requested IDs (thread-safe)
+	 * @param CandidateIDs - Sorted array of candidate particle IDs
+	 * @param MaxCount - Maximum number of new IDs to add
+	 * @return Number of new IDs actually added
+	 */
+	int32 AddDespawnByIDRequestsFiltered(const TArray<int32>& CandidateIDs, int32 MaxCount);
+
+	/**
 	 * Add ID-based despawn particles RDG pass
 	 * Uses binary search on sorted ID list for O(log n) lookup per particle
 	 * @param GraphBuilder - RDG builder
