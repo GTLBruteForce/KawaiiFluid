@@ -1068,15 +1068,30 @@ void FGPUBoundarySkinningManager::AddBoundarySkinningPass(
 		OutputOffset += LocalParticleCount;
 	}
 
-	// Output for same-frame access by density/adhesion passes
-	OutWorldBoundaryBuffer = WorldBoundaryBuffer;
-	OutBoundaryParticleCount = TotalLocalBoundaryParticleCount;
+	// Only set outputs and extract if at least one skinning pass was actually dispatched
+	// OutputOffset > 0 means at least one owner had valid data and was processed
+	if (OutputOffset > 0)
+	{
+		// Output for same-frame access by density/adhesion passes
+		OutWorldBoundaryBuffer = WorldBoundaryBuffer;
+		OutBoundaryParticleCount = TotalLocalBoundaryParticleCount;
 
-	// Store current frame as previous for next frame velocity calculation
-	// Swap: Previous <- Current, then extract new Current
-	PreviousWorldBoundaryBuffer = PersistentWorldBoundaryBuffer;
-	GraphBuilder.QueueBufferExtraction(WorldBoundaryBuffer, &PersistentWorldBoundaryBuffer);
-	bHasPreviousFrame = true;
+		// Store current frame as previous for next frame velocity calculation
+		// Swap: Previous <- Current, then extract new Current
+		PreviousWorldBoundaryBuffer = PersistentWorldBoundaryBuffer;
+		GraphBuilder.QueueBufferExtraction(WorldBoundaryBuffer, &PersistentWorldBoundaryBuffer);
+		bHasPreviousFrame = true;
+	}
+	else
+	{
+		// No skinning passes were dispatched (all owners had invalid/empty data)
+		// Return nullptr to signal caller that no boundary data is available this frame
+		UE_LOG(LogGPUBoundarySkinning, Warning,
+			TEXT("[AddBoundarySkinningPass] No skinning passes dispatched despite TotalLocalBoundaryParticleCount=%d. Check LocalParticles and BoneTransforms data."),
+			TotalLocalBoundaryParticleCount);
+		OutWorldBoundaryBuffer = nullptr;
+		OutBoundaryParticleCount = 0;
+	}
 }
 
 //=============================================================================
