@@ -153,14 +153,7 @@ void FAdhesionSolver::Apply(
 		}
 		else
 		{
-			// Debug: Log detachment reason
-			static int32 DistanceLogCounter = 0;
-			if (Particle.bIsAttached && ++DistanceLogCounter % 200 == 1)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("[Distance] Particle %d: Dist=%.1f, SameActor=%d, Bone=%s"),
-					Particle.ParticleID, ClosestDistance, bSameActor ? 1 : 0, *Particle.AttachedBoneName.ToString());
-			}
-			// Clear collider information if outside adhesion range
+			// Outside adhesion range - clear collider information
 			ClosestColliderActor = nullptr;
 		}
 
@@ -171,7 +164,7 @@ void FAdhesionSolver::Apply(
 		Results[i].BoneTransform = ClosestBoneTransform;
 		Results[i].ParticlePosition = Particle.Position;
 		Results[i].SurfaceNormal = ClosestSurfaceNormal;
-	});
+	}, EParallelForFlags::Unbalanced);
 
 	// Sequential application (due to state changes)
 	for (int32 i = 0; i < Particles.Num(); ++i)

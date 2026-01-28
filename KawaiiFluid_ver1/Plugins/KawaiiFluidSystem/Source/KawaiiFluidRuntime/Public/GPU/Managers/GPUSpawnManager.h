@@ -331,4 +331,19 @@ private:
 	// CPU-cached source counts (updated from readback)
 	TArray<int32> CachedSourceCounts;
 	mutable FCriticalSection SourceCountLock;
+
+	//=========================================================================
+	// Persistent Stream Compaction Buffers (for Despawn)
+	//=========================================================================
+
+	// Reusable buffers to avoid per-frame allocation overhead
+	TRefCountPtr<FRDGPooledBuffer> PersistentAliveMaskBuffer;
+	TRefCountPtr<FRDGPooledBuffer> PersistentPrefixSumsBuffer;
+	TRefCountPtr<FRDGPooledBuffer> PersistentBlockSumsBuffer;
+	TRefCountPtr<FRDGPooledBuffer> PersistentCompactedBuffer[2];  // Double-buffered for output
+	int32 CompactedBufferIndex = 0;
+	int32 StreamCompactionCapacity = 0;
+
+	/** Ensure stream compaction buffers are allocated with sufficient capacity */
+	void EnsureStreamCompactionBuffers(FRDGBuilder& GraphBuilder, int32 RequiredCapacity);
 };

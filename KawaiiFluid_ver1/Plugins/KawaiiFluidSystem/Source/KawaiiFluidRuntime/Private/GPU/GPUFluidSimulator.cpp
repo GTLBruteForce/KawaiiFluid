@@ -538,15 +538,22 @@ void FGPUFluidSimulator::BeginFrame()
 			{
 				SCOPED_DRAW_EVENT(RHICmdList, GPUFluid_BeginFrame_Despawn);
 
-				const int32 DespawnCount = Self->SpawnManager->SwapDespawnByIDBuffers();
+				int32 DespawnCount = 0;
+				{
+					RDG_EVENT_SCOPE(GraphBuilder, "Despawn_SwapBuffers");
+					DespawnCount = Self->SpawnManager->SwapDespawnByIDBuffers();
+				}
 				if (DespawnCount > 0)
 				{
-					ParticleBuffer = GraphBuilder.RegisterExternalBuffer(Self->PersistentParticleBuffer, TEXT("GPUFluidParticlesForDespawn"));
-					Self->SpawnManager->AddDespawnByIDPass(GraphBuilder, ParticleBuffer, PostOpCount);
+					{
+						RDG_EVENT_SCOPE(GraphBuilder, "Despawn_RegisterBuffer");
+						ParticleBuffer = GraphBuilder.RegisterExternalBuffer(Self->PersistentParticleBuffer, TEXT("GPUFluidParticlesForDespawn"));
+					}
+					{
+						RDG_EVENT_SCOPE(GraphBuilder, "Despawn_AddPass");
+						Self->SpawnManager->AddDespawnByIDPass(GraphBuilder, ParticleBuffer, PostOpCount);
+					}
 					PostOpCount = FMath::Max(0, PostOpCount - DespawnCount);
-
-					UE_LOG(LogGPUFluidSimulator, Log, TEXT("BeginFrame: Despawned %d particles, %d -> %d"),
-						DespawnCount, Self->CurrentParticleCount, PostOpCount);
 				}
 			}
 
@@ -612,8 +619,6 @@ void FGPUFluidSimulator::BeginFrame()
 					ParticleBuffer = NewParticleBuffer;
 				}
 
-				UE_LOG(LogGPUFluidSimulator, Log, TEXT("BeginFrame: Spawned %d particles, total now %d"),
-					SpawnCount, PostOpCount);
 			}
 
 			// Clear active requests
@@ -3291,7 +3296,7 @@ void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdLi
 					NewNeighborCounts[i] = P.NeighborCount;
 				}
 			}
-		});
+		}, EParallelForFlags::Unbalanced);
 
 		// Merge (single thread) - array-based, no hash operations, MoveTemp for zero-copy
 		TArray<TArray<int32>> NewSourceIDArrays;
