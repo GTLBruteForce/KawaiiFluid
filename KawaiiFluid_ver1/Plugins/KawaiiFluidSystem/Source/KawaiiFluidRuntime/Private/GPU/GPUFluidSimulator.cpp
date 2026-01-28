@@ -2496,9 +2496,8 @@ void FGPUFluidSimulator::FinalizeUpload()
 	int32 ParticleCount = 0;
 
 	// ═══════════════════════════════════════════════════
-	// Lock Scope 1: Read/move shared data (minimal scope)
+	// Lock Scope 1: Read/copy shared data (minimal scope)
 	// Deadlock prevention: Release lock before FlushRenderingCommands()
-	// Optimization: Use MoveTemp instead of deep copy to avoid ~5-10ms allocation
 	// ═══════════════════════════════════════════════════
 	{
 		FScopeLock Lock(&BufferLock);
@@ -2509,16 +2508,14 @@ void FGPUFluidSimulator::FinalizeUpload()
 			return;
 		}
 
-		// Move ownership instead of deep copy (optimization: eliminates ~5-10ms memory allocation)
-		// CachedGPUParticles will be empty after this, but that's OK since we're finalizing upload
+		// Deep copy (within lock scope - prevents race condition with RenderThread's ResizeBuffers)
+		ParticlesCopy = CachedGPUParticles;
 		ParticleCount = CachedGPUParticles.Num();
-		ParticlesCopy = MoveTemp(CachedGPUParticles);
 		CurrentParticleCount = ParticleCount;
 		bNeedsFullUpload = false;
 
 		// Build readback cache at upload time (immediately usable in ClearAllParticles etc.)
 		// Build cache immediately from CPU data without waiting for GPU readback
-		// Note: Use ParticlesCopy since CachedGPUParticles was moved
 		constexpr int32 MaxSources = EGPUParticleSource::MaxSourceCount;
 		CachedSourceIDToParticleIDs.SetNum(MaxSources);
 		for (int32 i = 0; i < MaxSources; ++i)
@@ -2528,7 +2525,7 @@ void FGPUFluidSimulator::FinalizeUpload()
 		CachedAllParticleIDs.Empty();
 		CachedAllParticleIDs.Reserve(ParticleCount);
 
-		for (const FGPUFluidParticle& P : ParticlesCopy)
+		for (const FGPUFluidParticle& P : CachedGPUParticles)
 		{
 			if (P.SourceID >= 0 && P.SourceID < MaxSources)
 			{
