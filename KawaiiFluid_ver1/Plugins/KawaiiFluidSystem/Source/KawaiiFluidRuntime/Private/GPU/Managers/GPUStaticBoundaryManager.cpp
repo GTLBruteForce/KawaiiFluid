@@ -153,13 +153,13 @@ void FGPUStaticBoundaryManager::GenerateBoundaryParticles(
 		}
 	}
 
-	// Log generation results (every 60 frames)
-	static int32 LogCounter = 0;
-	if (++LogCounter % 60 == 1)
-	{
-		UE_LOG(LogGPUStaticBoundary, Log, TEXT("Generated %d static boundary particles (Spacing=%.1f, Psi=%.4f)"),
-			BoundaryParticles.Num(), Spacing, Psi);
-	}
+	// Log generation results - disabled for performance
+	// static int32 LogCounter = 0;
+	// if (++LogCounter % 60 == 1)
+	// {
+	// 	UE_LOG(LogGPUStaticBoundary, Log, TEXT("Generated %d static boundary particles (Spacing=%.1f, Psi=%.4f)"),
+	// 		BoundaryParticles.Num(), Spacing, Psi);
+	// }
 }
 
 void FGPUStaticBoundaryManager::ClearBoundaryParticles()

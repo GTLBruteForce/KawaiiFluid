@@ -165,20 +165,20 @@ void FGPUZOrderSortManager::AddComputeMortonCodesPass(
 		UE_LOG(LogGPUZOrderSort, Error, TEXT("Morton code ERROR: Invalid CellSize (%.4f)!"), Params.CellSize);
 	}
 
-	// Log bounds info for debugging (compare with RayMarching PrepareRender)
-	static int32 LogFrameCounter = 0;
-	if (++LogFrameCounter % 60 == 0)
-	{
-		FVector3f GridMin = FVector3f(
-			FMath::Floor(SimulationBoundsMin.X / Params.CellSize),
-			FMath::Floor(SimulationBoundsMin.Y / Params.CellSize),
-			FMath::Floor(SimulationBoundsMin.Z / Params.CellSize));
-		UE_LOG(LogGPUZOrderSort, Log, TEXT("[ZOrder] ComputeMortonCodes - Bounds(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f), CellSize=%.2f, GridMin=(%.0f,%.0f,%.0f)"),
-			SimulationBoundsMin.X, SimulationBoundsMin.Y, SimulationBoundsMin.Z,
-			SimulationBoundsMax.X, SimulationBoundsMax.Y, SimulationBoundsMax.Z,
-			Params.CellSize,
-			GridMin.X, GridMin.Y, GridMin.Z);
-	}
+	// Log bounds info for debugging - disabled for performance
+	// static int32 LogFrameCounter = 0;
+	// if (++LogFrameCounter % 60 == 0)
+	// {
+	// 	FVector3f GridMin = FVector3f(
+	// 		FMath::Floor(SimulationBoundsMin.X / Params.CellSize),
+	// 		FMath::Floor(SimulationBoundsMin.Y / Params.CellSize),
+	// 		FMath::Floor(SimulationBoundsMin.Z / Params.CellSize));
+	// 	UE_LOG(LogGPUZOrderSort, Log, TEXT("[ZOrder] ComputeMortonCodes - Bounds(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f), CellSize=%.2f, GridMin=(%.0f,%.0f,%.0f)"),
+	// 		SimulationBoundsMin.X, SimulationBoundsMin.Y, SimulationBoundsMin.Z,
+	// 		SimulationBoundsMax.X, SimulationBoundsMax.Y, SimulationBoundsMax.Z,
+	// 		Params.CellSize,
+	// 		GridMin.X, GridMin.Y, GridMin.Z);
+	// }
 
 	// Get grid parameters from current preset
 	const int32 GridSize = GridResolutionPresetHelper::GetGridResolution(GridResolutionPreset);

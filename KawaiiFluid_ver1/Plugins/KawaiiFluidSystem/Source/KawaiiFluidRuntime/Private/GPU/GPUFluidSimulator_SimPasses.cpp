@@ -231,14 +231,14 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 	const bool bHasSkinnedBoundary = SpatialData.bSkinnedBoundaryPerformed && SpatialData.SkinnedBoundarySRV != nullptr;
 	const bool bHasStaticBoundary = SpatialData.bStaticBoundaryAvailable && SpatialData.StaticBoundarySRV != nullptr;
 
-	// Debug: Log boundary status (every 120 frames)
-	static int32 BoundaryDebugCounter = 0;
-	if (++BoundaryDebugCounter % 120 == 1)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[BoundaryDebug] Skinned=%d (Count=%d), Static=%d (Count=%d)"),
-			bHasSkinnedBoundary ? 1 : 0, SpatialData.SkinnedBoundaryParticleCount,
-			bHasStaticBoundary ? 1 : 0, SpatialData.StaticBoundaryParticleCount);
-	}
+	// Debug: Log boundary status - disabled for performance
+	// static int32 BoundaryDebugCounter = 0;
+	// if (++BoundaryDebugCounter % 120 == 1)
+	// {
+	// 	UE_LOG(LogTemp, Warning, TEXT("[BoundaryDebug] Skinned=%d (Count=%d), Static=%d (Count=%d)"),
+	// 		bHasSkinnedBoundary ? 1 : 0, SpatialData.SkinnedBoundaryParticleCount,
+	// 		bHasStaticBoundary ? 1 : 0, SpatialData.StaticBoundaryParticleCount);
+	// }
 
 	// Determine which boundary to use for density (currently supports one at a time)
 	// TODO: Support both simultaneously by modifying shader to loop over both
@@ -321,16 +321,16 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 		PassParameters->bUseBoundaryZOrder = 0;
 	}
 
-	// Debug: Log boundary path and Z-Order status (every 120 frames)
-	if (BoundaryDebugCounter % 120 == 1)
-	{
-		const TCHAR* BoundaryPath = bHasSkinnedBoundary ? TEXT("Skinned") :
-			(bHasStaticBoundary ? TEXT("Static") : TEXT("NONE"));
-		const TCHAR* ZOrderPath = bUseSkinnedZOrder ? TEXT("Skinned") :
-			(bUseStaticZOrder ? TEXT("Static") : TEXT("Disabled"));
-		UE_LOG(LogTemp, Warning, TEXT("[BoundaryDebug] BoundaryPath=%s, ZOrderPath=%s, BoundaryCount=%d, bUseDensity=%d, bUseZOrder=%d"),
-			BoundaryPath, ZOrderPath, PassParameters->BoundaryParticleCount, PassParameters->bUseBoundaryDensity, PassParameters->bUseBoundaryZOrder);
-	}
+	// Debug: Log boundary path and Z-Order status - disabled for performance
+	// if (BoundaryDebugCounter % 120 == 1)
+	// {
+	// 	const TCHAR* BoundaryPath = bHasSkinnedBoundary ? TEXT("Skinned") :
+	// 		(bHasStaticBoundary ? TEXT("Static") : TEXT("NONE"));
+	// 	const TCHAR* ZOrderPath = bUseSkinnedZOrder ? TEXT("Skinned") :
+	// 		(bUseStaticZOrder ? TEXT("Static") : TEXT("Disabled"));
+	// 	UE_LOG(LogTemp, Warning, TEXT("[BoundaryDebug] BoundaryPath=%s, ZOrderPath=%s, BoundaryCount=%d, bUseDensity=%d, bUseZOrder=%d"),
+	// 		BoundaryPath, ZOrderPath, PassParameters->BoundaryParticleCount, PassParameters->bUseBoundaryDensity, PassParameters->bUseBoundaryZOrder);
+	// }
 
 	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FSolveDensityPressureCS::ThreadGroupSize);
 
@@ -496,21 +496,21 @@ void FGPUFluidSimulator::AddApplyViscosityPass(
 	PassParameters->BoundaryDetachSpeedThreshold = Params.BoundaryDetachSpeedThreshold;
 	PassParameters->BoundaryMaxDetachSpeed = Params.BoundaryMaxDetachSpeed;
 
-	// Debug: Log Viscosity boundary Z-Order status (every 120 frames)
-	static int32 ViscosityDebugCounter = 0;
-	ViscosityDebugCounter++;
-	if (ViscosityDebugCounter % 120 == 1)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[ViscosityDebug] BoundaryCount=%d, bUseBoundaryViscosity=%d, bUseZOrder=%d, SkinnedZOrder=%d, StaticZOrder=%d, ForceStr=%.2f, VelStr=%.2f, Radius=%.1f"),
-			PassParameters->BoundaryParticleCount,
-			PassParameters->bUseBoundaryViscosity,
-			PassParameters->bUseBoundaryZOrder,
-			bUseSkinnedZOrder ? 1 : 0,
-			bUseStaticZOrder ? 1 : 0,
-			PassParameters->AdhesionForceStrength,
-			PassParameters->AdhesionVelocityStrength,
-			PassParameters->AdhesionRadius);
-	}
+	// Debug: Log Viscosity boundary Z-Order status - disabled for performance
+	// static int32 ViscosityDebugCounter = 0;
+	// ViscosityDebugCounter++;
+	// if (ViscosityDebugCounter % 120 == 1)
+	// {
+	// 	UE_LOG(LogTemp, Warning, TEXT("[ViscosityDebug] BoundaryCount=%d, bUseBoundaryViscosity=%d, bUseZOrder=%d, SkinnedZOrder=%d, StaticZOrder=%d, ForceStr=%.2f, VelStr=%.2f, Radius=%.1f"),
+	// 		PassParameters->BoundaryParticleCount,
+	// 		PassParameters->bUseBoundaryViscosity,
+	// 		PassParameters->bUseBoundaryZOrder,
+	// 		bUseSkinnedZOrder ? 1 : 0,
+	// 		bUseStaticZOrder ? 1 : 0,
+	// 		PassParameters->AdhesionForceStrength,
+	// 		PassParameters->AdhesionVelocityStrength,
+	// 		PassParameters->AdhesionRadius);
+	// }
 
 	const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FApplyViscosityCS::ThreadGroupSize);
 

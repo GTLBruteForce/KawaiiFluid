@@ -359,8 +359,8 @@ void FGPUSpawnManager::AddSpawnParticlesPass(
 		FIntVector(NumGroups, 1, 1)
 	);
 
-	UE_LOG(LogGPUSpawnManager, Verbose, TEXT("SpawnParticlesPass: Spawning %d particles (NextID: %d)"),
-		ActiveSpawnRequests.Num(), NextParticleID.load());
+	// UE_LOG(LogGPUSpawnManager, Verbose, TEXT("SpawnParticlesPass: Spawning %d particles (NextID: %d)"),
+	// 	ActiveSpawnRequests.Num(), NextParticleID.load());
 }
 
 void FGPUSpawnManager::AddDespawnByIDPass(FRDGBuilder& GraphBuilder, FRDGBufferRef& InOutParticleBuffer,

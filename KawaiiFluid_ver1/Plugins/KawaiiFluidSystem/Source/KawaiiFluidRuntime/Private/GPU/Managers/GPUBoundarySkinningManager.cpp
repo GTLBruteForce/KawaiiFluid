@@ -663,18 +663,18 @@ bool FGPUBoundarySkinningManager::ShouldSkipBoundaryAdhesionPass(const FGPUFluid
 
 	if (!bOverlaps)
 	{
-		// Log skip reason (every 60 frames to avoid spam)
-		static int32 SkipLogCounter = 0;
-		if (++SkipLogCounter % 60 == 1)
-		{
-			UE_LOG(LogGPUBoundarySkinning, Log,
-				TEXT("[BoundaryAdhesion] SKIPPED - No overlap between Boundary AABB [(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)] and Volume [(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)] with AdhesionRadius=%.1f"),
-				CombinedBoundaryAABB.Min.X, CombinedBoundaryAABB.Min.Y, CombinedBoundaryAABB.Min.Z,
-				CombinedBoundaryAABB.Max.X, CombinedBoundaryAABB.Max.Y, CombinedBoundaryAABB.Max.Z,
-				ZOrderBoundsMin.X, ZOrderBoundsMin.Y, ZOrderBoundsMin.Z,
-				ZOrderBoundsMax.X, ZOrderBoundsMax.Y, ZOrderBoundsMax.Z,
-				AdhesionRadius);
-		}
+		// Log skip reason - disabled for performance
+		// static int32 SkipLogCounter = 0;
+		// if (++SkipLogCounter % 60 == 1)
+		// {
+		// 	UE_LOG(LogGPUBoundarySkinning, Log,
+		// 		TEXT("[BoundaryAdhesion] SKIPPED - No overlap between Boundary AABB [(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)] and Volume [(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)] with AdhesionRadius=%.1f"),
+		// 		CombinedBoundaryAABB.Min.X, CombinedBoundaryAABB.Min.Y, CombinedBoundaryAABB.Min.Z,
+		// 		CombinedBoundaryAABB.Max.X, CombinedBoundaryAABB.Max.Y, CombinedBoundaryAABB.Max.Z,
+		// 		ZOrderBoundsMin.X, ZOrderBoundsMin.Y, ZOrderBoundsMin.Z,
+		// 		ZOrderBoundsMax.X, ZOrderBoundsMax.Y, ZOrderBoundsMax.Z,
+		// 		AdhesionRadius);
+		// }
 		return true;
 	}
 
@@ -693,16 +693,15 @@ void FGPUBoundarySkinningManager::AddBoundarySkinningPass(
 {
 	FScopeLock Lock(&BoundarySkinningLock);
 
-	// Debug: Log DeltaTime and estimated velocity (every 60 frames)
-	static int32 DebugCounter = 0;
-	if (++DebugCounter % 60 == 1)
-	{
-		// Example: 10cm movement per frame with this DeltaTime = velocity
-		float exampleMovement = 10.0f; // cm
-		float estimatedVelocity = DeltaTime > 0.0001f ? exampleMovement / DeltaTime : 0.0f;
-		UE_LOG(LogGPUBoundarySkinning, Warning, TEXT("[BoundaryVelocityDebug] DeltaTime=%.6f, If 10cm/frame -> Velocity=%.1f cm/s"),
-			DeltaTime, estimatedVelocity);
-	}
+	// Debug: Log DeltaTime - disabled for performance
+	// static int32 DebugCounter = 0;
+	// if (++DebugCounter % 60 == 1)
+	// {
+	// 	float exampleMovement = 10.0f;
+	// 	float estimatedVelocity = DeltaTime > 0.0001f ? exampleMovement / DeltaTime : 0.0f;
+	// 	UE_LOG(LogGPUBoundarySkinning, Warning, TEXT("[BoundaryVelocityDebug] DeltaTime=%.6f, If 10cm/frame -> Velocity=%.1f cm/s"),
+	// 		DeltaTime, estimatedVelocity);
+	// }
 
 	OutWorldBoundaryBuffer = nullptr;
 	OutBoundaryParticleCount = 0;
@@ -1089,19 +1088,19 @@ void FGPUBoundarySkinningManager::AddBoundaryAdhesionPass(
 
 		PassParameters->AttachedParticleCount = GraphBuilder.CreateUAV(AttachedCountBuffer, PF_R32_UINT);
 
-		// Debug: Log adhesion pass parameters (every 60 frames)
-		static int32 AdhesionDebugCounter = 0;
-		if (++AdhesionDebugCounter % 60 == 1)
-		{
-			UE_LOG(LogGPUBoundarySkinning, Warning,
-				TEXT("[BoundaryAdhesionPass] Running! AdhesionStrength=%.2f, CohesionStrength=%.2f, AdhesionRadius=%.2f, SmoothingRadius=%.2f, BoundaryCount=%d, FluidCount=%d"),
-				CachedBoundaryAdhesionParams.AdhesionForceStrength,
-				CachedBoundaryAdhesionParams.CohesionStrength,
-				CachedBoundaryAdhesionParams.AdhesionRadius,
-				Params.SmoothingRadius,
-				BoundaryParticleCount,
-				CurrentParticleCount);
-		}
+		// Debug: Log adhesion pass parameters - disabled for performance
+		// static int32 AdhesionDebugCounter = 0;
+		// if (++AdhesionDebugCounter % 60 == 1)
+		// {
+		// 	UE_LOG(LogGPUBoundarySkinning, Warning,
+		// 		TEXT("[BoundaryAdhesionPass] Running! AdhesionStrength=%.2f, CohesionStrength=%.2f, AdhesionRadius=%.2f, SmoothingRadius=%.2f, BoundaryCount=%d, FluidCount=%d"),
+		// 		CachedBoundaryAdhesionParams.AdhesionForceStrength,
+		// 		CachedBoundaryAdhesionParams.CohesionStrength,
+		// 		CachedBoundaryAdhesionParams.AdhesionRadius,
+		// 		Params.SmoothingRadius,
+		// 		BoundaryParticleCount,
+		// 		CurrentParticleCount);
+		// }
 
 		const uint32 NumGroups = FMath::DivideAndRoundUp(CurrentParticleCount, FBoundaryAdhesionCS::ThreadGroupSize);
 

@@ -18,13 +18,13 @@ void FAdhesionSolver::Apply(
 	float DetachThreshold,
 	float ColliderContactOffset)
 {
-	// Debug: Verify AdhesionSolver invocation
-	static int32 ApplyDebugCounter = 0;
-	if (++ApplyDebugCounter % 1000 == 0)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("AdhesionSolver::Apply - Colliders: %d, Strength: %.2f, Radius: %.2f"),
-			Colliders.Num(), AdhesionStrength, AdhesionRadius);
-	}
+	// Debug: Verify AdhesionSolver invocation - disabled for performance
+	// static int32 ApplyDebugCounter = 0;
+	// if (++ApplyDebugCounter % 1000 == 0)
+	// {
+	// 	UE_LOG(LogTemp, Warning, TEXT("AdhesionSolver::Apply - Colliders: %d, Strength: %.2f, Radius: %.2f"),
+	// 		Colliders.Num(), AdhesionStrength, AdhesionRadius);
+	// }
 
 	if (AdhesionStrength <= 0.0f || Colliders.Num() == 0)
 	{
@@ -280,16 +280,16 @@ void FAdhesionSolver::UpdateAttachmentState(
 	const FVector& ParticlePosition,
 	const FVector& SurfaceNormal)
 {
-	// Debug: Track detachment reason
-	static int32 DetachLogCounter = 0;
-	if (Particle.bIsAttached && !ColliderActor)
-	{
-		if (++DetachLogCounter % 100 == 1)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[Detach] Particle %d detached! Was on bone: %s"),
-				Particle.ParticleID, *Particle.AttachedBoneName.ToString());
-		}
-	}
+	// Debug: Track detachment reason - disabled for performance
+	// static int32 DetachLogCounter = 0;
+	// if (Particle.bIsAttached && !ColliderActor)
+	// {
+	// 	if (++DetachLogCounter % 100 == 1)
+	// 	{
+	// 		UE_LOG(LogTemp, Warning, TEXT("[Detach] Particle %d detached! Was on bone: %s"),
+	// 			Particle.ParticleID, *Particle.AttachedBoneName.ToString());
+	// 	}
+	// }
 
 	if (ColliderActor)
 	{

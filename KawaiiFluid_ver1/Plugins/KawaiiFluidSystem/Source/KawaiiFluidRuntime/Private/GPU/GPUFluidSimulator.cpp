@@ -368,15 +368,15 @@ void FGPUFluidSimulator::SimulateSubstep(const FGPUFluidSimulationParams& Params
 			static int32 RenderFrameCounter = 0;
 			const bool bLogThisFrame = (RenderFrameCounter++ < 10);
 
-			if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> RENDER COMMAND START (Frame %d)"), RenderFrameCounter);
+			// if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> RENDER COMMAND START (Frame %d)"), RenderFrameCounter);
 
 			// Build and execute RDG
 			FRDGBuilder GraphBuilder(RHICmdList);
 			Self->SimulateSubstep_RDG(GraphBuilder, ParamsCopy);
 
-			if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> RDG EXECUTE START"));
+			// if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> RDG EXECUTE START"));
 			GraphBuilder.Execute();
-			if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> RDG EXECUTE COMPLETE"));
+			// if (bLogThisFrame) UE_LOG(LogGPUFluidSimulator, Log, TEXT(">>> RDG EXECUTE COMPLETE"));
 
 			// Mark that we have valid GPU results
 			Self->bHasValidGPUResults.store(true);
@@ -788,12 +788,13 @@ FRDGBufferRef FGPUFluidSimulator::PrepareParticleBuffer(
 		}
 	}
 
-	if (bShouldLog)
-	{
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("=== PrepareParticleBuffer (Frame %d) ==="), DebugFrameCounter);
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("  CurrentParticleCount: %d, bNeedsFullUpload: %s"),
-			CurrentParticleCount, bNeedsFullUpload ? TEXT("TRUE") : TEXT("FALSE"));
-	}
+	// Render thread log disabled for performance
+	// if (bShouldLog)
+	// {
+	// 	UE_LOG(LogGPUFluidSimulator, Log, TEXT("=== PrepareParticleBuffer (Frame %d) ==="), DebugFrameCounter);
+	// 	UE_LOG(LogGPUFluidSimulator, Log, TEXT("  CurrentParticleCount: %d, bNeedsFullUpload: %s"),
+	// 		CurrentParticleCount, bNeedsFullUpload ? TEXT("TRUE") : TEXT("FALSE"));
+	// }
 
 	// =====================================================
 	// PATH 1: CPU Upload (Upload CachedGPUParticles to GPU)
@@ -816,7 +817,7 @@ FRDGBufferRef FGPUFluidSimulator::PrepareParticleBuffer(
 		PreviousParticleCount = CurrentParticleCount;
 		bNeedsFullUpload = false;
 
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("PATH 1 (CPU Upload): Uploaded %d particles from CPU to GPU"), BufferCapacity);
+		// UE_LOG(LogGPUFluidSimulator, Log, TEXT("PATH 1 (CPU Upload): Uploaded %d particles from CPU to GPU"), BufferCapacity);
 	}
 	// =====================================================
 	// PATH 2: Reuse PersistentParticleBuffer
@@ -1241,15 +1242,15 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 		const int32 UpdateInterval = FMath::Max(1, CachedAnisotropyParams.UpdateInterval);
 		++AnisotropyFrameCounter;
 
-		// DEBUG: Log whether anisotropy computation will execute
-		static int32 AnisoDebugCounter = 0;
+		// DEBUG: Log whether anisotropy computation will execute - disabled for performance
+		// static int32 AnisoDebugCounter = 0;
 		const bool bWillCompute = (AnisotropyFrameCounter >= UpdateInterval || !PersistentAnisotropyAxis1Buffer.IsValid());
-		if (++AnisoDebugCounter % 30 == 1)
-		{
-			UE_LOG(LogGPUFluidSimulator, Warning,
-				TEXT("[ANISO_COMPUTE] UpdateInterval=%d, FrameCounter=%d, WillCompute=%s"),
-				UpdateInterval, AnisotropyFrameCounter, bWillCompute ? TEXT("YES") : TEXT("NO"));
-		}
+		// if (++AnisoDebugCounter % 30 == 1)
+		// {
+		// 	UE_LOG(LogGPUFluidSimulator, Warning,
+		// 		TEXT("[ANISO_COMPUTE] UpdateInterval=%d, FrameCounter=%d, WillCompute=%s"),
+		// 		UpdateInterval, AnisotropyFrameCounter, bWillCompute ? TEXT("YES") : TEXT("NO"));
+		// }
 
 		if (AnisotropyFrameCounter >= UpdateInterval || !PersistentAnisotropyAxis1Buffer.IsValid())
 		{
@@ -1595,15 +1596,15 @@ void FGPUFluidSimulator::ExtractPersistentBuffers(
 	// When Z-Order is enabled, CellCountsBuffer/ParticleIndicesBuffer are dummy buffers that weren't produced
 	const bool bUseZOrderSorting = ZOrderSortManager.IsValid() && ZOrderSortManager->IsZOrderSortingEnabled();
 
-	// DEBUG LOG
-	static int32 ExtractLogCounter = 0;
-	if (++ExtractLogCounter % 60 == 0)
-	{
-		UE_LOG(LogTemp, Log, TEXT("[ExtractBuffers] bUseZOrderSorting=%d, CellStartBuffer=%s, CellEndBuffer=%s"),
-			bUseZOrderSorting ? 1 : 0,
-			SpatialData.CellStartBuffer ? TEXT("Valid") : TEXT("NULL"),
-			SpatialData.CellEndBuffer ? TEXT("Valid") : TEXT("NULL"));
-	}
+	// DEBUG LOG - disabled for performance
+	// static int32 ExtractLogCounter = 0;
+	// if (++ExtractLogCounter % 60 == 0)
+	// {
+	// 	UE_LOG(LogTemp, Log, TEXT("[ExtractBuffers] bUseZOrderSorting=%d, CellStartBuffer=%s, CellEndBuffer=%s"),
+	// 		bUseZOrderSorting ? 1 : 0,
+	// 		SpatialData.CellStartBuffer ? TEXT("Valid") : TEXT("NULL"),
+	// 		SpatialData.CellEndBuffer ? TEXT("Valid") : TEXT("NULL"));
+	// }
 
 	if (!bUseZOrderSorting)
 	{
@@ -2452,14 +2453,14 @@ void FGPUFluidSimulator::DownloadParticles(TArray<FFluidParticle>& OutCPUParticl
 		ParticleIDToIndex.Add(OutCPUParticles[i].ParticleID, i);
 	}
 
-	// Debug: Log first particle before conversion
-	static int32 DebugFrameCounter = 0;
-	if (DebugFrameCounter++ % 60 == 0)
-	{
-		const FGPUFluidParticle& P = ParticleBuffer[0];
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("DownloadParticles: GPUCount=%d, CPUCount=%d, Readback[0] Pos=(%.2f, %.2f, %.2f)"),
-			Count, OutCPUParticles.Num(), P.Position.X, P.Position.Y, P.Position.Z);
-	}
+	// Debug: Log first particle before conversion - disabled for performance
+	// static int32 DebugFrameCounter = 0;
+	// if (DebugFrameCounter++ % 60 == 0)
+	// {
+	// 	const FGPUFluidParticle& P = ParticleBuffer[0];
+	// 	UE_LOG(LogGPUFluidSimulator, Log, TEXT("DownloadParticles: GPUCount=%d, CPUCount=%d, Readback[0] Pos=(%.2f, %.2f, %.2f)"),
+	// 		Count, OutCPUParticles.Num(), P.Position.X, P.Position.Y, P.Position.Z);
+	// }
 
 	// Update existing particles by matching ParticleID (don't overwrite newly spawned ones)
 	// Also track bounds to detect Black Hole Cell potential
@@ -3407,14 +3408,14 @@ bool FGPUFluidSimulator::GetShadowDataWithAnisotropy(
 		ReadyShadowAnisotropyAxis2.Num() != Count ||
 		ReadyShadowAnisotropyAxis3.Num() != Count)
 	{
-		// DEBUG: Log count mismatch
-		static int32 MismatchLogCounter = 0;
-		if (++MismatchLogCounter % 10 == 1)
-		{
-			UE_LOG(LogGPUFluidSimulator, Warning,
-				TEXT("[ANISO_MISMATCH] Position=%d, Aniso1=%d, Aniso2=%d, Aniso3=%d → Using default W=1.0"),
-				Count, ReadyShadowAnisotropyAxis1.Num(), ReadyShadowAnisotropyAxis2.Num(), ReadyShadowAnisotropyAxis3.Num());
-		}
+		// DEBUG: Log count mismatch - disabled for performance
+		// static int32 MismatchLogCounter = 0;
+		// if (++MismatchLogCounter % 10 == 1)
+		// {
+		// 	UE_LOG(LogGPUFluidSimulator, Warning,
+		// 		TEXT("[ANISO_MISMATCH] Position=%d, Aniso1=%d, Aniso2=%d, Aniso3=%d → Using default W=1.0"),
+		// 		Count, ReadyShadowAnisotropyAxis1.Num(), ReadyShadowAnisotropyAxis2.Num(), ReadyShadowAnisotropyAxis3.Num());
+		// }
 
 		// Anisotropy not available - return default (uniform sphere)
 		OutAnisotropyAxis1.SetNumUninitialized(Count);
