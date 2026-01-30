@@ -131,6 +131,10 @@ struct KAWAIIFLUIDRUNTIME_API FFoamSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled"))
 	bool bWaveCrestFoam = true;
 
+	/** Strength of wave crest foam (0~1 contribution) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled && bWaveCrestFoam", ClampMin = "0.0", ClampMax = "2.0"))
+	float WaveCrestFoamStrength = 1.0f;
+
 	//========================================
 	// Thickness-based Foam (Phase 1)
 	//========================================
@@ -149,25 +153,6 @@ struct KAWAIIFLUIDRUNTIME_API FFoamSettings
 	/** Strength of thickness-based foam (0~1 contribution) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled && bThicknessFoam", ClampMin = "0.0", ClampMax = "1.0"))
 	float ThicknessFoamStrength = 0.3f;
-
-	//========================================
-	// Curvature-based Foam (Phase 1)
-	//========================================
-
-	/** Generate foam at high curvature areas (turbulent regions, splashes) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled"))
-	bool bCurvatureFoam = true;
-
-	/**
-	 * How sensitive foam is to surface curvature.
-	 * Higher = more foam in curved areas.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled && bCurvatureFoam", ClampMin = "0.1", ClampMax = "20.0"))
-	float CurvatureScale = 5.0f;
-
-	/** Strength of curvature-based foam (0~1 contribution) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled && bCurvatureFoam", ClampMin = "0.0", ClampMax = "1.0"))
-	float CurvatureFoamStrength = 0.3f;
 };
 
 /**

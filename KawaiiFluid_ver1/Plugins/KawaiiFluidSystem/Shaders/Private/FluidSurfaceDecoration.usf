@@ -57,17 +57,13 @@ float FoamVelocityThreshold;
 float FoamIntensity;
 float FoamTilingScale;
 int bWaveCrestFoam;
+float FoamWaveCrestStrength;
 int FoamAddressingMode;  // 0 = Wrap (repeat), 1 = Mirror
 
-// Foam - Thickness-based (Phase 1)
+// Foam - Thickness-based
 int bThicknessFoam;
 float FoamThicknessThreshold;
 float FoamThicknessStrength;
-
-// Foam - Curvature-based (Phase 1)
-int bCurvatureFoam;
-float FoamCurvatureScale;
-float FoamCurvatureStrength;
 
 // Emissive (dynamic glow)
 int bEmissiveEnabled;
@@ -370,22 +366,21 @@ float3 ComputeTextureLighting(float3 Albedo, float3 WorldNormal, float3 WorldPos
 }
 
 // Compute foam intensity based on various factors
-// Phase 1: Added Thickness-based and Curvature-based foam generation
-float ComputeFoamIntensity(float2 UV, float3 WorldNormal, float Depth, float2 DepthGradient, float VelocityMag, float Thickness, float3 ViewNormal)
+float ComputeFoamIntensity(float2 UV, float3 WorldNormal, float Depth, float2 DepthGradient, float VelocityMag, float Thickness)
 {
 	float Foam = 0.0;
 
 	//========================================
-	// 1. Velocity-based foam (original)
+	// 1. Velocity-based foam
 	//========================================
-	// 속도가 빠른 곳 = 충돌, 스플래시
+	// Fast moving areas = collisions, splashes
 	float VelocityFoam = saturate((VelocityMag - FoamVelocityThreshold) / max(FoamVelocityThreshold, 0.001));
 	Foam += VelocityFoam;
 
 	//========================================
-	// 2. Wave crest foam (original)
+	// 2. Wave crest foam
 	//========================================
-	// 깊이 그래디언트가 큰 곳 = 파도가 부서지는 지점
+	// High depth gradient = wave breaking points
 	if (bWaveCrestFoam > 0)
 	{
 		float GradientMag = length(DepthGradient);
@@ -393,37 +388,18 @@ float ComputeFoamIntensity(float2 UV, float3 WorldNormal, float Depth, float2 De
 
 		// Only on top surfaces (upward-facing)
 		CrestFoam *= saturate(WorldNormal.z);
-		Foam += CrestFoam * 0.5;
+		Foam += CrestFoam * FoamWaveCrestStrength;
 	}
 
 	//========================================
-	// 3. Thickness-based foam (Phase 1)
+	// 3. Thickness-based foam
 	//========================================
-	// 얇은 영역 = 표면 가장자리, 스플래시 시트, 물방울
-	// Thin regions create foam due to air entrainment
+	// Thin regions = surface edges, splash sheets, droplets
 	if (bThicknessFoam > 0)
 	{
-		// smoothstep: Thickness가 Threshold보다 작을수록 Foam 증가
-		// ThicknessThreshold = 0.5 기준, Thickness < 0.5 → Foam 생성
+		// smoothstep: Lower thickness = more foam
 		float ThicknessFoam = smoothstep(FoamThicknessThreshold, FoamThicknessThreshold * 0.1, Thickness);
 		Foam += ThicknessFoam * FoamThicknessStrength;
-	}
-
-	//========================================
-	// 4. Curvature-based foam (Phase 1)
-	//========================================
-	// 표면 곡률이 높은 곳 = 난류, 충돌 지점, 튀는 물
-	// High curvature indicates turbulent/splashing regions
-	if (bCurvatureFoam > 0)
-	{
-		// fwidth = abs(ddx) + abs(ddy) : 스크린스페이스에서 법선 변화량
-		// 법선이 급격히 변하는 곳 = 곡률이 높은 곳
-		float3 NormalGradient = fwidth(ViewNormal);
-		float Curvature = length(NormalGradient);
-
-		// CurvatureScale로 민감도 조절
-		float CurvatureFoam = saturate(Curvature * FoamCurvatureScale);
-		Foam += CurvatureFoam * FoamCurvatureStrength;
 	}
 
 	return saturate(Foam * FoamIntensity);
@@ -570,11 +546,10 @@ void SurfaceDecorationCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	//-------------------------------------------------------------------------
 	// Foam Effect - Z-axis projection (XY plane)
-	// Phase 1: Now includes Thickness-based and Curvature-based foam
 	//-------------------------------------------------------------------------
 	if (bFoamEnabled > 0)
 	{
-		float FoamAmount = ComputeFoamIntensity(UV, WorldNormal, Depth, DepthGradient, VelocityMag, Thickness, ViewNormal);
+		float FoamAmount = ComputeFoamIntensity(UV, WorldNormal, Depth, DepthGradient, VelocityMag, Thickness);
 
 		if (FoamAmount > FOAM_MIN_AMOUNT)
 		{
