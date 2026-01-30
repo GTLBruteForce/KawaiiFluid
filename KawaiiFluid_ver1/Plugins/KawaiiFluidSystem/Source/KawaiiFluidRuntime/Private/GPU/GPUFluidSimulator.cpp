@@ -1647,8 +1647,8 @@ FRDGBufferRef FGPUFluidSimulator::ExecuteParticleIDSortPipeline(
 
 	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 
-	// ParticleID is 32-bit, 4 bits per pass = 8 passes total
-	const int32 RadixSortPasses = 8;
+	// ParticleID is 32-bit, 8 bits per pass = 4 passes total
+	const int32 RadixSortPasses = 4;
 	const int32 NumBlocks = FMath::DivideAndRoundUp(ParticleCount, GPU_RADIX_ELEMENTS_PER_GROUP);
 	const int32 RequiredHistogramSize = GPU_RADIX_SIZE * NumBlocks;
 
@@ -1679,7 +1679,7 @@ FRDGBufferRef FGPUFluidSimulator::ExecuteParticleIDSortPipeline(
 		const int32 SrcIndex = BufferIndex;
 		const int32 DstIndex = BufferIndex ^ 1;
 
-		RDG_EVENT_SCOPE(GraphBuilder, "ParticleIDSort Pass %d (bits %d-%d)", Pass, BitOffset, BitOffset + 3);
+		RDG_EVENT_SCOPE(GraphBuilder, "ParticleIDSort Pass %d (bits %d-%d)", Pass, BitOffset, BitOffset + 7);
 
 		if (Pass == 0)
 		{

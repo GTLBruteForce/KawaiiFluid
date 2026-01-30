@@ -296,7 +296,7 @@ void FGPUZOrderSortManager::AddRadixSortPasses(
 		const int32 SrcIndex = BufferIndex;
 		const int32 DstIndex = BufferIndex ^ 1;
 
-		RDG_EVENT_SCOPE(GraphBuilder, "RadixSort Pass %d (bits %d-%d)", Pass, BitOffset, BitOffset + 3);
+		RDG_EVENT_SCOPE(GraphBuilder, "RadixSort Pass %d (bits %d-%d)", Pass, BitOffset, BitOffset + 7);
 
 		// Pass 1: Histogram
 		{

@@ -1723,12 +1723,13 @@ public:
 
 //=============================================================================
 // GPU Radix Sort Shaders
-// 4-bit radix (16 buckets), auto-calculated passes for Morton code coverage
-// Algorithm: Histogram → Global Prefix Sum → Scatter
+// 8-bit radix (256 buckets), auto-calculated passes for Morton code coverage
+// Algorithm: Histogram → Global Prefix Sum → Scatter (STABLE via LDS ranking)
+// OPTIMIZED: 8-bit radix reduces passes from 6 to 3, halving dispatch overhead
 //=============================================================================
 
-#define GPU_RADIX_BITS 4
-#define GPU_RADIX_SIZE 16  // 2^4 = 16 buckets
+#define GPU_RADIX_BITS 8
+#define GPU_RADIX_SIZE 256  // 2^8 = 256 buckets
 #define GPU_RADIX_THREAD_GROUP_SIZE 256
 #define GPU_RADIX_ELEMENTS_PER_THREAD 4
 #define GPU_RADIX_ELEMENTS_PER_GROUP (GPU_RADIX_THREAD_GROUP_SIZE * GPU_RADIX_ELEMENTS_PER_THREAD)  // 1024
@@ -1737,7 +1738,7 @@ public:
 // Morton code bits = GridAxisBits × 3 (X, Y, Z interleaved)
 // Sort passes = ceil(MortonCodeBits / RadixBits)
 #define GPU_MORTON_CODE_BITS (GPU_MORTON_GRID_AXIS_BITS * 3)  // 7 × 3 = 21 bits
-#define GPU_RADIX_SORT_PASSES ((GPU_MORTON_CODE_BITS + GPU_RADIX_BITS - 1) / GPU_RADIX_BITS)  // ceil(21/4) = 6 passes
+#define GPU_RADIX_SORT_PASSES ((GPU_MORTON_CODE_BITS + GPU_RADIX_BITS - 1) / GPU_RADIX_BITS)  // ceil(21/8) = 3 passes
 
 /**
  * Radix Sort Histogram Compute Shader
@@ -1792,7 +1793,7 @@ public:
 		SHADER_PARAMETER(int32, NumGroups)
 	END_SHADER_PARAMETER_STRUCT()
 
-	static constexpr int32 ThreadGroupSize = 16;  // One thread per bucket
+	static constexpr int32 ThreadGroupSize = 256;  // One thread per bucket (256 buckets for 8-bit radix)
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
