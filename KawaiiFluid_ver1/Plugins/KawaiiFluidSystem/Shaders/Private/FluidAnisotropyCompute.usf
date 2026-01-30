@@ -487,10 +487,16 @@ void CalculateVelocityBased(
 
 //-----------------------------------------------------------------------------
 // Density-Based Anisotropy (Covariance Matrix)
-// Yu & Turk 2013: "Reconstructing Surfaces of Particle-Based Fluids"
-// OPTIMIZED: Single-pass using parallel variance formula
-// Cov = E[X*X^T] - E[X]*E[X]^T
+// NVIDIA FleX Style with Local Caching Optimization
+// Pass 1: Single memory traversal - cache neighbors + compute SmoothedCenter
+// Pass 2: Compute covariance from LOCAL CACHE (no memory access)
+// This prevents jittering and avoids double memory traversal
 //-----------------------------------------------------------------------------
+
+// Maximum cached neighbors per particle (typical PBF has ~20-40 neighbors)
+// NOTE: Keep this small (32) to avoid GPU register spilling. 64 causes ~50% slowdown.
+#define MAX_CACHED_NEIGHBORS 32
+
 void CalculateDensityBased(
 	uint ParticleIndex,
 	out float3 Axis1, out float3 Axis2, out float3 Axis3,
@@ -498,7 +504,6 @@ void CalculateDensityBased(
 	out int OutNeighborCount)
 {
 	// Default: identity (sphere with scale 1.0, NOT AnisotropyScale)
-	// AnisotropyScale is intensity parameter, not base size
 	Axis1 = float3(1, 0, 0);
 	Axis2 = float3(0, 1, 0);
 	Axis3 = float3(0, 0, 1);
@@ -513,26 +518,21 @@ void CalculateDensityBased(
 	float H2 = SmoothingRadius * SmoothingRadius;
 
 	// =========================================================================
-	// Single Pass: Collect all statistics at once
-	// Using parallel variance formula: Var(X) = E[X²] - E[X]²
-	// Cov = Σ(wi*xi*xi^T)/Σwi - (Σwi*xi/Σwi)(Σwi*xi/Σwi)^T
+	// Local cache for neighbor data (avoids second memory traversal)
 	// =========================================================================
-	float3 SumWX = float3(0, 0, 0);      // Σ(wi * xi)
-	float SumWXX_00 = 0, SumWXX_01 = 0, SumWXX_02 = 0;  // Σ(wi * xi * xi^T)
-	float SumWXX_11 = 0, SumWXX_12 = 0, SumWXX_22 = 0;  // (symmetric, only upper triangle)
-	float TotalWeight = 0.0f;            // Σwi
-	int NeighborCount = 0;
+	float3 CachedPositions[MAX_CACHED_NEIGHBORS];
+	float CachedWeights[MAX_CACHED_NEIGHBORS];
+	int CachedCount = 0;
 
 	// =========================================================================
-	// Neighbor Traversal: Two modes for different memory access patterns
+	// PASS 1: Single memory traversal - cache neighbors + compute SmoothedCenter
 	// =========================================================================
+	float3 SumWP = float3(0, 0, 0);
+	float SumW = 0.0f;
+	int NeighborCount = 0;
+
 	if (bUseZOrderSorting)
 	{
-		// =====================================================================
-		// Z-Order (Morton) Mode: Sequential memory access via CellStart/End
-		// Particles are sorted by Morton code, so neighbors are contiguous
-		// This enables better cache utilization and coalesced memory reads
-		// =====================================================================
 		for (int dz = -CellRadius; dz <= CellRadius; ++dz)
 		{
 			for (int dy = -CellRadius; dy <= CellRadius; ++dy)
@@ -544,17 +544,13 @@ void CalculateDensityBased(
 					uint Start = CellStart[CellID];
 					uint End = CellEnd[CellID];
 
-					// Skip empty cells
 					if (Start == INVALID_INDEX || End == INVALID_INDEX)
 					{
 						continue;
 					}
 
-					// Clamp end to valid range
 					End = min(End, (uint)(ParticleCount - 1));
 
-					// Sequential access through sorted particle range
-					// ParticleBuffer is already sorted by Morton code, so we access directly
 					for (uint NeighborIdx = Start; NeighborIdx <= End; ++NeighborIdx)
 					{
 						if (NeighborIdx >= ParticleCount)
@@ -573,16 +569,18 @@ void CalculateDensityBased(
 
 							if (W > 0.0001f)
 							{
-								SumWX += W * NeighborPos;
-								TotalWeight += W;
+								// Accumulate for SmoothedCenter
+								SumWP += W * NeighborPos;
+								SumW += W;
 								NeighborCount++;
 
-								SumWXX_00 += W * NeighborPos.x * NeighborPos.x;
-								SumWXX_01 += W * NeighborPos.x * NeighborPos.y;
-								SumWXX_02 += W * NeighborPos.x * NeighborPos.z;
-								SumWXX_11 += W * NeighborPos.y * NeighborPos.y;
-								SumWXX_12 += W * NeighborPos.y * NeighborPos.z;
-								SumWXX_22 += W * NeighborPos.z * NeighborPos.z;
+								// Cache for Pass 2 (avoid overflow)
+								if (CachedCount < MAX_CACHED_NEIGHBORS)
+								{
+									CachedPositions[CachedCount] = NeighborPos;
+									CachedWeights[CachedCount] = W;
+									CachedCount++;
+								}
 							}
 						}
 					}
@@ -590,12 +588,8 @@ void CalculateDensityBased(
 			}
 		}
 	}
-	// TODO(KHJ): Remove entire else block - legacy path is dead code (bUseZOrderSorting always true)
 	else
 	{
-		// =====================================================================
-		// Legacy Hash Mode: Random access via CellCounts/ParticleIndices
-		// =====================================================================
 		for (int dz = -CellRadius; dz <= CellRadius; ++dz)
 		{
 			for (int dy = -CellRadius; dy <= CellRadius; ++dy)
@@ -626,16 +620,16 @@ void CalculateDensityBased(
 
 							if (W > 0.0001f)
 							{
-								SumWX += W * NeighborPos;
-								TotalWeight += W;
+								SumWP += W * NeighborPos;
+								SumW += W;
 								NeighborCount++;
 
-								SumWXX_00 += W * NeighborPos.x * NeighborPos.x;
-								SumWXX_01 += W * NeighborPos.x * NeighborPos.y;
-								SumWXX_02 += W * NeighborPos.x * NeighborPos.z;
-								SumWXX_11 += W * NeighborPos.y * NeighborPos.y;
-								SumWXX_12 += W * NeighborPos.y * NeighborPos.z;
-								SumWXX_22 += W * NeighborPos.z * NeighborPos.z;
+								if (CachedCount < MAX_CACHED_NEIGHBORS)
+								{
+									CachedPositions[CachedCount] = NeighborPos;
+									CachedWeights[CachedCount] = W;
+									CachedCount++;
+								}
 							}
 						}
 					}
@@ -644,10 +638,48 @@ void CalculateDensityBased(
 		}
 	}
 
+	OutNeighborCount = NeighborCount;
+
+	// Need minimum neighbors for reliable covariance
+	if (NeighborCount < MIN_NEIGHBORS_FOR_ANISOTROPY || SumW < 0.0001f)
+	{
+		return;
+	}
+
+	// Compute Smoothed Position (weighted average)
+	float3 SmoothedCenter = SumWP / SumW;
+
 	// =========================================================================
-	// Boundary Particle contribution to covariance (Akinci 2012 style)
+	// PASS 2: Compute Covariance from LOCAL CACHE (no memory access!)
+	// This is the key optimization - we read from registers/local memory
+	// =========================================================================
+	float SumWXX_00 = 0, SumWXX_01 = 0, SumWXX_02 = 0;
+	float SumWXX_11 = 0, SumWXX_12 = 0, SumWXX_22 = 0;
+	float TotalWeight = 0.0f;
+
+	for (int ci = 0; ci < CachedCount; ++ci)
+	{
+		float3 NeighborPos = CachedPositions[ci];
+		float W = CachedWeights[ci];
+
+		// Use offset from SmoothedCenter (FleX style)
+		float3 Offset = NeighborPos - SmoothedCenter;
+
+		TotalWeight += W;
+
+		SumWXX_00 += W * Offset.x * Offset.x;
+		SumWXX_01 += W * Offset.x * Offset.y;
+		SumWXX_02 += W * Offset.x * Offset.z;
+		SumWXX_11 += W * Offset.y * Offset.y;
+		SumWXX_12 += W * Offset.y * Offset.z;
+		SumWXX_22 += W * Offset.z * Offset.z;
+	}
+
+	// =========================================================================
+	// Boundary Particle contribution to covariance (Akinci 2012 style + FleX)
 	// Boundary particles contribute to the covariance matrix to influence
 	// ellipsoid orientation near surfaces
+	// Also uses SmoothedCenter for stability
 	// =========================================================================
 	if (bUseBoundaryAnisotropy && BoundaryParticleCount > 0)
 	{
@@ -687,16 +719,17 @@ void CalculateDensityBased(
 
 								if (W > 0.0001f)
 								{
-									SumWX += W * boundary.Position;
-									TotalWeight += W;
-									NeighborCount++;
+									// Use offset from SmoothedCenter (FleX style)
+									float3 Offset = boundary.Position - SmoothedCenter;
 
-									SumWXX_00 += W * boundary.Position.x * boundary.Position.x;
-									SumWXX_01 += W * boundary.Position.x * boundary.Position.y;
-									SumWXX_02 += W * boundary.Position.x * boundary.Position.z;
-									SumWXX_11 += W * boundary.Position.y * boundary.Position.y;
-									SumWXX_12 += W * boundary.Position.y * boundary.Position.z;
-									SumWXX_22 += W * boundary.Position.z * boundary.Position.z;
+									TotalWeight += W;
+
+									SumWXX_00 += W * Offset.x * Offset.x;
+									SumWXX_01 += W * Offset.x * Offset.y;
+									SumWXX_02 += W * Offset.x * Offset.z;
+									SumWXX_11 += W * Offset.y * Offset.y;
+									SumWXX_12 += W * Offset.y * Offset.z;
+									SumWXX_22 += W * Offset.z * Offset.z;
 								}
 							}
 						}
@@ -722,65 +755,47 @@ void CalculateDensityBased(
 
 					if (W > 0.0001f)
 					{
-						SumWX += W * boundary.Position;
-						TotalWeight += W;
-						NeighborCount++;
+						// Use offset from SmoothedCenter (FleX style)
+						float3 Offset = boundary.Position - SmoothedCenter;
 
-						SumWXX_00 += W * boundary.Position.x * boundary.Position.x;
-						SumWXX_01 += W * boundary.Position.x * boundary.Position.y;
-						SumWXX_02 += W * boundary.Position.x * boundary.Position.z;
-						SumWXX_11 += W * boundary.Position.y * boundary.Position.y;
-						SumWXX_12 += W * boundary.Position.y * boundary.Position.z;
-						SumWXX_22 += W * boundary.Position.z * boundary.Position.z;
+						TotalWeight += W;
+
+						SumWXX_00 += W * Offset.x * Offset.x;
+						SumWXX_01 += W * Offset.x * Offset.y;
+						SumWXX_02 += W * Offset.x * Offset.z;
+						SumWXX_11 += W * Offset.y * Offset.y;
+						SumWXX_12 += W * Offset.y * Offset.z;
+						SumWXX_22 += W * Offset.z * Offset.z;
 					}
 				}
 			}
 		}
 	}
 
-	OutNeighborCount = NeighborCount;
-
-	// Need minimum neighbors for reliable covariance
-	if (NeighborCount < MIN_NEIGHBORS_FOR_ANISOTROPY || TotalWeight < 0.0001f)
+	// Need minimum weight for reliable covariance
+	if (TotalWeight < 0.0001f)
 	{
 		return;
 	}
 
 	// =========================================================================
-	// Post-calculation: Derive mean and covariance from accumulated values
+	// FleX Style: Covariance already computed relative to SmoothedCenter
+	// No need for parallel variance formula - direct covariance matrix
 	// =========================================================================
 	float InvW = 1.0f / TotalWeight;
 
-	// Weighted mean: E[X] = Σ(wi*xi) / Σwi
-	float3 WeightedMean = SumWX * InvW;
-
-	// E[X*X^T] = Σ(wi*xi*xi^T) / Σwi
-	float EXX_00 = SumWXX_00 * InvW;
-	float EXX_01 = SumWXX_01 * InvW;
-	float EXX_02 = SumWXX_02 * InvW;
-	float EXX_11 = SumWXX_11 * InvW;
-	float EXX_12 = SumWXX_12 * InvW;
-	float EXX_22 = SumWXX_22 * InvW;
-
-	// E[X]*E[X]^T (outer product of mean with itself)
-	float MeanOuter_00 = WeightedMean.x * WeightedMean.x;
-	float MeanOuter_01 = WeightedMean.x * WeightedMean.y;
-	float MeanOuter_02 = WeightedMean.x * WeightedMean.z;
-	float MeanOuter_11 = WeightedMean.y * WeightedMean.y;
-	float MeanOuter_12 = WeightedMean.y * WeightedMean.z;
-	float MeanOuter_22 = WeightedMean.z * WeightedMean.z;
-
-	// Covariance = E[X*X^T] - E[X]*E[X]^T
+	// Covariance = Σ(wi * Offset * Offset^T) / Σwi
+	// Offset is already relative to SmoothedCenter, so this is the covariance directly
 	float3x3 CovMatrix;
-	CovMatrix[0][0] = EXX_00 - MeanOuter_00;
-	CovMatrix[0][1] = EXX_01 - MeanOuter_01;
-	CovMatrix[0][2] = EXX_02 - MeanOuter_02;
+	CovMatrix[0][0] = SumWXX_00 * InvW;
+	CovMatrix[0][1] = SumWXX_01 * InvW;
+	CovMatrix[0][2] = SumWXX_02 * InvW;
 	CovMatrix[1][0] = CovMatrix[0][1];  // Symmetric
-	CovMatrix[1][1] = EXX_11 - MeanOuter_11;
-	CovMatrix[1][2] = EXX_12 - MeanOuter_12;
+	CovMatrix[1][1] = SumWXX_11 * InvW;
+	CovMatrix[1][2] = SumWXX_12 * InvW;
 	CovMatrix[2][0] = CovMatrix[0][2];  // Symmetric
 	CovMatrix[2][1] = CovMatrix[1][2];  // Symmetric
-	CovMatrix[2][2] = EXX_22 - MeanOuter_22;
+	CovMatrix[2][2] = SumWXX_22 * InvW;
 
 	// Eigenvalue decomposition
 	float3 EigenValues;

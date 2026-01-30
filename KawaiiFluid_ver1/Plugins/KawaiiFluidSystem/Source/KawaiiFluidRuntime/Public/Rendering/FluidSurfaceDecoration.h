@@ -130,6 +130,44 @@ struct KAWAIIFLUIDRUNTIME_API FFoamSettings
 	/** Generate foam at wave crests (sharp depth changes) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled"))
 	bool bWaveCrestFoam = true;
+
+	//========================================
+	// Thickness-based Foam (Phase 1)
+	//========================================
+
+	/** Generate foam in thin/edge regions (splash sheets, droplets) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled"))
+	bool bThicknessFoam = true;
+
+	/**
+	 * Thickness below which foam starts appearing.
+	 * Lower = only very thin areas get foam.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled && bThicknessFoam", ClampMin = "0.01", ClampMax = "5.0"))
+	float ThicknessThreshold = 0.5f;
+
+	/** Strength of thickness-based foam (0~1 contribution) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled && bThicknessFoam", ClampMin = "0.0", ClampMax = "1.0"))
+	float ThicknessFoamStrength = 0.3f;
+
+	//========================================
+	// Curvature-based Foam (Phase 1)
+	//========================================
+
+	/** Generate foam at high curvature areas (turbulent regions, splashes) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled"))
+	bool bCurvatureFoam = true;
+
+	/**
+	 * How sensitive foam is to surface curvature.
+	 * Higher = more foam in curved areas.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled && bCurvatureFoam", ClampMin = "0.1", ClampMax = "20.0"))
+	float CurvatureScale = 5.0f;
+
+	/** Strength of curvature-based foam (0~1 contribution) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Surface Decoration|Foam", meta = (EditCondition = "bEnabled && bCurvatureFoam", ClampMin = "0.0", ClampMax = "1.0"))
+	float CurvatureFoamStrength = 0.3f;
 };
 
 /**

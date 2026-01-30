@@ -246,7 +246,7 @@ void UKawaiiFluidEmitterComponent::BurstSpawn(int32 Count)
 		Count = FMath::Min(Count, MaxParticleCount - SpawnedParticleCount);
 	}
 
-	// Get effective spacing
+	// Get effective spacing (0.56 matches Fill mode's HCP compensation)
 	float EffectiveSpacing = StreamParticleSpacing;
 	if (EffectiveSpacing <= 0.0f)
 	{
@@ -254,7 +254,7 @@ void UKawaiiFluidEmitterComponent::BurstSpawn(int32 Count)
 		{
 			if (UKawaiiFluidPresetDataAsset* Pst = Vol->GetPreset())
 			{
-				EffectiveSpacing = Pst->SmoothingRadius * 0.5f;
+				EffectiveSpacing = Pst->SmoothingRadius * 0.6f;
 			}
 		}
 	}
@@ -328,7 +328,9 @@ void UKawaiiFluidEmitterComponent::ProcessContinuousSpawn(float DeltaTime)
 void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 {
 	// Calculate Spacing exactly like KawaiiFluidComponent does:
-	// Use StreamParticleSpacing if set, otherwise Preset->SmoothingRadius * 0.5f
+	// Use StreamParticleSpacing if set, otherwise Preset->SmoothingRadius * 0.56f
+	// Note: 0.56 (not 0.5) to match Fill mode's HCP compensation (1.122x)
+	// This prevents initial high-density causing solver stress at spawn
 	float EffectiveSpacing = StreamParticleSpacing;
 	if (EffectiveSpacing <= 0.0f)
 	{
@@ -336,7 +338,7 @@ void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 		{
 			if (UKawaiiFluidPresetDataAsset* Pst = Vol->GetPreset())
 			{
-				EffectiveSpacing = Pst->SmoothingRadius * 0.5f;
+				EffectiveSpacing = Pst->SmoothingRadius * 0.56f;
 			}
 		}
 	}

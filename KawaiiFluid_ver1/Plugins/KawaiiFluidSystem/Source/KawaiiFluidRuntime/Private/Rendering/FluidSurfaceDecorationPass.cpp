@@ -82,6 +82,16 @@ class FFluidSurfaceDecorationCS : public FGlobalShader
 		SHADER_PARAMETER(int32, bWaveCrestFoam)
 		SHADER_PARAMETER(int32, FoamAddressingMode)  // 0 = Wrap, 1 = Mirror
 
+		// Foam - Thickness-based (Phase 1)
+		SHADER_PARAMETER(int32, bThicknessFoam)
+		SHADER_PARAMETER(float, FoamThicknessThreshold)
+		SHADER_PARAMETER(float, FoamThicknessStrength)
+
+		// Foam - Curvature-based (Phase 1)
+		SHADER_PARAMETER(int32, bCurvatureFoam)
+		SHADER_PARAMETER(float, FoamCurvatureScale)
+		SHADER_PARAMETER(float, FoamCurvatureStrength)
+
 		// Emissive
 		SHADER_PARAMETER(int32, bEmissiveEnabled)
 		SHADER_PARAMETER(FLinearColor, EmissiveColor)
@@ -332,6 +342,16 @@ void RenderFluidSurfaceDecorationPass(
 	PassParameters->FoamTilingScale = Params.Foam.TilingScale;
 	PassParameters->bWaveCrestFoam = Params.Foam.bWaveCrestFoam ? 1 : 0;
 	PassParameters->FoamAddressingMode = static_cast<int32>(Params.Foam.AddressingMode);
+
+	// Foam - Thickness-based (Phase 1)
+	PassParameters->bThicknessFoam = Params.Foam.bThicknessFoam ? 1 : 0;
+	PassParameters->FoamThicknessThreshold = Params.Foam.ThicknessThreshold;
+	PassParameters->FoamThicknessStrength = Params.Foam.ThicknessFoamStrength;
+
+	// Foam - Curvature-based (Phase 1)
+	PassParameters->bCurvatureFoam = Params.Foam.bCurvatureFoam ? 1 : 0;
+	PassParameters->FoamCurvatureScale = Params.Foam.CurvatureScale;
+	PassParameters->FoamCurvatureStrength = Params.Foam.CurvatureFoamStrength;
 
 	// Emissive
 	PassParameters->bEmissiveEnabled = Params.Emissive.bEnabled ? 1 : 0;
