@@ -311,18 +311,19 @@ public:
 		SHADER_PARAMETER(int32, SolverIterationCount)
 		// Position-Based Surface Tension (NVIDIA Flex style)
 		// Creates rounded droplets by minimizing surface area
-		SHADER_PARAMETER(int32, bEnablePositionBasedSurfaceTension)
+		SHADER_PARAMETER(int32, bEnablePositionBasedSurfaceTension)  // 0: Akinci (default), 1: Position-Based
 		SHADER_PARAMETER(float, SurfaceTensionStrength)
 		SHADER_PARAMETER(float, SurfaceTensionActivationDistance)   // cm (h * ratio)
 		SHADER_PARAMETER(float, SurfaceTensionFalloffDistance)      // cm (h * ratio)
 		SHADER_PARAMETER(int32, SurfaceTensionSurfaceThreshold)
 		// Position-Based Cohesion (NVIDIA Flex style)
-		// Keeps particles connected at rest distance (ParticleSpacing)
-		SHADER_PARAMETER(int32, bEnablePositionBasedCohesion)
-		SHADER_PARAMETER(float, CohesionStrength)
-		SHADER_PARAMETER(float, CohesionRestDistance)               // cm (ParticleSpacing)
-		SHADER_PARAMETER(float, CohesionFalloffDistance)            // cm (h * ratio)
-		// Shared for both Surface Tension and Cohesion
+		// Creates gooey/stringy fluid by maintaining rest distance between particles
+		SHADER_PARAMETER(int32, bUsePositionBasedCohesion)          // 1: Enable Cohesion
+		SHADER_PARAMETER(float, CohesionStrength)                   // Cohesion strength (0~1)
+		SHADER_PARAMETER(float, CohesionActivationDistance)         // cm (h * ratio, typically 0.5h)
+		SHADER_PARAMETER(float, CohesionFalloffDistance)            // cm (h * ratio, typically 0.8h)
+		SHADER_PARAMETER(int32, CohesionSurfaceThreshold)           // Neighbor count for surface detection
+		// Shared for Surface Tension and Cohesion
 		SHADER_PARAMETER(float, MaxCohesionCorrection)              // cm per iteration
 	END_SHADER_PARAMETER_STRUCT()
 

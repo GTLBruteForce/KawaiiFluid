@@ -62,9 +62,10 @@ void FGPUFluidSimulator::AddPredictPositionsPass(
 	                                       PrevNeighborCountsBuffer.IsValid() &&
 	                                       PrevNeighborBufferParticleCount > 0;
 
-	// Position-Based Cohesion flag (skip Force-based if EITHER Position-Based mode is enabled)
-	// Both Surface Tension and Cohesion are Position-Based variants that replace Force-based cohesion
-	PassParameters->bUsePositionBasedCohesion = (Params.bEnablePositionBasedCohesion || Params.bEnablePositionBasedSurfaceTension) ? 1 : 0;
+	// Akinci Force-based vs Position-Based Surface Tension
+	// When bEnablePositionBasedSurfaceTension = 0 (default): Use Akinci 2013 force-based in PredictPositions
+	// When bEnablePositionBasedSurfaceTension = 1: Skip force-based, use Position-Based in SolveDensityPressure
+	PassParameters->bUsePositionBasedCohesion = Params.bEnablePositionBasedSurfaceTension;
 
 	if (bCanUsePrevNeighborCache)
 	{
@@ -228,21 +229,23 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 
 	// Position-Based Surface Tension (NVIDIA Flex style)
 	// Creates rounded droplets by minimizing surface area
-	PassParameters->bEnablePositionBasedSurfaceTension = Params.bEnablePositionBasedSurfaceTension ? 1 : 0;
+	// When 0: Uses Akinci force-based (default), When 1: Uses Position-Based (experimental)
+	PassParameters->bEnablePositionBasedSurfaceTension = Params.bEnablePositionBasedSurfaceTension;
 	PassParameters->SurfaceTensionStrength = Params.SurfaceTensionStrength;
 	PassParameters->SurfaceTensionActivationDistance = Params.SmoothingRadius * Params.SurfaceTensionActivationRatio;
 	PassParameters->SurfaceTensionFalloffDistance = Params.SmoothingRadius * Params.SurfaceTensionFalloffRatio;
 	PassParameters->SurfaceTensionSurfaceThreshold = Params.SurfaceTensionSurfaceThreshold;
 
 	// Position-Based Cohesion (NVIDIA Flex style)
-	// Keeps particles connected at rest distance (ParticleSpacing)
-	PassParameters->bEnablePositionBasedCohesion = Params.bEnablePositionBasedCohesion ? 1 : 0;
-	PassParameters->CohesionStrength = Params.CohesionStrengthPB;
-	PassParameters->CohesionRestDistance = Params.ParticleSpacing;  // Rest distance = ParticleSpacing
+	// Pulls particles together to maintain rest distance
+	PassParameters->bUsePositionBasedCohesion = 1;  // Always enabled
+	PassParameters->CohesionStrength = Params.CohesionStrengthNV;
+	PassParameters->CohesionActivationDistance = Params.SmoothingRadius * Params.CohesionActivationRatio;
 	PassParameters->CohesionFalloffDistance = Params.SmoothingRadius * Params.CohesionFalloffRatio;
+	PassParameters->CohesionSurfaceThreshold = Params.CohesionSurfaceThreshold;
 
-	// Shared for both
-	PassParameters->MaxCohesionCorrection = Params.MaxCohesionCorrectionPerIteration;
+	// Surface Tension / Cohesion max correction
+	PassParameters->MaxCohesionCorrection = Params.MaxSurfaceTensionCorrectionPerIteration;
 
 	// =========================================================================
 	// Boundary Particles for density contribution (Akinci 2012)

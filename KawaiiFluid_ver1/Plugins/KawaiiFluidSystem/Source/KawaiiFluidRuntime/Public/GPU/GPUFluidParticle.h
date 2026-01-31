@@ -166,21 +166,21 @@ struct FGPUFluidSimulationParams
 
 	// Position-Based Surface Tension (NVIDIA Flex style)
 	// Creates rounded droplets by minimizing surface area
-	int32 bEnablePositionBasedSurfaceTension;   // Enable position-based surface tension
+	int32 bEnablePositionBasedSurfaceTension;   // 0: Akinci force-based (default), 1: Position-Based (experimental)
 	float SurfaceTensionStrength;               // 0~1, from Physics|Material SurfaceTension
 	float SurfaceTensionActivationRatio;        // 0~1, distance ratio where ST activates
 	float SurfaceTensionFalloffRatio;           // 0~1, distance ratio where ST starts fading
 	int32 SurfaceTensionSurfaceThreshold;       // Surface particles get stronger ST
 
 	// Position-Based Cohesion (NVIDIA Flex style)
-	// Keeps particles connected at rest distance (ParticleSpacing)
-	int32 bEnablePositionBasedCohesion;         // Enable position-based cohesion
-	float CohesionStrengthPB;                   // 0~1, from Physics|Material Cohesion (PB = Position-Based)
-	float ParticleSpacing;                      // cm, rest distance for cohesion (2 * ParticleRadius)
+	// Pulls particles together to maintain rest distance, creating gooey/stringy fluid
+	float CohesionStrengthNV;                   // 0~1, from Physics|Material Cohesion (renamed to avoid conflict)
+	float CohesionActivationRatio;              // 0~1, distance ratio where cohesion activates
 	float CohesionFalloffRatio;                 // 0~1, distance ratio where cohesion starts fading
+	int32 CohesionSurfaceThreshold;             // Surface particles get stronger cohesion
 
-	// Shared parameters for both Surface Tension and Cohesion
-	float MaxCohesionCorrectionPerIteration;    // cm, max position correction per iteration
+	// Surface Tension / Cohesion max correction
+	float MaxSurfaceTensionCorrectionPerIteration;  // cm, max position correction per iteration
 
 	FGPUFluidSimulationParams()
 		: RestDensity(1000.0f)
@@ -235,19 +235,19 @@ struct FGPUFluidSimulationParams
 		, BoundaryAttachDetachSpeedThreshold(500.0f)
 		, BoundaryAttachCooldown(0.2f)
 		, BoundaryAttachConstraintBlend(0.8f)
-		// Position-Based Surface Tension
-		, bEnablePositionBasedSurfaceTension(0)
+		// Position-Based Surface Tension (NVIDIA Flex style)
+		, bEnablePositionBasedSurfaceTension(0)  // Default: Akinci force-based
 		, SurfaceTensionStrength(0.3f)
 		, SurfaceTensionActivationRatio(0.4f)
 		, SurfaceTensionFalloffRatio(0.7f)
 		, SurfaceTensionSurfaceThreshold(15)
-		// Position-Based Cohesion
-		, bEnablePositionBasedCohesion(0)
-		, CohesionStrengthPB(0.0f)
-		, ParticleSpacing(10.0f)
-		, CohesionFalloffRatio(0.7f)
-		// Shared
-		, MaxCohesionCorrectionPerIteration(5.0f)
+		// Position-Based Cohesion (NVIDIA Flex style)
+		, CohesionStrengthNV(0.0f)
+		, CohesionActivationRatio(0.5f)
+		, CohesionFalloffRatio(0.8f)
+		, CohesionSurfaceThreshold(15)
+		// Surface Tension / Cohesion
+		, MaxSurfaceTensionCorrectionPerIteration(5.0f)
 	{
 	}
 
@@ -280,7 +280,8 @@ struct FGPUFluidSimulationParams
 		// ratio = W(r)/W(Δq) = (h²-r²)³ / (h²-Δq²)³
 		// Poly6Coeff cancels out in the ratio, so we only store 1/(h²-Δq²)³
 		// GPU computes: ratio = (h²-r²)³ * InvW_DeltaQ
-		if (bEnableTensileInstability && TensileDeltaQ > 0.0f)
+		// When Δq=0 (NVIDIA Flex style): W(0) = h⁶, gives pure anti-clustering
+		if (bEnableTensileInstability && TensileDeltaQ >= 0.0f)
 		{
 			const float DeltaQ = TensileDeltaQ * h;  // Δq in meters
 			const float DeltaQ2 = DeltaQ * DeltaQ;
@@ -301,6 +302,7 @@ struct FGPUFluidSimulationParams
 		{
 			InvW_DeltaQ = 0.0f;
 		}
+
 	}
 };
 

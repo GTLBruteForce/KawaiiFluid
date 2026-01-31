@@ -554,7 +554,8 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	GPUParams.TensileDeltaQ = Preset->TensileInstabilityDeltaQ;
 
 	// Position-Based Surface Tension (NVIDIA Flex style)
-	// Uses SurfaceTension from Material for strength, with position-based constraint
+	// When disabled: Uses traditional Akinci force-based surface tension (default)
+	// When enabled: Uses position-based constraint (experimental, smoother droplets)
 	GPUParams.bEnablePositionBasedSurfaceTension = Preset->bEnablePositionBasedSurfaceTension ? 1 : 0;
 	GPUParams.SurfaceTensionStrength = Preset->SurfaceTension;  // From Physics|Material
 	GPUParams.SurfaceTensionActivationRatio = Preset->SurfaceTensionActivationRatio;
@@ -562,14 +563,14 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	GPUParams.SurfaceTensionSurfaceThreshold = Preset->SurfaceTensionSurfaceThreshold;
 
 	// Position-Based Cohesion (NVIDIA Flex style)
-	// Uses Cohesion from Material for strength, with position-based constraint
-	GPUParams.bEnablePositionBasedCohesion = Preset->bEnablePositionBasedCohesion ? 1 : 0;
-	GPUParams.CohesionStrengthPB = Preset->Cohesion;  // From Physics|Material
-	GPUParams.ParticleSpacing = Preset->ParticleSpacing;  // Rest distance for cohesion
+	// Uses Cohesion from Material for strength, pulls particles to rest distance
+	GPUParams.CohesionStrengthNV = Preset->Cohesion;  // From Physics|Material
+	GPUParams.CohesionActivationRatio = Preset->CohesionActivationRatio;
 	GPUParams.CohesionFalloffRatio = Preset->CohesionFalloffRatio;
+	GPUParams.CohesionSurfaceThreshold = Preset->CohesionSurfaceThreshold;
 
-	// Shared for both
-	GPUParams.MaxCohesionCorrectionPerIteration = Preset->MaxCohesionCorrectionPerIteration;
+	// Surface Tension / Cohesion max correction
+	GPUParams.MaxSurfaceTensionCorrectionPerIteration = Preset->MaxSurfaceTensionCorrectionPerIteration;
 
 	// Precompute kernel coefficients (including InvW_DeltaQ for tensile instability)
 	GPUParams.PrecomputeKernelCoefficients();

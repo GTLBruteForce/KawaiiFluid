@@ -322,10 +322,11 @@ public:
 	/**
 	 * Reference distance as fraction of smoothing radius (dq/h)
 	 * scorr uses W(r)/W(dq) ratio
-	 * Typical: 0.2 (20% of h)
+	 * Typical: 0.2 (20% of h), NVIDIA Flex uses 0.0
+	 * When 0.0: W(dq) = W(0) = max kernel value, pure anti-clustering
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Stability",
-		meta = (ClampMin = "0.01", ClampMax = "0.5", EditCondition = "bEnableTensileCorrection"))
+		meta = (ClampMin = "0.0", ClampMax = "0.5", EditCondition = "bEnableTensileCorrection"))
 	float TensileInstabilityDeltaQ = 0.2f;
 
 	/**
@@ -387,14 +388,14 @@ public:
 	float StackPressureRadius = 0.0f;
 
 	//========================================
-	// Physics | Simulation | Surface Tension (Position-Based)
+	// Physics | Simulation | Surface Tension (Position-Based, NVIDIA Flex style)
 	//========================================
 
 	/**
 	 * Enable Position-Based Surface Tension (NVIDIA Flex style)
-	 * When enabled, surface tension is handled as position constraint instead of force.
-	 * This eliminates oscillation/jittering that occurs with force-based at low viscosity.
-	 * Recommended for water-like fluids.
+	 * When enabled: Uses position-based constraint for surface tension (experimental)
+	 * When disabled: Uses traditional Akinci force-based surface tension (default, stable)
+	 * Position-Based creates smoother droplets but may need parameter tuning.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension")
 	bool bEnablePositionBasedSurfaceTension = false;
@@ -406,7 +407,7 @@ public:
 	 * Typical: 0.3 ~ 0.5
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension",
-		meta = (EditCondition = "bEnablePositionBasedSurfaceTension", ClampMin = "0.1", ClampMax = "0.9"))
+		meta = (ClampMin = "0.1", ClampMax = "0.9", EditCondition = "bEnablePositionBasedSurfaceTension"))
 	float SurfaceTensionActivationRatio = 0.4f;
 
 	/**
@@ -416,7 +417,7 @@ public:
 	 * Typical: 0.6 ~ 0.9
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension",
-		meta = (EditCondition = "bEnablePositionBasedSurfaceTension", ClampMin = "0.2", ClampMax = "1.0"))
+		meta = (ClampMin = "0.2", ClampMax = "1.0", EditCondition = "bEnablePositionBasedSurfaceTension"))
 	float SurfaceTensionFalloffRatio = 0.7f;
 
 	/**
@@ -426,42 +427,53 @@ public:
 	 * 0 = uniform strength for all particles
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension",
-		meta = (EditCondition = "bEnablePositionBasedSurfaceTension", ClampMin = "0", ClampMax = "30"))
+		meta = (ClampMin = "0", ClampMax = "30", EditCondition = "bEnablePositionBasedSurfaceTension"))
 	int32 SurfaceTensionSurfaceThreshold = 15;
-
-	//========================================
-	// Physics | Simulation | Cohesion (Position-Based)
-	//========================================
-
-	/**
-	 * Enable Position-Based Cohesion (NVIDIA Flex style)
-	 * Keeps particles connected at rest distance (ParticleSpacing).
-	 * Different from Surface Tension: maintains stream connections, not surface shape.
-	 * Recommended for water streams that shouldn't scatter like sand.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Cohesion")
-	bool bEnablePositionBasedCohesion = false;
-
-	/**
-	 * Cohesion falloff start as ratio of SmoothingRadius
-	 * Beyond ParticleSpacing, cohesion stays full until this distance.
-	 * Then fades to zero at SmoothingRadius.
-	 * Lower = cohesion fades earlier, Higher = cohesion stays strong longer
-	 * Typical: 0.5 ~ 0.8
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Cohesion",
-		meta = (EditCondition = "bEnablePositionBasedCohesion", ClampMin = "0.3", ClampMax = "1.0"))
-	float CohesionFalloffRatio = 0.7f;
 
 	/**
 	 * Maximum correction per iteration (cm)
-	 * Limits position change from cohesion/surface tension per solver iteration.
+	 * Limits position change from surface tension/cohesion per solver iteration.
 	 * Prevents instability from large corrections.
 	 * 0 = no limit (not recommended)
 	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension",
+		meta = (ClampMin = "0.0", ClampMax = "50.0", EditCondition = "bEnablePositionBasedSurfaceTension"))
+	float MaxSurfaceTensionCorrectionPerIteration = 5.0f;
+
+	//========================================
+	// Physics | Simulation | Cohesion (Position-Based, NVIDIA Flex style)
+	//========================================
+
+	/**
+	 * Cohesion activation distance as ratio of SmoothingRadius
+	 * Cohesion pulls particles together when distance exceeds this.
+	 * Works with density constraint (which pushes apart) to maintain rest distance.
+	 * Lower values = particles start attracting closer to rest distance
+	 * Typical: 0.4 ~ 0.6 (similar to SurfaceTensionActivationRatio)
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Cohesion",
-		meta = (ClampMin = "0.0", ClampMax = "50.0"))
-	float MaxCohesionCorrectionPerIteration = 5.0f;
+		meta = (ClampMin = "0.1", ClampMax = "0.9"))
+	float CohesionActivationRatio = 0.5f;
+
+	/**
+	 * Cohesion falloff distance as ratio of SmoothingRadius
+	 * Beyond this, cohesion strength decreases linearly to zero at SmoothingRadius.
+	 * Must be > CohesionActivationRatio
+	 * Typical: 0.7 ~ 0.9
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Cohesion",
+		meta = (ClampMin = "0.2", ClampMax = "1.0"))
+	float CohesionFalloffRatio = 0.8f;
+
+	/**
+	 * Surface particles neighbor threshold for cohesion
+	 * Particles with fewer neighbors (surface particles) get stronger cohesion.
+	 * Creates gooey/stringy fluid behavior where streams stay connected.
+	 * 0 = uniform cohesion strength for all particles
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Cohesion",
+		meta = (ClampMin = "0", ClampMax = "30"))
+	int32 CohesionSurfaceThreshold = 15;
 
 	//========================================
 	// Utility Functions

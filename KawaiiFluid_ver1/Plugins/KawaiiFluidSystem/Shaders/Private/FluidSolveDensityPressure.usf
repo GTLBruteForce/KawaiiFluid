@@ -96,6 +96,7 @@ int SolverIterationCount;        // Total iterations for strength scaling
 
 // Position-Based Surface Tension (NVIDIA Flex style)
 // Creates rounded droplets by minimizing surface area
+// bEnablePositionBasedSurfaceTension: 0 = Akinci force-based (default), 1 = Position-Based (experimental)
 int bEnablePositionBasedSurfaceTension;
 float SurfaceTensionStrength;
 float SurfaceTensionActivationDistance;   // cm (h * ratio)
@@ -103,13 +104,14 @@ float SurfaceTensionFalloffDistance;      // cm (h * ratio)
 int SurfaceTensionSurfaceThreshold;       // Surface particles get stronger ST
 
 // Position-Based Cohesion (NVIDIA Flex style)
-// Keeps particles connected at rest distance (ParticleSpacing)
-int bEnablePositionBasedCohesion;
-float CohesionStrength;
-float CohesionRestDistance;               // cm (ParticleSpacing = 2 * ParticleRadius)
+// Pulls particles together to maintain rest distance, creating gooey/stringy fluid
+int bUsePositionBasedCohesion;            // 1: Enable Cohesion
+float CohesionStrength;                   // 0~1, from Physics|Material Cohesion
+float CohesionActivationDistance;         // cm (h * ratio)
 float CohesionFalloffDistance;            // cm (h * ratio)
+int CohesionSurfaceThreshold;             // Surface particles get stronger cohesion
 
-// Shared for both Surface Tension and Cohesion
+// Surface Tension / Cohesion max correction
 float MaxCohesionCorrection;              // Max correction per iteration (cm)
 
 //=============================================================================
@@ -307,10 +309,6 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3 surfaceTensionCorrection = float3(0.0f, 0.0f, 0.0f);
 	uint surfaceTensionConstraintCount = 0;
 
-	// Position-Based Cohesion accumulator
-	float3 cohesionCorrection = float3(0.0f, 0.0f, 0.0f);
-	uint cohesionConstraintCount = 0;
-
 	// Pre-compute inverse RestDensity to convert divisions to multiplications
 	// Division is expensive on GPU (~20-30 cycles), multiplication is cheap (~4 cycles)
 	float invRestDensity = 1.0f / RestDensity;
@@ -417,11 +415,11 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 									float3 pullDirection = -r_cm / max(dist_cm, SMALL_NUMBER);
 
 									//=============================================================
-									// Position-Based Surface Tension (NVIDIA Flex style)
-									// Creates rounded droplets by minimizing surface area
-									// Target: SurfaceTensionActivationDistance (variable)
+									// Position-Based Surface Tension (NVIDIA Flex style) - Experimental
+									// When bEnablePositionBasedSurfaceTension = 0, uses Akinci force-based (default)
+									// When bEnablePositionBasedSurfaceTension = 1, uses Position-Based constraint
 									//=============================================================
-									if (bEnablePositionBasedSurfaceTension && dist_cm > SurfaceTensionActivationDistance)
+									if (bEnablePositionBasedSurfaceTension && SurfaceTensionStrength > 0.0f && dist_cm > SurfaceTensionActivationDistance)
 									{
 										float stStrength = SurfaceTensionStrength;
 
@@ -440,10 +438,10 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 									//=============================================================
 									// Position-Based Cohesion (NVIDIA Flex style)
-									// Keeps particles connected at rest distance (ParticleSpacing)
-									// Target: CohesionRestDistance (= ParticleSpacing, fixed)
+									// Pulls particles together to maintain rest distance
+									// Creates gooey/stringy fluid behavior
 									//=============================================================
-									if (bEnablePositionBasedCohesion && dist_cm > CohesionRestDistance)
+									if (CohesionStrength > 0.0f && dist_cm > CohesionActivationDistance)
 									{
 										float cohStrength = CohesionStrength;
 
@@ -455,9 +453,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 											cohStrength *= saturate(1.0f - falloffT);
 										}
 
-										float cohCorrectionMag = (dist_cm - CohesionRestDistance) * cohStrength;
-										cohesionCorrection += pullDirection * cohCorrectionMag;
-										cohesionConstraintCount++;
+										float cohCorrectionMag = (dist_cm - CohesionActivationDistance) * cohStrength;
+										surfaceTensionCorrection += pullDirection * cohCorrectionMag;
+										surfaceTensionConstraintCount++;
 									}
 								}
 							}
@@ -550,9 +548,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 									float3 pullDirection = -r_cm / max(dist_cm, SMALL_NUMBER);
 
 									//=============================================================
-									// Position-Based Surface Tension (Legacy Hash Table Mode)
+									// Position-Based Surface Tension (NVIDIA Flex style) - Experimental
 									//=============================================================
-									if (bEnablePositionBasedSurfaceTension && dist_cm > SurfaceTensionActivationDistance)
+									if (bEnablePositionBasedSurfaceTension && SurfaceTensionStrength > 0.0f && dist_cm > SurfaceTensionActivationDistance)
 									{
 										float stStrength = SurfaceTensionStrength;
 										if (dist_cm > SurfaceTensionFalloffDistance)
@@ -567,9 +565,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 									}
 
 									//=============================================================
-									// Position-Based Cohesion (Legacy Hash Table Mode)
+									// Position-Based Cohesion (NVIDIA Flex style)
 									//=============================================================
-									if (bEnablePositionBasedCohesion && dist_cm > CohesionRestDistance)
+									if (CohesionStrength > 0.0f && dist_cm > CohesionActivationDistance)
 									{
 										float cohStrength = CohesionStrength;
 										if (dist_cm > CohesionFalloffDistance)
@@ -578,9 +576,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 											float falloffT = (dist_cm - CohesionFalloffDistance) / max(falloffRange, 0.001f);
 											cohStrength *= saturate(1.0f - falloffT);
 										}
-										float cohCorrectionMag = (dist_cm - CohesionRestDistance) * cohStrength;
-										cohesionCorrection += pullDirection * cohCorrectionMag;
-										cohesionConstraintCount++;
+										float cohCorrectionMag = (dist_cm - CohesionActivationDistance) * cohStrength;
+										surfaceTensionCorrection += pullDirection * cohCorrectionMag;
+										surfaceTensionConstraintCount++;
 									}
 								}
 							}
@@ -663,9 +661,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 					float3 pullDirection = -r_cm / max(dist_cm, SMALL_NUMBER);
 
 					//=============================================================
-					// Position-Based Surface Tension (Cached Neighbor Mode)
+					// Position-Based Surface Tension (NVIDIA Flex style) - Experimental
 					//=============================================================
-					if (bEnablePositionBasedSurfaceTension && dist_cm > SurfaceTensionActivationDistance)
+					if (bEnablePositionBasedSurfaceTension && SurfaceTensionStrength > 0.0f && dist_cm > SurfaceTensionActivationDistance)
 					{
 						float stStrength = SurfaceTensionStrength;
 						if (dist_cm > SurfaceTensionFalloffDistance)
@@ -680,9 +678,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 					}
 
 					//=============================================================
-					// Position-Based Cohesion (Cached Neighbor Mode)
+					// Position-Based Cohesion (NVIDIA Flex style)
 					//=============================================================
-					if (bEnablePositionBasedCohesion && dist_cm > CohesionRestDistance)
+					if (CohesionStrength > 0.0f && dist_cm > CohesionActivationDistance)
 					{
 						float cohStrength = CohesionStrength;
 						if (dist_cm > CohesionFalloffDistance)
@@ -691,9 +689,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							float falloffT = (dist_cm - CohesionFalloffDistance) / max(falloffRange, 0.001f);
 							cohStrength *= saturate(1.0f - falloffT);
 						}
-						float cohCorrectionMag = (dist_cm - CohesionRestDistance) * cohStrength;
-						cohesionCorrection += pullDirection * cohCorrectionMag;
-						cohesionConstraintCount++;
+						float cohCorrectionMag = (dist_cm - CohesionActivationDistance) * cohStrength;
+						surfaceTensionCorrection += pullDirection * cohCorrectionMag;
+						surfaceTensionConstraintCount++;
 					}
 				}
 			}
@@ -926,46 +924,31 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	particle.PredictedPosition += deltaP_cm;
 
 	//=========================================
-	// Apply Position-Based Surface Tension Correction
+	// Apply Position-Based Surface Tension / Cohesion Correction
 	// Surface particles (fewer neighbors) get stronger effect
+	// Both Surface Tension and Cohesion use NVIDIA Flex style position-based approach
 	//=========================================
-	if (bEnablePositionBasedSurfaceTension && surfaceTensionConstraintCount > 0)
+	if (surfaceTensionConstraintCount > 0)
 	{
-		float3 avgSTCorrection = surfaceTensionCorrection / (float)surfaceTensionConstraintCount;
+		float3 avgCorrection = surfaceTensionCorrection / (float)surfaceTensionConstraintCount;
 
-		// Surface particles get stronger surface tension (creates droplet shape)
-		if (SurfaceTensionSurfaceThreshold > 0 && neighborCount < (uint)SurfaceTensionSurfaceThreshold)
+		// Surface particles get stronger effect (creates droplet shape and gooey behavior)
+		// Use the maximum threshold from both Surface Tension and Cohesion
+		int effectiveThreshold = max(SurfaceTensionSurfaceThreshold, CohesionSurfaceThreshold);
+		if (effectiveThreshold > 0 && neighborCount < (uint)effectiveThreshold)
 		{
-			float surfaceBoost = 1.0f + (1.0f - (float)neighborCount / (float)SurfaceTensionSurfaceThreshold);
-			avgSTCorrection *= surfaceBoost;
+			float surfaceBoost = 1.0f + (1.0f - (float)neighborCount / (float)effectiveThreshold);
+			avgCorrection *= surfaceBoost;
 		}
-
-		// Clamp for stability (uses shared MaxCohesionCorrection)
-		float stLen = length(avgSTCorrection);
-		if (stLen > MaxCohesionCorrection && stLen > SMALL_NUMBER)
-		{
-			avgSTCorrection = avgSTCorrection * (MaxCohesionCorrection / stLen);
-		}
-
-		particle.PredictedPosition += avgSTCorrection;
-	}
-
-	//=========================================
-	// Apply Position-Based Cohesion Correction
-	// Uniform effect (no surface boost - cohesion is for all particles equally)
-	//=========================================
-	if (bEnablePositionBasedCohesion && cohesionConstraintCount > 0)
-	{
-		float3 avgCohesionCorrection = cohesionCorrection / (float)cohesionConstraintCount;
 
 		// Clamp for stability
-		float cohLen = length(avgCohesionCorrection);
-		if (cohLen > MaxCohesionCorrection && cohLen > SMALL_NUMBER)
+		float corrLen = length(avgCorrection);
+		if (corrLen > MaxCohesionCorrection && corrLen > SMALL_NUMBER)
 		{
-			avgCohesionCorrection = avgCohesionCorrection * (MaxCohesionCorrection / cohLen);
+			avgCorrection = avgCorrection * (MaxCohesionCorrection / corrLen);
 		}
 
-		particle.PredictedPosition += avgCohesionCorrection;
+		particle.PredictedPosition += avgCorrection;
 	}
 
 	Particles[idx] = particle;
