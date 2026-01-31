@@ -13,6 +13,8 @@
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"  // For TActorIterator (editor volume finding)
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 
 UKawaiiFluidEmitterComponent::UKawaiiFluidEmitterComponent()
 {
@@ -137,16 +139,53 @@ void UKawaiiFluidEmitterComponent::BeginPlay()
 	UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: BeginPlay - TargetVolume=%s"),
 		*GetName(), TargetVolume ? *TargetVolume->GetName() : TEXT("None"));
 
-	// Auto start spawning (only if we have a target volume)
+	// Distance optimization: Check initial activation state
+	if (bUseDistanceOptimization)
+	{
+		APawn* PlayerPawn = GetPlayerPawn();
+		if (PlayerPawn)
+		{
+			const FVector PlayerLocation = PlayerPawn->GetActorLocation();
+			const FVector EmitterLocation = GetComponentLocation();
+			const float DistanceSq = FVector::DistSquared(PlayerLocation, EmitterLocation);
+
+			// Initially inactive if player is outside activation distance
+			bDistanceActivated = (DistanceSq <= ActivationDistance * ActivationDistance);
+
+			UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: Distance Optimization - Initial state: %s (Distance: %.1f cm, Threshold: %.1f cm)"),
+				*GetName(),
+				bDistanceActivated ? TEXT("Active") : TEXT("Inactive"),
+				FMath::Sqrt(DistanceSq),
+				ActivationDistance);
+		}
+		else
+		{
+			// Player pawn not found yet, defer check to tick
+			bDistanceActivated = false;
+			UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: Distance Optimization - Player not found, starting inactive"),
+				*GetName());
+		}
+	}
+
+	// Auto start spawning (only if we have a target volume and distance allows)
 	if (bEnabled && bAutoStartSpawning && TargetVolume)
 	{
-		if (IsFillMode() && !bAutoSpawnExecuted)
+		// Skip if distance optimization is enabled and we're outside range
+		if (bUseDistanceOptimization && !bDistanceActivated)
 		{
-			SpawnFill();
+			UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: Skipping auto spawn - outside activation distance"),
+				*GetName());
 		}
-		else if (IsStreamMode())
+		else
 		{
-			StartStreamSpawn();
+			if (IsFillMode() && !bAutoSpawnExecuted)
+			{
+				SpawnFill();
+			}
+			else if (IsStreamMode())
+			{
+				StartStreamSpawn();
+			}
 		}
 	}
 }
@@ -202,16 +241,25 @@ void UKawaiiFluidEmitterComponent::TickComponent(float DeltaTime, ELevelTick Tic
 				// Register to the newly found volume
 				RegisterToVolume();
 
-				// Start auto spawning now that we have a volume
+				// Start auto spawning now that we have a volume (respecting distance optimization)
 				if (bEnabled && bAutoStartSpawning)
 				{
-					if (IsFillMode() && !bAutoSpawnExecuted)
+					// Skip if distance optimization is enabled and we're outside range
+					if (bUseDistanceOptimization && !bDistanceActivated)
 					{
-						SpawnFill();
+						UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: Skipping deferred auto spawn - outside activation distance"),
+							*GetName());
 					}
-					else if (IsStreamMode())
+					else
 					{
-						StartStreamSpawn();
+						if (IsFillMode() && !bAutoSpawnExecuted)
+						{
+							SpawnFill();
+						}
+						else if (IsStreamMode())
+						{
+							StartStreamSpawn();
+						}
 					}
 				}
 			}
@@ -220,6 +268,18 @@ void UKawaiiFluidEmitterComponent::TickComponent(float DeltaTime, ELevelTick Tic
 				UE_LOG(LogTemp, Warning, TEXT("UKawaiiFluidEmitterComponent [%s]: Deferred volume search failed - no volume found"),
 					*GetName());
 			}
+		}
+	}
+
+	// === Distance Optimization Check ===
+	if (bIsGameWorld && bUseDistanceOptimization)
+	{
+		UpdateDistanceOptimization(DeltaTime);
+
+		// Skip all processing if deactivated by distance
+		if (!bDistanceActivated)
+		{
+			return;
 		}
 	}
 
@@ -236,6 +296,12 @@ void UKawaiiFluidEmitterComponent::TickComponent(float DeltaTime, ELevelTick Tic
 	if (bShowSpawnVolumeWireframe && !bIsGameWorld && bIsSelected && !bIsHiddenInEditor)
 	{
 		DrawSpawnVolumeVisualization();
+	}
+
+	// Distance optimization visualization (editor only, when selected)
+	if (bUseDistanceOptimization && !bIsGameWorld && bIsSelected && !bIsHiddenInEditor)
+	{
+		DrawDistanceVisualization();
 	}
 
 	// Update velocity arrow visualization (editor only, always visible)
@@ -284,6 +350,13 @@ void UKawaiiFluidEmitterComponent::StartStreamSpawn()
 		return;
 	}
 
+	// Distance optimization guard: prevent spawning when culled
+	if (bUseDistanceOptimization && !bDistanceActivated)
+	{
+		UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent::StartStreamSpawn - Ignored (distance culled)"));
+		return;
+	}
+
 	bStreamSpawning = true;
 }
 
@@ -296,6 +369,13 @@ void UKawaiiFluidEmitterComponent::SpawnFill()
 {
 	if (!bEnabled)
 	{
+		return;
+	}
+
+	// Distance optimization guard: prevent spawning when culled
+	if (bUseDistanceOptimization && !bDistanceActivated)
+	{
+		UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent::SpawnFill - Ignored (distance culled)"));
 		return;
 	}
 
@@ -1192,6 +1272,156 @@ AKawaiiFluidVolume* UKawaiiFluidEmitterComponent::FindNearestVolume() const
 	return NearestVolume;
 }
 
+//========================================
+// Distance Optimization (Emitter Distance Culling)
+//========================================
+
+void UKawaiiFluidEmitterComponent::UpdateDistanceOptimization(float DeltaTime)
+{
+	// Throttle: 10Hz
+	DistanceCheckAccumulator += DeltaTime;
+	if (DistanceCheckAccumulator < DistanceCheckInterval)
+	{
+		return;
+	}
+	DistanceCheckAccumulator = 0.0f;
+
+	APawn* PlayerPawn = GetPlayerPawn();
+	if (!PlayerPawn)
+	{
+		return;
+	}
+
+	const FVector PlayerLocation = PlayerPawn->GetActorLocation();
+	const FVector EmitterLocation = GetComponentLocation();
+	const float DistanceSq = FVector::DistSquared(PlayerLocation, EmitterLocation);
+
+	// Hysteresis logic (auto-calculated: 10% of ActivationDistance)
+	const float HysteresisBuffer = GetHysteresisDistance();
+	bool bShouldBeActive;
+	if (bDistanceActivated)
+	{
+		// Deactivate at (ActivationDistance + Hysteresis)
+		const float DeactivationDist = ActivationDistance + HysteresisBuffer;
+		bShouldBeActive = (DistanceSq <= DeactivationDist * DeactivationDist);
+	}
+	else
+	{
+		// Activate at ActivationDistance
+		bShouldBeActive = (DistanceSq <= ActivationDistance * ActivationDistance);
+	}
+
+	if (bShouldBeActive != bDistanceActivated)
+	{
+		OnDistanceActivationChanged(bShouldBeActive);
+	}
+}
+
+void UKawaiiFluidEmitterComponent::OnDistanceActivationChanged(bool bNewState)
+{
+	bDistanceActivated = bNewState;
+
+	if (bNewState)
+	{
+		// === ACTIVATING ===
+		UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: Distance Activation - Activating (player entered range)"),
+			*GetName());
+
+		if (IsStreamMode())
+		{
+			if (bAutoStartSpawning)
+			{
+				StartStreamSpawn();
+			}
+		}
+		else if (IsFillMode())
+		{
+			if (bNeedsRespawnOnReentry && bAutoRespawnOnReentry)
+			{
+				bAutoSpawnExecuted = false;
+				SpawnFill();
+				bNeedsRespawnOnReentry = false;
+			}
+		}
+	}
+	else
+	{
+		// === DEACTIVATING ===
+		UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: Distance Activation - Deactivating (player left range)"),
+			*GetName());
+
+		if (IsStreamMode())
+		{
+			StopStreamSpawn();
+		}
+
+		// Despawn all particles from this emitter
+		DespawnAllParticles();
+
+		if (IsFillMode())
+		{
+			bNeedsRespawnOnReentry = true;
+		}
+	}
+}
+
+void UKawaiiFluidEmitterComponent::DespawnAllParticles()
+{
+	if (CachedSourceID < 0)
+	{
+		return;
+	}
+
+	UKawaiiFluidSimulationModule* Module = GetSimulationModule();
+	if (!Module)
+	{
+		return;
+	}
+
+	const int32 CurrentCount = Module->GetParticleCountForSource(CachedSourceID);
+	if (CurrentCount <= 0)
+	{
+		return;
+	}
+
+	// Remove all particles belonging to this emitter
+	const int32 RemovedCount = Module->RemoveOldestParticlesForSource(CachedSourceID, CurrentCount);
+	SpawnedParticleCount = 0;
+
+	UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: DespawnAllParticles - Removed %d particles (SourceID=%d)"),
+		*GetName(), RemovedCount, CachedSourceID);
+}
+
+APawn* UKawaiiFluidEmitterComponent::GetPlayerPawn()
+{
+	// Return cached pawn if still valid
+	if (CachedPlayerPawn.IsValid())
+	{
+		return CachedPlayerPawn.Get();
+	}
+
+	// Find player pawn
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC)
+	{
+		return nullptr;
+	}
+
+	APawn* Pawn = PC->GetPawn();
+	if (Pawn)
+	{
+		CachedPlayerPawn = Pawn;
+	}
+
+	return Pawn;
+}
+
 #if WITH_EDITOR
 void UKawaiiFluidEmitterComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
@@ -1361,5 +1591,28 @@ void UKawaiiFluidEmitterComponent::UpdateVelocityArrowVisualization()
 	const float ArrowLength = 1.2f;
 	VelocityArrow->SetRelativeScale3D(FVector(ArrowLength, 1.0f, 1.0f));
 #endif
+}
+
+void UKawaiiFluidEmitterComponent::DrawDistanceVisualization()
+{
+	if (!bUseDistanceOptimization)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World || World->IsGameWorld())
+	{
+		return;
+	}
+
+	const FVector Location = GetComponentLocation();
+	const float Duration = -1.0f;  // Redraw each frame
+	const uint8 DepthPriority = 0;
+
+	// Activation distance (Green) - Player enters this range to activate
+	// Note: Hysteresis (10% buffer) is applied internally but not visualized
+	DrawDebugSphere(World, Location, ActivationDistance, 32,
+		FColor::Green, false, Duration, DepthPriority, 1.0f);
 }
 #endif

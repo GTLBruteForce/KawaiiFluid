@@ -10,6 +10,7 @@ class AKawaiiFluidEmitter;
 class AKawaiiFluidVolume;
 class UKawaiiFluidSimulationModule;
 class UBillboardComponent;
+class APawn;
 
 /**
  * Emitter type for KawaiiFluidEmitterComponent
@@ -154,6 +155,29 @@ public:
 	bool bAutoStartSpawning = true;
 
 	//========================================
+	// Optimization
+	//========================================
+
+	/** Enable distance-based optimization.
+	 *  When enabled, this emitter only spawns when the player is within ActivationDistance.
+	 *  Particles are despawned when player moves outside the distance. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Emitter|Optimization")
+	bool bUseDistanceOptimization = false;
+
+	/** Distance from player at which this emitter activates (cm).
+	 *  Only used when bUseDistanceOptimization is true.
+	 *  Hysteresis (10% of this value) is automatically applied to prevent toggling. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Emitter|Optimization",
+		meta = (EditCondition = "bUseDistanceOptimization", EditConditionHides, ClampMin = "100.0"))
+	float ActivationDistance = 2000.0f;
+
+	/** For Fill mode: automatically re-spawn when player re-enters activation distance. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Emitter|Optimization",
+		meta = (EditCondition = "bUseDistanceOptimization && EmitterMode == EKawaiiFluidEmitterMode::Fill",
+		        EditConditionHides))
+	bool bAutoRespawnOnReentry = true;
+
+	//========================================
 	// Target Volume API
 	//========================================
 
@@ -237,6 +261,25 @@ protected:
 	bool bPendingVolumeSearch = false;
 
 	//========================================
+	// Distance Optimization State
+	//========================================
+
+	/** Current activation state based on player distance */
+	bool bDistanceActivated = true;
+
+	/** Cached player pawn reference */
+	TWeakObjectPtr<APawn> CachedPlayerPawn;
+
+	/** Timer for distance check interval */
+	float DistanceCheckAccumulator = 0.0f;
+
+	/** Distance check interval (10 Hz) */
+	static constexpr float DistanceCheckInterval = 0.1f;
+
+	/** Track if Fill mode needs re-spawn on reentry */
+	bool bNeedsRespawnOnReentry = false;
+
+	//========================================
 	// Internal Spawn Methods
 	//========================================
 
@@ -286,6 +329,25 @@ protected:
 
 	/** Update velocity arrow visualization */
 	void UpdateVelocityArrowVisualization();
+
+	//========================================
+	// Distance Optimization Methods
+	//========================================
+
+	/** Update distance optimization state (called at 10Hz) */
+	void UpdateDistanceOptimization(float DeltaTime);
+
+	/** Handle activation state change */
+	void OnDistanceActivationChanged(bool bNewState);
+
+	/** Despawn all particles from this emitter */
+	void DespawnAllParticles();
+
+	/** Get player pawn (cached) */
+	APawn* GetPlayerPawn();
+
+	/** Get hysteresis distance (auto-calculated as 10% of ActivationDistance) */
+	FORCEINLINE float GetHysteresisDistance() const { return ActivationDistance * 0.1f; }
 
 	//========================================
 	// Internal Constants & Configuration
@@ -344,5 +406,8 @@ protected:
 
 	/** Draw spawn volume/emitter wireframe visualization */
 	void DrawSpawnVolumeVisualization();
+
+	/** Draw distance optimization visualization (activation/deactivation spheres) */
+	void DrawDistanceVisualization();
 #endif
 };
