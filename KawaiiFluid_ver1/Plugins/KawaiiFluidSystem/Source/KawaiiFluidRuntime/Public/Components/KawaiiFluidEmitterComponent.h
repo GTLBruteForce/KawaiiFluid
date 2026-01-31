@@ -233,6 +233,9 @@ protected:
 	/** Whether stream is currently spawning (Stream mode) */
 	bool bStreamSpawning = false;
 
+	/** Whether we need to search for volume in next tick (deferred search for BeginPlay order issues) */
+	bool bPendingVolumeSearch = false;
+
 	//========================================
 	// Internal Spawn Methods
 	//========================================

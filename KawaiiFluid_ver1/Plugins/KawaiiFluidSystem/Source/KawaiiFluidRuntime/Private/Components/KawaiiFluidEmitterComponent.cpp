@@ -12,6 +12,7 @@
 #include "Components/BillboardComponent.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"  // For TActorIterator (editor volume finding)
 
 UKawaiiFluidEmitterComponent::UKawaiiFluidEmitterComponent()
 {
@@ -74,6 +75,12 @@ void UKawaiiFluidEmitterComponent::OnRegister()
 			VelocityArrow->RegisterComponent();
 		}
 	}
+
+	// Auto-find nearest volume when placed in editor (if not already set)
+	if (GetWorld() && !GetWorld()->IsGameWorld() && !TargetVolume && bAutoFindVolume)
+	{
+		TargetVolume = FindNearestVolume();
+	}
 #endif
 }
 
@@ -104,6 +111,14 @@ void UKawaiiFluidEmitterComponent::BeginPlay()
 	if (!TargetVolume && bAutoFindVolume)
 	{
 		TargetVolume = FindNearestVolume();
+
+		// If still not found, defer search to next tick (Volume's BeginPlay may not have run yet)
+		if (!TargetVolume)
+		{
+			bPendingVolumeSearch = true;
+			UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: Volume not found, deferring search to next tick"),
+				*GetName());
+		}
 	}
 
 	// Allocate SourceID from Subsystem (0~63 range, compatible with GPU counters)
@@ -122,8 +137,8 @@ void UKawaiiFluidEmitterComponent::BeginPlay()
 	UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: BeginPlay - TargetVolume=%s"),
 		*GetName(), TargetVolume ? *TargetVolume->GetName() : TEXT("None"));
 
-	// Auto start spawning
-	if (bEnabled && bAutoStartSpawning)
+	// Auto start spawning (only if we have a target volume)
+	if (bEnabled && bAutoStartSpawning && TargetVolume)
 	{
 		if (IsFillMode() && !bAutoSpawnExecuted)
 		{
@@ -169,6 +184,44 @@ void UKawaiiFluidEmitterComponent::TickComponent(float DeltaTime, ELevelTick Tic
 	}
 
 	const bool bIsGameWorld = World->IsGameWorld();
+
+	// Deferred volume search (handles BeginPlay order issues where Volume's BeginPlay hasn't run yet)
+	if (bPendingVolumeSearch && bIsGameWorld)
+	{
+		bPendingVolumeSearch = false;
+
+		if (!TargetVolume && bAutoFindVolume)
+		{
+			TargetVolume = FindNearestVolume();
+
+			if (TargetVolume)
+			{
+				UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: Deferred volume search found TargetVolume=%s"),
+					*GetName(), *TargetVolume->GetName());
+
+				// Register to the newly found volume
+				RegisterToVolume();
+
+				// Start auto spawning now that we have a volume
+				if (bEnabled && bAutoStartSpawning)
+				{
+					if (IsFillMode() && !bAutoSpawnExecuted)
+					{
+						SpawnFill();
+					}
+					else if (IsStreamMode())
+					{
+						StartStreamSpawn();
+					}
+				}
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("UKawaiiFluidEmitterComponent [%s]: Deferred volume search failed - no volume found"),
+					*GetName());
+			}
+		}
+	}
 
 	// Request readback if this emitter needs particle count tracking (for MaxParticleCount or Recycle)
 	if (bIsGameWorld && MaxParticleCount > 0)
@@ -1092,16 +1145,36 @@ AKawaiiFluidVolume* UKawaiiFluidEmitterComponent::FindNearestVolume() const
 		return nullptr;
 	}
 
-	// Get subsystem to find registered volumes
+	const FVector EmitterLocation = GetComponentLocation();
+	AKawaiiFluidVolume* NearestVolume = nullptr;
+	float NearestDistSq = FLT_MAX;
+
+	// In editor (non-game world), use TActorIterator to find volumes directly
+	// because volumes are not registered to Subsystem until BeginPlay
+	if (!World->IsGameWorld())
+	{
+		for (TActorIterator<AKawaiiFluidVolume> It(World); It; ++It)
+		{
+			AKawaiiFluidVolume* Volume = *It;
+			if (Volume && !Volume->IsPendingKillPending())
+			{
+				const float DistSq = FVector::DistSquared(EmitterLocation, Volume->GetActorLocation());
+				if (DistSq < NearestDistSq)
+				{
+					NearestDistSq = DistSq;
+					NearestVolume = Volume;
+				}
+			}
+		}
+		return NearestVolume;
+	}
+
+	// In game world, use Subsystem for registered volumes
 	UKawaiiFluidSimulatorSubsystem* Subsystem = World->GetSubsystem<UKawaiiFluidSimulatorSubsystem>();
 	if (!Subsystem)
 	{
 		return nullptr;
 	}
-
-	const FVector EmitterLocation = GetComponentLocation();
-	AKawaiiFluidVolume* NearestVolume = nullptr;
-	float NearestDistSq = FLT_MAX;
 
 	for (const TObjectPtr<AKawaiiFluidVolume>& Volume : Subsystem->GetAllVolumes())
 	{

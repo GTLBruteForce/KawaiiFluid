@@ -308,19 +308,20 @@ public:
 	//========================================
 
 	/**
-	 * Enable Hybrid Tiled Z-Order mode for UNLIMITED simulation range
+	 * Enable Hybrid Tiled Z-Order mode for UNLIMITED simulation range (default: enabled)
+	 *
 	 * When enabled:
 	 *   - Particles can exist anywhere in the world (no bounds clipping)
 	 *   - Characters with attached fluid can move freely across the entire map
-	 *   - Uses 32-bit sort keys (TileHash 14 bits + LocalMorton 18 bits)
-	 *   - Radix sort uses 4 passes instead of 3 (~10% performance overhead)
-	 *   - Cache efficiency ~95% (vs 100% for classic bounded mode)
-	 * When disabled (default):
-	 *   - Uses classic bounded Morton code (21-bit keys)
-	 *   - Particles outside bounds are clamped (may cause incorrect neighbor search)
-	 *   - Default simulation range: ±1280cm from volume center
+	 *   - Uses 21-bit sort keys (TileHash 3 bits + LocalMorton 18 bits)
+	 *   - Always uses Medium preset internally (2^21 = 2M cells)
+	 *   - 8 tile hash buckets; collisions are filtered by distance check (r² < h²)
+	 *   - Same radix sort passes as classic mode (no performance overhead)
 	 *
-	 * Recommended: Enable for games with character-attached fluids or large maps
+	 * When disabled:
+	 *   - Uses classic bounded Morton code (preset-dependent bit width)
+	 *   - Particles outside bounds are clamped (may cause incorrect neighbor search)
+	 *   - Simulation range limited by volume size and grid preset
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Volume|Z-Order Space",
 		meta = (DisplayName = "Enable Unlimited Simulation Range"))
