@@ -370,13 +370,15 @@ void UKawaiiFluidSimulationModule::Initialize(UKawaiiFluidPresetDataAsset* InPre
 	}
 	InitializeSpatialHash(SpatialHashCellSize);
 
-	// Create owned volume component for internal bounds
+	// Create owned volume component for internal bounds (data-only, no rendering)
 	if (!OwnedVolumeComponent)
 	{
 		OwnedVolumeComponent = NewObject<UKawaiiFluidVolumeComponent>(this, NAME_None, RF_Transient);
 		OwnedVolumeComponent->CellSize = CellSize;
 		OwnedVolumeComponent->bShowBoundsInEditor = false;  // Module controls its own visualization
 		OwnedVolumeComponent->bShowBoundsAtRuntime = false;
+		OwnedVolumeComponent->SetVisibility(false);  // Never render this internal component
+		OwnedVolumeComponent->SetHiddenInGame(true);
 	}
 
 	// Update volume bounds

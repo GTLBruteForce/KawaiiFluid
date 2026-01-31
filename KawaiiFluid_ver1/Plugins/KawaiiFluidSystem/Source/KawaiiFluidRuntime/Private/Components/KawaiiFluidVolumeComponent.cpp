@@ -91,25 +91,10 @@ void UKawaiiFluidVolumeComponent::TickComponent(float DeltaTime, ELevelTick Tick
 	// Update bounds if component moved
 	RecalculateBounds();
 
-	// Update UBoxComponent visibility based on settings
-	// In Unlimited Size mode, always hide the wireframe box
-	UWorld* World = GetWorld();
-	if (World)
+	// Update wireframe color based on selection
+	if (AActor* Owner = GetOwner())
 	{
-		const bool bIsEditor = !World->IsGameWorld();
-		const bool bShouldBeVisible = !bUseUnlimitedSize && ((bIsEditor && bShowBoundsInEditor) || (!bIsEditor && bShowBoundsAtRuntime));
-
-		SetHiddenInGame(!bShowBoundsAtRuntime || bUseUnlimitedSize);
-		SetVisibility(bShouldBeVisible);
-
-		// Update wireframe color based on selection (only if visible)
-		if (!bUseUnlimitedSize)
-		{
-			if (AActor* Owner = GetOwner())
-			{
-				ShapeColor = Owner->IsSelected() ? FColor::Yellow : BoundsColor;
-			}
-		}
+		ShapeColor = Owner->IsSelected() ? FColor::Yellow : BoundsColor;
 	}
 
 	// Draw additional debug visualization (Z-Order space, info text)
