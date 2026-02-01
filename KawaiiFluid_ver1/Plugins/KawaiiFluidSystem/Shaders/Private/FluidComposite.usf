@@ -129,8 +129,8 @@ float2 ProjectToScreenUV(float3 ViewPos)
  * Henyey-Greenstein Phase Function.
  * Models the angular distribution of scattered light.
  *
- * @param CosTheta - Cosine of angle between view and light directions (dot(V, -L))
- * @param g - Anisotropy parameter: -1 = backscatter, 0 = isotropic, +1 = forward scatter
+ * @param CosTheta Cosine of angle between view and light directions (dot(V, -L))
+ * @param g Anisotropy parameter: -1 = backscatter, 0 = isotropic, +1 = forward scatter
  * @return Phase function value (probability density)
  */
 float HenyeyGreenstein(float CosTheta, float g)
@@ -149,8 +149,8 @@ float HenyeyGreenstein(float CosTheta, float g)
  * Schlick Phase Function (faster approximation of Henyey-Greenstein).
  * Use when performance is critical.
  *
- * @param CosTheta - Cosine of angle between view and light directions
- * @param g - Anisotropy parameter
+ * @param CosTheta Cosine of angle between view and light directions
+ * @param g Anisotropy parameter
  * @return Phase function value
  */
 float SchlickPhase(float CosTheta, float g)
@@ -168,8 +168,8 @@ float SchlickPhase(float CosTheta, float g)
  * GGX/Trowbridge-Reitz Normal Distribution Function.
  * Models the statistical distribution of microfacet normals.
  *
- * @param NoH - Dot product of Normal and Half vector
- * @param Roughness - Surface roughness (0 = mirror, 1 = diffuse)
+ * @param NoH Dot product of Normal and Half vector
+ * @param Roughness Surface roughness (0 = mirror, 1 = diffuse)
  * @return Distribution term D
  */
 float D_GGX(float NoH, float Roughness)
@@ -186,8 +186,8 @@ float D_GGX(float NoH, float Roughness)
  * Schlick-GGX Geometry Function (single direction).
  * Models microfacet self-shadowing.
  *
- * @param NoX - Dot product (NoV or NoL)
- * @param Roughness - Surface roughness
+ * @param NoX Dot product (NoV or NoL)
+ * @param Roughness Surface roughness
  * @return Geometry term for one direction
  */
 float G_SchlickGGX(float NoX, float Roughness)
@@ -202,9 +202,9 @@ float G_SchlickGGX(float NoX, float Roughness)
  * Smith Geometry Function (combined view and light).
  * Combines shadowing from both view and light directions.
  *
- * @param NoV - Dot product of Normal and View direction
- * @param NoL - Dot product of Normal and Light direction
- * @param Roughness - Surface roughness
+ * @param NoV Dot product of Normal and View direction
+ * @param NoL Dot product of Normal and Light direction
+ * @param Roughness Surface roughness
  * @return Combined geometry term G
  */
 float G_Smith(float NoV, float NoL, float Roughness)
@@ -219,8 +219,8 @@ float G_Smith(float NoV, float NoL, float Roughness)
  * This is physically correct for microfacet theory where each microfacet
  * reflects light along the half vector direction.
  *
- * @param CosTheta - Typically dot(HalfVector, ViewDir) for direct lighting
- * @param F0 - Reflectance at normal incidence
+ * @param CosTheta Typically dot(HalfVector, ViewDir) for direct lighting
+ * @param F0 Reflectance at normal incidence
  * @return Fresnel reflectance
  */
 float3 F_Schlick(float CosTheta, float3 F0)
@@ -232,13 +232,13 @@ float3 F_Schlick(float CosTheta, float3 F0)
  * Cook-Torrance Specular BRDF.
  * Combines D, G, F terms for physically-based specular reflection.
  *
- * @param NoV - Normal dot View
- * @param NoL - Normal dot Light
- * @param NoH - Normal dot Half
- * @param HoV - Half dot View (for Fresnel)
- * @param Roughness - Surface roughness
- * @param F0 - Reflectance at normal incidence
- * @param OutFresnel - Output Fresnel term (for energy conservation)
+ * @param NoV Normal dot View
+ * @param NoL Normal dot Light
+ * @param NoH Normal dot Half
+ * @param HoV Half dot View (for Fresnel)
+ * @param Roughness Surface roughness
+ * @param F0 Reflectance at normal incidence
+ * @param OutFresnel Output Fresnel term (for energy conservation)
  * @return Specular BRDF value
  */
 float3 CookTorranceBRDF(float NoV, float NoL, float NoH, float HoV, float Roughness, float3 F0, out float3 OutFresnel)
@@ -591,6 +591,629 @@ float TraceSSR(float3 RayOrigin, float3 RayDir, out float2 OutHitUV, out float3 
 }
 
 // -----------------------------------------------------------------------------
+// Fluid Surface Data Structure
+// -----------------------------------------------------------------------------
+
+/** Sampled fluid surface properties at a screen pixel. */
+struct FFluidSurfaceData
+{
+	float  Depth;           // Linear depth from camera
+	float3 Normal;          // World-space normal (normalized)
+	float  Thickness;       // Accumulated fluid thickness
+	float  OcclusionMask;   // 1.0 = visible, 0.0 = occluded
+	float3 ViewPos;         // View-space position
+	float3 ViewDir;         // Direction toward camera (normalized)
+	float3 LightingNormal;  // Grazing-angle compensated normal for stable shading
+	float3 ReflectionNormal;// Normal used for reflection calculations
+};
+
+/** Accumulated lighting result from PBR calculations. */
+struct FLightingResult
+{
+	float3 Specular;        // Cook-Torrance specular contribution
+	float3 Diffuse;         // Lambertian diffuse contribution
+	float3 Ambient;         // Environment/ambient light
+	float  Fresnel;         // Fresnel term for reflection blending
+};
+
+/** Parameters for reflection calculation. */
+struct FReflectionResult
+{
+	float3 Color;           // Final reflection color
+	float  BlendFactor;     // How much to blend reflection with base color
+	float  SSRHitRatio;     // SSR hit ratio for Mode 3 blending
+	float3 CubemapColor;    // Cubemap color (for Mode 3)
+	float3 SSRColor;        // SSR color (for Mode 3)
+};
+
+// -----------------------------------------------------------------------------
+// Fluid Surface Sampling
+// -----------------------------------------------------------------------------
+
+/**
+ * Sample fluid surface properties from intermediate textures.
+ * @param UV Screen UV coordinate
+ * @param SceneUV Scene texture UV coordinate (with SceneUVScale applied)
+ * @param OutSurface Output surface data
+ * @return true if valid fluid pixel, false if background or occluded
+ */
+bool SampleFluidSurface(float2 UV, float2 SceneUV, out FFluidSurfaceData OutSurface)
+{
+	// Initialize output
+	OutSurface = (FFluidSurfaceData)0;
+
+	// Sample fluid depth (point sampling to avoid edge artifacts)
+	OutSurface.Depth = FluidDepthTexture.Sample(PointClampSampler, UV);
+
+	// Discard background pixels (no fluid)
+	if (OutSurface.Depth > BACKGROUND_DEPTH_THRESH)
+	{
+		return false;
+	}
+
+	// Check occlusion mask (precomputed in FluidDepth pass)
+	OutSurface.OcclusionMask = OcclusionMaskTexture.SampleLevel(PointClampSampler, UV, 0).r;
+	if (OutSurface.OcclusionMask < 0.5)
+	{
+		return false;
+	}
+
+	// Sample normal and thickness
+	OutSurface.Normal = FluidNormalTexture.Sample(PointClampSampler, UV).xyz;
+	OutSurface.Thickness = FluidThicknessTexture.Sample(PointClampSampler, UV).r;
+
+	// Validate and normalize normal
+	bool bInvalidNormal = any(isnan(OutSurface.Normal)) || any(isinf(OutSurface.Normal)) || length(OutSurface.Normal) < 0.1f;
+	if (bInvalidNormal)
+	{
+		OutSurface.Normal = float3(0, 0, 1);
+	}
+	else
+	{
+		OutSurface.Normal = normalize(OutSurface.Normal);
+	}
+
+	// Reconstruct view-space position and direction
+	OutSurface.ViewPos = ReconstructViewPosition(UV, OutSurface.Depth);
+	OutSurface.ViewDir = normalize(-OutSurface.ViewPos);
+
+	// Ensure normal faces camera
+	if (dot(OutSurface.Normal, OutSurface.ViewDir) < 0.0)
+	{
+		OutSurface.Normal = -OutSurface.Normal;
+	}
+
+	// Grazing angle compensation for stable shading
+	float RawNoV = saturate(dot(OutSurface.Normal, OutSurface.ViewDir));
+	float GrazingFade = smoothstep(0.0, 0.15, RawNoV);
+	OutSurface.LightingNormal = normalize(lerp(OutSurface.ViewDir, OutSurface.Normal, GrazingFade));
+	OutSurface.ReflectionNormal = OutSurface.Normal;
+
+	return true;
+}
+
+// -----------------------------------------------------------------------------
+// PBR Lighting Calculation
+// -----------------------------------------------------------------------------
+
+/**
+ * Calculate PBR lighting using Cook-Torrance BRDF with multi-light support.
+ * @param Surface Fluid surface data
+ * @param OutLighting Output lighting result
+ */
+void CalculatePBRLighting(FFluidSurfaceData Surface, out FLightingResult OutLighting)
+{
+	OutLighting = (FLightingResult)0;
+
+	// Calculate F0 from IOR
+	float NoV = saturate(dot(Surface.LightingNormal, Surface.ViewDir));
+	float IOR_Ratio = (1.0 - RefractiveIndex) / (1.0 + RefractiveIndex);
+	float FinalF0 = IOR_Ratio * IOR_Ratio * FresnelStrength;
+	float3 F0 = float3(FinalF0, FinalF0, FinalF0);
+
+	// Clamp roughness to prevent divide by zero
+	float Roughness = max(SpecularRoughness, 0.04);
+
+	// Determine effective light count
+	int EffectiveLightCount = (NumLights > 0) ? NumLights : 1;
+
+	// Accumulate lighting from all lights
+	for (int LightIndex = 0; LightIndex < EffectiveLightCount; LightIndex++)
+	{
+		float3 LightDir;
+		float3 LightColor;
+
+		if (NumLights > 0)
+		{
+			float4 DirAndIntensity = LightDirectionsAndIntensity[LightIndex];
+			float4 ColorPacked = LightColors[LightIndex];
+			LightDir = normalize(-DirAndIntensity.xyz);
+			LightColor = ColorPacked.rgb * DirAndIntensity.w;
+		}
+		else
+		{
+			LightDir = normalize(-View.DirectionalLightDirection);
+			LightColor = View.DirectionalLightColor.rgb;
+		}
+
+		// Calculate dot products
+		float NoL = saturate(dot(Surface.LightingNormal, LightDir));
+		float3 HalfDir = normalize(LightDir + Surface.ViewDir);
+		float NoH = saturate(dot(Surface.LightingNormal, HalfDir));
+		float HoV = saturate(dot(HalfDir, Surface.ViewDir));
+
+		// Cook-Torrance BRDF
+		float3 SpecularFresnel;
+		float3 SpecularBRDF = CookTorranceBRDF(NoV, NoL, NoH, HoV, Roughness, F0, SpecularFresnel);
+		OutLighting.Specular += SpecularBRDF * LightColor * NoL * SpecularStrength;
+
+		// Energy-conserving diffuse
+		float3 kD = 1.0 - SpecularFresnel;
+		OutLighting.Diffuse += kD * NoL * LightColor;
+	}
+
+	// Apply lighting scale
+	OutLighting.Specular *= LightingScale;
+
+	// Calculate ambient
+	float3 EnvironmentColor = View.SkyLightColor.rgb;
+	if (dot(EnvironmentColor, float3(1, 1, 1)) < 0.001)
+	{
+		EnvironmentColor = View.DirectionalLightColor.rgb;
+	}
+	if (dot(EnvironmentColor, float3(1, 1, 1)) < 0.001)
+	{
+		EnvironmentColor = float3(1.0, 1.0, 1.0);
+	}
+	OutLighting.Ambient = EnvironmentColor * AmbientIntensity;
+
+	// Calculate Fresnel for environment reflection (using NoV approximation)
+	OutLighting.Fresnel = F0.r + (1.0 - F0.r) * pow(1.0 - NoV, 5.0);
+}
+
+// -----------------------------------------------------------------------------
+// Volume Scattering
+// -----------------------------------------------------------------------------
+
+/**
+ * Calculate volume scattering contribution using Henyey-Greenstein phase function.
+ * @param Surface Fluid surface data
+ * @return Scattering color contribution
+ */
+float3 CalculateVolumeScattering(FFluidSurfaceData Surface)
+{
+	// Derive scattering parameters from existing properties
+	float ScatterAnisotropy = lerp(0.8, 0.2, Opacity);
+	float3 ScatterColor = FluidColor.rgb;
+	float ScatterStrength = ThicknessSensitivity;
+
+	if (ScatterStrength < 0.001)
+	{
+		return float3(0, 0, 0);
+	}
+
+	float3 Contribution = float3(0, 0, 0);
+	int ScatterLightCount = (NumLights > 0) ? NumLights : 1;
+
+	for (int i = 0; i < ScatterLightCount; i++)
+	{
+		float3 LightDir;
+		float3 LightColor;
+
+		if (NumLights > 0)
+		{
+			float4 DirAndIntensity = LightDirectionsAndIntensity[i];
+			float4 ColorPacked = LightColors[i];
+			LightDir = normalize(-DirAndIntensity.xyz);
+			LightColor = ColorPacked.rgb * DirAndIntensity.w;
+		}
+		else
+		{
+			LightDir = normalize(-View.DirectionalLightDirection);
+			LightColor = View.DirectionalLightColor.rgb;
+		}
+
+		float VoL = dot(Surface.ViewDir, -LightDir);
+		float Phase = HenyeyGreenstein(VoL, ScatterAnisotropy);
+		float Extinction = 1.0 - exp(-Surface.Thickness * ScatterStrength * 0.1);
+
+		Contribution += ScatterColor * LightColor * Phase * Extinction;
+	}
+
+	return Contribution * LightingScale;
+}
+
+// -----------------------------------------------------------------------------
+// Refraction
+// -----------------------------------------------------------------------------
+
+/**
+ * Calculate refracted background color with view-space depth rejection.
+ * @param UV Screen UV coordinate
+ * @param Surface Fluid surface data
+ * @param SceneLinearDepth Scene depth at original UV
+ * @param OutRefractedColor Output refracted background color
+ * @param OutRefractedDepth Output depth at refracted position (for caustics)
+ * @param OutRefractionValidity Output validity factor (1.0 if refraction used, 0.0 if fallback)
+ */
+void CalculateRefraction(
+	float2 UV,
+	FFluidSurfaceData Surface,
+	float SceneLinearDepth,
+	out float3 OutRefractedColor,
+	out float  OutRefractedDepth,
+	out float  OutRefractionValidity)
+{
+	float2 SceneUV = UV * SceneUVScale;
+
+	if (!bEnableRefraction)
+	{
+		OutRefractedColor = SceneColorTexture.Sample(InputSampler, SceneUV).rgb;
+		OutRefractedDepth = SceneLinearDepth;
+		OutRefractionValidity = 0.0;
+		return;
+	}
+
+	// Calculate refraction mask (reduce at thin/edge areas)
+	float ThicknessMask = saturate(Surface.Thickness * 0.1);
+	float EdgeMask = saturate(abs(Surface.Normal.z) * 2.0);
+	float RefractionMask = ThicknessMask * EdgeMask;
+
+	// Calculate refraction offset
+	float2 RefractOffset = Surface.Normal.xy * RefractiveIndex * RefractionScale * RefractionMask;
+	float2 RefractedUV = saturate(UV + RefractOffset);
+	float2 RefractedSceneUV = RefractedUV * SceneUVScale;
+
+	// Sample depth at refracted position
+	OutRefractedDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(InputSampler, RefractedSceneUV, 0).r);
+
+	// View-space depth comparison for proper rejection
+	float3 FluidViewPos = ReconstructViewPosition(UV, Surface.Depth);
+	float3 RefractedSceneViewPos = ReconstructViewPosition(RefractedUV, OutRefractedDepth);
+
+	// More negative Z = farther from camera
+	bool bRefractedSceneIsBehindFluid = (RefractedSceneViewPos.z < FluidViewPos.z);
+
+	// Screen edge check
+	float2 EdgeDist = min(RefractedUV, 1.0 - RefractedUV);
+	bool bInsideScreen = (min(EdgeDist.x, EdgeDist.y) > 0.01);
+
+	// Binary decision: use refracted UV only if valid
+	bool bUseRefraction = bRefractedSceneIsBehindFluid && bInsideScreen;
+	float2 FinalUV = bUseRefraction ? RefractedUV : UV;
+	float2 FinalSceneUV = FinalUV * SceneUVScale;
+
+	OutRefractedColor = SceneColorTexture.Sample(InputSampler, FinalSceneUV).rgb;
+	OutRefractionValidity = bUseRefraction ? 1.0 : 0.0;
+}
+
+// -----------------------------------------------------------------------------
+// Caustics
+// -----------------------------------------------------------------------------
+
+/**
+ * Calculate caustic brightness multiplier.
+ * @param UV Screen UV coordinate
+ * @param Surface Fluid surface data
+ * @param RefractedDepth Depth at refracted position
+ * @param RefractionValidity Whether refraction was used
+ * @return Caustic brightness multiplier (1.0 = no effect)
+ */
+float CalculateCaustics(float2 UV, FFluidSurfaceData Surface, float RefractedDepth, float RefractionValidity)
+{
+	if (!bEnableCaustics)
+	{
+		return 1.0;
+	}
+
+	float Pattern = CausticPattern(UV, Surface.Normal, Surface.Depth, RefractedDepth, ViewMatrix, RefractiveIndex);
+	float Brightness = 1.0 + Pattern * CausticIntensity;
+
+	// Fade based on fluid properties
+	float DepthFade = saturate(1.0 - Surface.Depth * 0.0003);
+	float ThicknessFade = exp(-Surface.Thickness * 0.015);
+	float TransparencyFade = saturate(1.0 - Opacity * 0.7);
+	float CausticFade = DepthFade * ThicknessFade * TransparencyFade * RefractionValidity;
+
+	return lerp(1.0, Brightness, CausticFade);
+}
+
+// -----------------------------------------------------------------------------
+// Beer's Law Transmittance
+// -----------------------------------------------------------------------------
+
+/**
+ * Calculate Beer's Law transmittance and blend with fluid color.
+ * @param RefractedBackground Refracted/caustic-modified background color
+ * @param Thickness Fluid thickness at this pixel
+ * @param TotalLighting Total lighting (diffuse + ambient)
+ * @return Blended base color
+ */
+float3 CalculateTransmittance(float3 RefractedBackground, float Thickness, float3 TotalLighting)
+{
+	// Calculate per-channel absorption
+	float AbsorptionCoefficient = 1.0 + Opacity * 4.0;
+	float3 AbsorptionRGB = AbsorptionColorCoefficients.rgb * AbsorptionCoefficient;
+	float3 Transmittance = exp(-AbsorptionRGB * Thickness * 0.1f);
+
+	// Apply transmittance to background
+	float3 TransmittedBackground = RefractedBackground * Transmittance;
+
+	// Blend with fluid color based on absorption
+	float OverallAbsorption = 1.0 - dot(Transmittance, float3(0.333, 0.333, 0.333));
+	float3 LitFluidColor = FluidColor.rgb * TotalLighting;
+
+	return lerp(TransmittedBackground, LitFluidColor, saturate(OverallAbsorption));
+}
+
+// -----------------------------------------------------------------------------
+// Reflection (Mode-based)
+// -----------------------------------------------------------------------------
+
+/**
+ * Calculate cubemap reflection color.
+ * @param ViewSpaceReflect Reflection vector in view space
+ * @return Cubemap reflection color
+ */
+float3 SampleCubemapReflection(float3 ViewSpaceReflect)
+{
+	if (bUseReflectionCubemap > 0)
+	{
+		float3x3 ViewToWorld = transpose((float3x3)ViewMatrix);
+		float3 WorldReflect = mul(ViewSpaceReflect, ViewToWorld);
+		float MipLevel = ReflectionMipLevel + SpecularRoughness * 6.0;
+		return ReflectionCubemap.SampleLevel(ReflectionCubemapSampler, WorldReflect, MipLevel).rgb * ReflectionIntensity;
+	}
+
+	// Fallback to environment light
+	float3 FallbackColor = View.SkyLightColor.rgb;
+	if (dot(FallbackColor, float3(1, 1, 1)) < 0.001)
+	{
+		FallbackColor = View.DirectionalLightColor.rgb;
+	}
+	if (dot(FallbackColor, float3(1, 1, 1)) < 0.001)
+	{
+		FallbackColor = float3(1.0, 1.0, 1.0);
+	}
+	return FallbackColor * 0.3;
+}
+
+/**
+ * Handle SSR debug visualization modes.
+ * @return true if debug mode handled (should return early), false otherwise
+ */
+bool HandleSSRDebugVisualization(
+	int DebugMode,
+	float SSRHitStrength,
+	float2 SSRHitUV,
+	float3 SSRHitColor,
+	float3 ViewSpaceReflect,
+	float3 Normal,
+	float3 ViewDir,
+	float3 ViewPos,
+	float Fresnel,
+	out float4 OutColor)
+{
+	OutColor = float4(0, 0, 0, 1);
+
+	if (DebugMode == 1)
+	{
+		OutColor = (SSRHitStrength > 0.0) ? float4(SSRHitStrength, 0, 0, 1) : float4(0, 0, 1, 1);
+		return true;
+	}
+	else if (DebugMode == 2)
+	{
+		OutColor = float4(ViewSpaceReflect * 0.5 + 0.5, 1.0);
+		return true;
+	}
+	else if (DebugMode == 3)
+	{
+		OutColor = (SSRHitStrength > 0.0) ? float4(SSRHitColor, 1.0) : float4(1, 0, 1, 1);
+		return true;
+	}
+	else if (DebugMode == 4)
+	{
+		float ReflectZ = ViewSpaceReflect.z;
+		OutColor = (ReflectZ < 0.0) ? float4(0, saturate(-ReflectZ), 0, 1) : float4(saturate(ReflectZ), 0, 0, 1);
+		return true;
+	}
+	else if (DebugMode == 5)
+	{
+		if (SSRHitStrength > 0.0)
+		{
+			OutColor = float4(1, 1, 0, 1);
+		}
+		else
+		{
+			float g = saturate(g_SSRDebugDepthPenetration / 50.0);
+			float b = (g_SSRDebugDepthPenetration < 0.0) ? saturate(-g_SSRDebugDepthPenetration / 50.0) : 0.0;
+			OutColor = float4(0, g, b, 1);
+		}
+		return true;
+	}
+	else if (DebugMode == 6)
+	{
+		if (SSRHitStrength > 0.0)
+		{
+			OutColor = float4(1, 1, 0, 1);
+		}
+		else if (g_SSRDebugExitReason == 1)
+		{
+			OutColor = float4(1, 0, 0, 1);
+		}
+		else if (g_SSRDebugExitReason == 2)
+		{
+			OutColor = float4(0, 1, 0, 1);
+		}
+		else
+		{
+			OutColor = float4(0, 0, 1, 1);
+		}
+		return true;
+	}
+	else if (DebugMode == 7)
+	{
+		OutColor = float4(Normal * 0.5 + 0.5, 1.0);
+		return true;
+	}
+	else if (DebugMode == 8)
+	{
+		OutColor = float4(ViewDir * 0.5 + 0.5, 1.0);
+		return true;
+	}
+	else if (DebugMode == 9)
+	{
+		OutColor = (ViewPos.z < 0.0) ? float4(0, 0, saturate(-ViewPos.z / 1000.0), 1) : float4(saturate(ViewPos.z / 1000.0), 0, 0, 1);
+		return true;
+	}
+	else if (DebugMode == 10)
+	{
+		OutColor = float4(Fresnel, Fresnel, Fresnel, 1.0);
+		return true;
+	}
+	else if (DebugMode == 11)
+	{
+		OutColor = float4(FresnelStrength / 10.0, FresnelReflectionBlend, Fresnel, 1.0);
+		return true;
+	}
+	else if (DebugMode == 12)
+	{
+		float BlendFactor = Fresnel * FresnelReflectionBlend;
+		OutColor = float4(BlendFactor, BlendFactor, BlendFactor, 1.0);
+		return true;
+	}
+	else if (DebugMode == 13)
+	{
+		if (SSRHitStrength > 0.0)
+		{
+			OutColor = float4(1, 1, 0, 1);
+		}
+		else
+		{
+			bool bIsSky = g_SSRDebugLastSceneDepth > 50000.0;
+			float Penetration = g_SSRDebugDepthPenetration;
+			float MaxPenetration = ScreenSpaceReflectionThickness * g_SSRDebugLastSceneDepth * 0.1;
+
+			if (bIsSky)
+			{
+				OutColor = float4(0, 0.5, 0, 1);
+			}
+			else if (Penetration <= 0.0)
+			{
+				OutColor = float4(0, 0, 1, 1);
+			}
+			else if (Penetration > MaxPenetration)
+			{
+				OutColor = float4(1, 0, 0, 1);
+			}
+			else
+			{
+				OutColor = float4(1, 0, 1, 1);
+			}
+		}
+		return true;
+	}
+	else if (DebugMode == 14)
+	{
+		OutColor = (SSRHitStrength > 0.0) ? float4(SSRHitUV.x, SSRHitUV.y, SSRHitStrength, 1.0) : float4(0, 0, 0.2, 1);
+		return true;
+	}
+
+	return false;
+}
+
+/**
+ * Calculate reflection based on ReflectionMode.
+ * @param Surface Fluid surface data
+ * @param Fresnel Fresnel term
+ * @param OutResult Output reflection result
+ * @param OutDebugColor Output debug color (if debug mode active)
+ * @return true if debug visualization handled (should return early)
+ */
+bool CalculateReflection(FFluidSurfaceData Surface, float Fresnel, out FReflectionResult OutResult, out float4 OutDebugColor)
+{
+	OutResult = (FReflectionResult)0;
+	OutDebugColor = float4(0, 0, 0, 1);
+
+	float3 ViewSpaceReflect = reflect(-Surface.ViewDir, Surface.ReflectionNormal);
+
+	// Mode 0: No Reflection
+	if (ReflectionMode == 0)
+	{
+		OutResult.BlendFactor = 0.0;
+		return false;
+	}
+
+	// Mode 1: Cubemap Only
+	if (ReflectionMode == 1)
+	{
+		OutResult.Color = SampleCubemapReflection(ViewSpaceReflect);
+		OutResult.BlendFactor = Fresnel * FresnelReflectionBlend;
+		return false;
+	}
+
+	// Mode 2: SSR Only
+	if (ReflectionMode == 2)
+	{
+		float2 SSRHitUV;
+		float3 SSRHitColor;
+		float SSRHitStrength = TraceSSR(Surface.ViewPos, ViewSpaceReflect, SSRHitUV, SSRHitColor);
+
+		// Handle debug visualization
+		if (ScreenSpaceReflectionDebugMode > 0)
+		{
+			if (HandleSSRDebugVisualization(
+				ScreenSpaceReflectionDebugMode, SSRHitStrength, SSRHitUV, SSRHitColor,
+				ViewSpaceReflect, Surface.Normal, Surface.ViewDir, Surface.ViewPos,
+				Fresnel, OutDebugColor))
+			{
+				return true;
+			}
+		}
+
+		OutResult.Color = (SSRHitStrength > 0.0) ? SSRHitColor * SSRHitStrength : float3(0, 0, 0);
+		OutResult.BlendFactor = Fresnel * ScreenSpaceReflectionIntensity * SSRHitStrength;
+		return false;
+	}
+
+	// Mode 3: SSR + Cubemap Fallback
+	if (ReflectionMode == 3)
+	{
+		float2 SSRHitUV;
+		float3 SSRHitColor;
+		float SSRHit = TraceSSR(Surface.ViewPos, ViewSpaceReflect, SSRHitUV, SSRHitColor);
+
+		OutResult.CubemapColor = SampleCubemapReflection(ViewSpaceReflect);
+		OutResult.SSRColor = SSRHitColor;
+		OutResult.SSRHitRatio = SSRHit;
+		OutResult.BlendFactor = 1.0;  // Handled specially in composite
+		return false;
+	}
+
+	return false;
+}
+
+/**
+ * Blend reflection with base color based on reflection mode.
+ * @param BaseColor Input base color
+ * @param Fresnel Fresnel term
+ * @param Reflection Reflection result
+ * @return Blended color
+ */
+float3 BlendReflection(float3 BaseColor, float Fresnel, FReflectionResult Reflection)
+{
+	if (ReflectionMode == 3)
+	{
+		// Mode 3: Blend each reflection type separately, then combine
+		float3 CubemapResult = lerp(BaseColor, Reflection.CubemapColor, Fresnel * FresnelReflectionBlend);
+		float3 SSRResult = lerp(BaseColor, Reflection.SSRColor, Fresnel * ScreenSpaceReflectionIntensity);
+		return lerp(CubemapResult, SSRResult, Reflection.SSRHitRatio);
+	}
+
+	return lerp(BaseColor, Reflection.Color, Reflection.BlendFactor);
+}
+
+// -----------------------------------------------------------------------------
 // Pixel Shader
 // -----------------------------------------------------------------------------
 
@@ -599,697 +1222,61 @@ void MainPS(
 	out float4 OutColor : SV_Target0)
 {
 	float2 UV = Input.UV;
-
-	// SceneUV for sampling SceneColor/SceneDepth (handles Screen Percentage)
 	float2 SceneUV = UV * SceneUVScale;
 
-	// 1. Sample fluid depth (assumed to be linear depth)
-	// Use point sampling to avoid edge interpolation artifacts (white border at fluid-mesh boundary)
-	float FluidDepth = FluidDepthTexture.Sample(PointClampSampler, UV);
-
-	// Handle background (no fluid)
-	// FluidDepth is initialized to a very large value (e.g., 3.4e38)
-	if (FluidDepth > BACKGROUND_DEPTH_THRESH)
+	// Sample fluid surface properties
+	FFluidSurfaceData Surface;
+	if (!SampleFluidSurface(UV, SceneUV, Surface))
 	{
 		discard;
 		return;
 	}
 
-	// 2. Get scene depth (DeviceZ -> Linear)
+	// Get scene depth
 	float SceneDeviceZ = SceneDepthTexture.SampleLevel(InputSampler, SceneUV, 0).r;
 	float SceneLinearDepth = ConvertFromDeviceZ(SceneDeviceZ);
 
-	// 3. Occlusion test - use precomputed OcclusionMask from FluidDepth pass
-	// OcclusionMask: 1.0 = visible (in front of scene), 0.0 = occluded (behind scene)
-	float OcclusionMask = OcclusionMaskTexture.SampleLevel(PointClampSampler, UV, 0).r;
-	if (OcclusionMask < 0.5)
+	// Calculate PBR lighting
+	FLightingResult Lighting;
+	CalculatePBRLighting(Surface, Lighting);
+
+	// Calculate volume scattering
+	float3 VolumeScatter = CalculateVolumeScattering(Surface);
+
+	// Calculate refraction
+	float3 RefractedBackground;
+	float RefractedDepth;
+	float RefractionValidity;
+	CalculateRefraction(UV, Surface, SceneLinearDepth, RefractedBackground, RefractedDepth, RefractionValidity);
+
+	// Apply caustics
+	float CausticBrightness = CalculateCaustics(UV, Surface, RefractedDepth, RefractionValidity);
+	RefractedBackground *= CausticBrightness;
+
+	// Calculate transmittance and base color
+	float3 TotalLighting = (Lighting.Diffuse + Lighting.Ambient) * LightingScale;
+	float3 BaseColor = CalculateTransmittance(RefractedBackground, Surface.Thickness, TotalLighting);
+
+	// Calculate reflection
+	FReflectionResult Reflection;
+	float4 DebugColor;
+	if (CalculateReflection(Surface, Lighting.Fresnel, Reflection, DebugColor))
 	{
-		discard;
+		OutColor = DebugColor;
 		return;
 	}
 
-	// 4. Sample fluid properties
-	// Use point sampling to avoid edge interpolation artifacts at fluid boundary
-	float3 Normal = FluidNormalTexture.Sample(PointClampSampler, UV).xyz;
-	float Thickness = FluidThicknessTexture.Sample(PointClampSampler, UV).r;
+	// Blend reflection with base color
+	BaseColor = BlendReflection(BaseColor, Lighting.Fresnel, Reflection);
 
-	// Normal validation with proper NaN/Inf check
-	bool bInvalidNormal = any(isnan(Normal)) || any(isinf(Normal)) || length(Normal) < 0.1f;
-	if (bInvalidNormal)
-	{
-		Normal = float3(0, 0, 1);
-	}
-	else
-	{
-		Normal = normalize(Normal);
-	}
+	// Final color composition
+	float3 FinalColor = BaseColor + Lighting.Specular + VolumeScatter;
 
-	// 5. Prepare lighting calculations
-	float3 ViewPos = ReconstructViewPosition(UV, FluidDepth);
-	float3 ViewDir = normalize(-ViewPos);  // Direction toward camera (positive Z)
-
-	// Ensure normal faces camera for lighting (dot > 0)
-	// This is needed because FluidNormal.usf may output normals facing either direction
-	if (dot(Normal, ViewDir) < 0.0)
-	{
-		Normal = -Normal;
-	}
-
-	// Grazing angle compensation for lighting stability
-	float RawNoV = saturate(dot(Normal, ViewDir));
-	float GrazingFade = smoothstep(0.0, 0.15, RawNoV);
-	float3 LightingNormal = normalize(lerp(ViewDir, Normal, GrazingFade));
-
-	// For SSR: Use the corrected normal directly
-	// FluidNormal.usf now uses the same coordinate convention as this shader
-	// (Y-axis flipped: UV.y=0 maps to ClipY=1)
-	float3 ReflectionNormal = Normal;
-
-	// A. PBR Setup
-	// ========================================================================
-	// F0 (base reflectivity at normal incidence):
-	// Auto-calculate from IOR: F0 = ((1-n)/(1+n))^2 * FresnelStrength
-	// Water (IOR=1.33): F0 ~ 0.02, Glass (IOR=1.5): F0 ~ 0.04
-	// Fluids are dielectric (non-metallic), so F0 is uniform across RGB
-	// ========================================================================
-	float NoV = saturate(dot(LightingNormal, ViewDir));
-	float IOR_Ratio = (1.0 - RefractiveIndex) / (1.0 + RefractiveIndex);
-	float FinalF0 = IOR_Ratio * IOR_Ratio * FresnelStrength;
-	float3 F0 = float3(FinalF0, FinalF0, FinalF0);
-
-	// B. PBR Lighting (Cook-Torrance BRDF) - Multi-Light Support
-	// ========================================================================
-	// Loops over all active lights and accumulates Cook-Torrance contributions.
-	// Each light needs its own half-vector and HoV for physically correct Fresnel.
-	// Falls back to View.DirectionalLight if NumLights == 0.
-	// ========================================================================
-
-	// Roughness (clamp to avoid divide by zero in GGX)
-	float Roughness = max(SpecularRoughness, 0.04);
-
-	// Accumulated lighting results
-	float3 TotalSpecular = float3(0, 0, 0);
-	float3 TotalDiffuse = float3(0, 0, 0);
-
-	// Determine effective light count (fallback to View.DirectionalLight if 0)
-	int EffectiveLightCount = (NumLights > 0) ? NumLights : 1;
-
-	for (int LightIndex = 0; LightIndex < EffectiveLightCount; LightIndex++)
-	{
-		float3 LightDir;
-		float3 LightColor;
-
-		if (NumLights > 0)
-		{
-			// Unpack light from float4 arrays
-			// LightDirectionsAndIntensity[i] = (Direction.xyz, Intensity)
-			// LightColors[i] = (Color.rgb, unused)
-			float4 DirAndIntensity = LightDirectionsAndIntensity[LightIndex];
-			float4 ColorPacked = LightColors[LightIndex];
-
-			LightDir = normalize(-DirAndIntensity.xyz);
-			float Intensity = DirAndIntensity.w;
-			LightColor = ColorPacked.rgb * Intensity;
-		}
-		else
-		{
-			// Fallback: use View's main directional light
-			LightDir = normalize(-View.DirectionalLightDirection);
-			LightColor = View.DirectionalLightColor.rgb;
-		}
-
-		// Per-light dot products (use LightingNormal for stable shading)
-		float NoL = saturate(dot(LightingNormal, LightDir));
-		float3 HalfDir = normalize(LightDir + ViewDir);
-		float NoH = saturate(dot(LightingNormal, HalfDir));
-		float HoV = saturate(dot(HalfDir, ViewDir));
-
-		// Cook-Torrance Specular BRDF
-		// Each light has its own HoV for physically correct Fresnel
-		float3 SpecularFresnel;
-		float3 SpecularBRDF = CookTorranceBRDF(NoV, NoL, NoH, HoV, Roughness, F0, SpecularFresnel);
-		TotalSpecular += SpecularBRDF * LightColor * NoL * SpecularStrength;
-
-		// Energy Conservation: diffuse is reduced by specular reflection
-		// kD = 1 - kS (for dielectrics, metallic = 0)
-		float3 kD = 1.0 - SpecularFresnel;
-
-		// Diffuse (Lambert with energy conservation)
-		TotalDiffuse += kD * NoL * LightColor;
-	}
-
-	// Use accumulated specular (apply LightingScale to match diffuse)
-	float3 Specular = TotalSpecular * LightingScale;
-
-	// Ambient (prevents completely dark surfaces)
-	// Use SkyLightColor if available, otherwise fallback to DirectionalLightColor, then fixed value
-	// Scale by AmbientIntensity to prevent over-brightness (default 0.15 tuned for UE5 default SkyLight)
-	float3 EnvironmentColor = View.SkyLightColor.rgb;
-	if (dot(EnvironmentColor, float3(1, 1, 1)) < 0.001)
-	{
-		EnvironmentColor = View.DirectionalLightColor.rgb;
-	}
-	if (dot(EnvironmentColor, float3(1, 1, 1)) < 0.001)
-	{
-		EnvironmentColor = float3(1.0, 1.0, 1.0);  // White fallback
-	}
-	float3 AmbientColor = EnvironmentColor * AmbientIntensity;
-
-	// Total Lighting (diffuse + ambient, specular added separately)
-	// Apply LightingScale to compensate for HDR scene lighting
-	float3 TotalLighting = (TotalDiffuse + AmbientColor) * LightingScale;
-
-	// Fresnel for environment reflection (IBL/Cubemap/SSR)
-	// ========================================================================
-	// Unlike direct lighting which uses HoV (Half·View), environment reflection
-	// uses NoV (Normal·View) as an approximation. This is because:
-	// - Environment light comes from ALL directions, not a single light direction
-	// - Therefore, no single half-vector can be defined
-	// - NoV approximation is the industry standard (UE4/5, Unity, Frostbite)
-	// - Reference: "Real Shading in Unreal Engine 4" (Brian Karis, SIGGRAPH 2013)
-	// ========================================================================
-	float Fresnel = F0.r + (1.0 - F0.r) * pow(1.0 - NoV, 5.0);
-
-	// C. Volume Scattering (Light-based, Henyey-Greenstein)
-	// ========================================================================
-	// Physical scattering: light scatters through fluid based on View-Light angle.
-	// All parameters derived from existing fluid properties:
-	// - ScatterColor = FluidColor (fluid's intrinsic color)
-	// - Anisotropy = derived from Opacity (transparent=forward, opaque=isotropic)
-	// - Strength = ThicknessSensitivity
-	// ========================================================================
-	float3 VolumeScatterContribution = float3(0, 0, 0);
-
-	// Scattering parameters derived from existing properties
-	// Transparent fluids (low Opacity) → forward scatter (g=0.8)
-	// Opaque fluids (high Opacity) → isotropic scatter (g=0.2)
-	float ScatterAnisotropy = lerp(0.8, 0.2, Opacity);
-	float3 ScatterColor = FluidColor.rgb;
-	float ScatterStrength = ThicknessSensitivity;
-
-	if (ScatterStrength > 0.001)
-	{
-		// Loop through lights for scattering calculation
-		int ScatterLightCount = (NumLights > 0) ? NumLights : 1;
-
-		for (int ScatterLightIndex = 0; ScatterLightIndex < ScatterLightCount; ScatterLightIndex++)
-		{
-			float3 ScatterLightDir;
-			float3 ScatterLightColor;
-
-			if (NumLights > 0)
-			{
-				float4 DirAndIntensity = LightDirectionsAndIntensity[ScatterLightIndex];
-				float4 ColorPacked = LightColors[ScatterLightIndex];
-				ScatterLightDir = normalize(-DirAndIntensity.xyz);
-				ScatterLightColor = ColorPacked.rgb * DirAndIntensity.w;
-			}
-			else
-			{
-				ScatterLightDir = normalize(-View.DirectionalLightDirection);
-				ScatterLightColor = View.DirectionalLightColor.rgb;
-			}
-
-			// VoL: View dot Light (positive when looking toward light source)
-			// When camera looks at light source: VoL > 0 (backlit, forward scatter visible)
-			float VoL = dot(ViewDir, -ScatterLightDir);
-
-			// Phase function: probability of scattering in this direction
-			float Phase = HenyeyGreenstein(VoL, ScatterAnisotropy);
-
-			// Extinction: light scattered along path through fluid
-			float Extinction = 1.0 - exp(-Thickness * ScatterStrength * 0.1);
-
-			// Accumulate scattering contribution
-			VolumeScatterContribution += ScatterColor * ScatterLightColor * Phase * Extinction;
-		}
-	}
-
-	// Apply LightingScale to volume scattering as well
-	VolumeScatterContribution *= LightingScale;
-
-	// ========================================================================
-	// Color Compositing (Flex-style Simple Approach)
-	// ========================================================================
-	float3 FinalColor;
-
-	// 1. Sample scene color (background) - use SceneUV for correct texture mapping
-	float3 SceneColor = SceneColorTexture.Sample(InputSampler, SceneUV).rgb;
-
-	// 2. Sample refracted background color
-	float3 RefractedBackground;
-	float RefractedSceneDepth = SceneLinearDepth;
-	float RefractionValidity = 0.0;
-
-	if (bEnableRefraction)
-	{
-		// Refraction Mask: Reduce refraction at thin/edge areas to prevent excessive distortion
-		// - ThicknessMask: Weaker refraction in thin areas
-		// - EdgeMask: Weaker refraction at edges (where Normal.z is small)
-		float ThicknessMask = saturate(Thickness * 0.1);
-		float EdgeMask = saturate(abs(Normal.z) * 2.0);
-		float RefractionMask = ThicknessMask * EdgeMask;
-
-		// Calculate refraction offset (with thickness/edge mask)
-		float2 RefractOffset = Normal.xy * RefractiveIndex * RefractionScale * RefractionMask;
-		float2 RefractedUV = UV + RefractOffset;
-		RefractedUV = saturate(RefractedUV);
-
-		// Apply SceneUVScale to refracted UV for scene texture sampling
-		float2 RefractedSceneUV = RefractedUV * SceneUVScale;
-
-		// Check depth at refracted UV position
-		RefractedSceneDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(InputSampler, RefractedSceneUV, 0).r);
-
-		// Soft refraction validity check:
-		// 1. Refracted position must be behind fluid (not sampling objects in front of fluid)
-		// 2. Refracted position should not suddenly show much closer objects than original UV
-		// 3. Fade out refraction near screen edges (avoid sampling clamped edge pixels)
-		float DepthMargin = 20.0;
-		float BehindFluidFactor = saturate((RefractedSceneDepth - FluidDepth + DepthMargin) / DepthMargin);
-		float NotPullingForwardFactor = saturate((RefractedSceneDepth - SceneLinearDepth + DepthMargin) / DepthMargin);
-
-		// Screen edge fade: reduce refraction when refracted UV approaches screen boundary
-		float2 EdgeDist = min(RefractedUV, 1.0 - RefractedUV);
-		float ScreenEdgeFade = saturate(min(EdgeDist.x, EdgeDist.y) / 0.05);
-
-		RefractionValidity = BehindFluidFactor * NotPullingForwardFactor * ScreenEdgeFade;
-
-		// Soft blend between original UV and refracted UV, then apply SceneUVScale
-		float2 FinalRefractUV = lerp(UV, RefractedUV, RefractionValidity);
-		float2 FinalRefractSceneUV = FinalRefractUV * SceneUVScale;
-
-		RefractedBackground = SceneColorTexture.Sample(InputSampler, FinalRefractSceneUV).rgb;
-	}
-	else
-	{
-		// No refraction - use original scene color
-		RefractedBackground = SceneColor;
-	}
-
-	// 2.5. Caustics (Jacobian method - ray convergence = bright, divergence = dark)
-	float CausticBrightness = 1.0;
-	if (bEnableCaustics)
-	{
-		float Pattern = CausticPattern(
-			UV,
-			Normal,
-			FluidDepth,
-			RefractedSceneDepth,
-			ViewMatrix,
-			RefractiveIndex
-		);
-
-		// Convert pattern to brightness multiplier (CausticIntensity controls strength)
-		CausticBrightness = 1.0 + Pattern * CausticIntensity;
-
-		// Fade based on fluid properties
-		float DepthFade = saturate(1.0 - FluidDepth * 0.0003);
-		float ThicknessFade = exp(-Thickness * 0.015);
-		float TransparencyFade = saturate(1.0 - Opacity * 0.7);
-		float CausticFade = DepthFade * ThicknessFade * TransparencyFade * RefractionValidity;
-
-		CausticBrightness = lerp(1.0, CausticBrightness, CausticFade);
-	}
-
-	// Apply caustics to refracted background
-	RefractedBackground *= CausticBrightness;
-
-	// 3. Beer's Law: Calculate per-channel transmittance based on thickness
-	// T(λ) = exp(-σ(λ) * thickness)
-	// Each color channel has different absorption coefficient
-	// Water: absorbs more R -> appears blue
-	// Slime: absorbs more B -> appears green/yellow
-	// Convert Opacity (0~1) to absorption coefficient (1.0 ~ 5.0)
-	float AbsorptionCoefficient = 1.0 + Opacity * 4.0;
-	float3 AbsorptionRGB = AbsorptionColorCoefficients.rgb * AbsorptionCoefficient;
-	float3 Transmittance = exp(-AbsorptionRGB * Thickness * 0.1f);  // 0.1 = constant scale factor
-
-	// Calculate transmitted background color
-	float3 TransmittedBackground = RefractedBackground * Transmittance;
-
-	// 4. Blend background with fluid color
-	// Thicker fluid shows more of its intrinsic color
-	float OverallAbsorption = 1.0 - dot(Transmittance, float3(0.333, 0.333, 0.333));
-
-	// Apply lighting to FluidColor (PBR Diffuse + Ambient)
-	float3 LitFluidColor = FluidColor.rgb * TotalLighting;
-	float3 BaseColor = lerp(TransmittedBackground, LitFluidColor, saturate(OverallAbsorption));
-
-	// 5. Fresnel Reflection (Mode-based)
-	// ========================================================================
-	// ReflectionMode:
-	//   0 = None (no reflection)
-	//   1 = Cubemap (environment map reflection)
-	//   2 = ScreenSpaceReflection (SSR only, no fallback on miss)
-	//   3 = SSR + Cubemap (SSR with Cubemap fallback on miss)
-	// ========================================================================
-	float3 ViewSpaceReflect = reflect(-ViewDir, ReflectionNormal);
-	float3 ReflectedColor = float3(0, 0, 0);
-	float SSRHitStrength = 0.0;
-	float SSRHitRatio = 0.0;  // For Mode 3: stores SSR hit amount for blend interpolation
-	float3 CubemapColorForBlend = float3(0, 0, 0);  // For Mode 3: Cubemap color before mixing
-	float3 SSRColorForBlend = float3(0, 0, 0);      // For Mode 3: SSR color before mixing
-
-	// Mode 2: Screen Space Reflection (SSR)
-	if (ReflectionMode == 2)
-	{
-		float2 SSRHitUV;
-		float3 SSRHitColor;
-		SSRHitStrength = TraceSSR(ViewPos, ViewSpaceReflect, SSRHitUV, SSRHitColor);
-
-		// DEBUG: SSR debug visualization (runtime switchable via ScreenSpaceReflectionDebugMode)
-		// 0 = disabled, 1 = hit/miss, 2 = reflection direction, 3 = hit sample color
-		// 4 = reflection Z direction (green=into scene, red=toward camera)
-		// 5 = ray depth vs scene depth comparison
-		// 6 = exit reason (red=behind camera, green=off screen, blue=max steps)
-		// 7 = Normal visualization, 8 = ViewDir visualization, 9 = ViewPos.z visualization
-		if (ScreenSpaceReflectionDebugMode == 1)
-		{
-			// SSR hit/miss: red = hit (intensity varies), blue = miss
-			if (SSRHitStrength > 0.0)
-			{
-				OutColor = float4(SSRHitStrength, 0, 0, 1);  // Red intensity = hit strength
-			}
-			else
-			{
-				OutColor = float4(0, 0, 1, 1);  // Blue: Miss
-			}
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 2)
-		{
-			// Reflection vector direction as color (RGB = XYZ, 0.5 = 0)
-			OutColor = float4(ViewSpaceReflect * 0.5 + 0.5, 1.0);
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 3)
-		{
-			// Direct display of hit color (magenta if miss)
-			if (SSRHitStrength > 0.0)
-			{
-				OutColor = float4(SSRHitColor, 1.0);
-			}
-			else
-			{
-				OutColor = float4(1, 0, 1, 1);  // Magenta: Miss
-			}
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 4)
-		{
-			// Reflection direction Z component visualization
-			// Green = into scene (Z < 0, SSR possible)
-			// Red = toward camera (Z > 0, SSR not possible)
-			float ReflectZ = ViewSpaceReflect.z;
-			if (ReflectZ < 0.0)
-			{
-				// Into scene - SSR possible (green, intensity shows depth)
-				OutColor = float4(0, saturate(-ReflectZ), 0, 1);
-			}
-			else
-			{
-				// Toward camera - SSR not possible (red)
-				OutColor = float4(saturate(ReflectZ), 0, 0, 1);
-			}
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 5)
-		{
-			// Depth penetration visualization
-			// Yellow = hit, Green = penetrated, Blue = not yet penetrated
-			if (SSRHitStrength > 0.0)
-			{
-				OutColor = float4(1, 1, 0, 1);  // Yellow: Hit
-			}
-			else
-			{
-				float g = saturate(g_SSRDebugDepthPenetration / 50.0);  // Penetrated (green)
-				float b = (g_SSRDebugDepthPenetration < 0.0) ? saturate(-g_SSRDebugDepthPenetration / 50.0) : 0.0;  // Not yet (blue)
-				OutColor = float4(0, g, b, 1);
-			}
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 6)
-		{
-			// Exit reason visualization
-			if (SSRHitStrength > 0.0)
-			{
-				OutColor = float4(1, 1, 0, 1);  // Yellow: Hit
-			}
-			else if (g_SSRDebugExitReason == 1)
-			{
-				OutColor = float4(1, 0, 0, 1);  // Red: went behind camera
-			}
-			else if (g_SSRDebugExitReason == 2)
-			{
-				OutColor = float4(0, 1, 0, 1);  // Green: went off screen
-			}
-			else
-			{
-				OutColor = float4(0, 0, 1, 1);  // Blue: max steps reached
-			}
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 7)
-		{
-			// Normal visualization (RGB = XYZ, 0.5 = 0)
-			OutColor = float4(Normal * 0.5 + 0.5, 1.0);
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 8)
-		{
-			// ViewDir visualization (RGB = XYZ, 0.5 = 0)
-			OutColor = float4(ViewDir * 0.5 + 0.5, 1.0);
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 9)
-		{
-			// ViewPos.z visualization (blue = in front of camera, red = behind camera)
-			if (ViewPos.z < 0.0)
-			{
-				OutColor = float4(0, 0, saturate(-ViewPos.z / 1000.0), 1);  // Blue: in front
-			}
-			else
-			{
-				OutColor = float4(saturate(ViewPos.z / 1000.0), 0, 0, 1);  // Red: behind (incorrect)
-			}
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 10)
-		{
-			// Fresnel value visualization (white = high fresnel, black = low)
-			OutColor = float4(Fresnel, Fresnel, Fresnel, 1.0);
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 11)
-		{
-			// Parameter debug: R = FresnelStrength/10, G = FresnelReflectionBlend, B = Fresnel
-			OutColor = float4(FresnelStrength / 10.0, FresnelReflectionBlend, Fresnel, 1.0);
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 12)
-		{
-			// Final reflection blend factor: Fresnel * FresnelReflectionBlend
-			float BlendFactor = Fresnel * FresnelReflectionBlend;
-			OutColor = float4(BlendFactor, BlendFactor, BlendFactor, 1.0);
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 13)
-		{
-			// SSR hit analysis (depth-only)
-			// Yellow = HIT
-			// Blue = ray in front of scene (not penetrated yet)
-			// Red = penetrated but overshot (too far past geometry)
-			// Green = sky/background (ray ended in empty space)
-			if (SSRHitStrength > 0.0)
-			{
-				OutColor = float4(1, 1, 0, 1);  // Yellow: HIT!
-			}
-			else
-			{
-				bool bIsSky = g_SSRDebugLastSceneDepth > 50000.0;
-				float Penetration = g_SSRDebugDepthPenetration;
-				float MaxPenetration = ScreenSpaceReflectionThickness * g_SSRDebugLastSceneDepth * 0.1;
-
-				if (bIsSky)
-				{
-					OutColor = float4(0, 0.5, 0, 1);  // Dark Green: sky
-				}
-				else if (Penetration <= 0.0)
-				{
-					OutColor = float4(0, 0, 1, 1);  // Blue: not penetrated
-				}
-				else if (Penetration > MaxPenetration)
-				{
-					OutColor = float4(1, 0, 0, 1);  // Red: overshot
-				}
-				else
-				{
-					OutColor = float4(1, 0, 1, 1);  // Magenta: bug
-				}
-			}
-			return;
-		}
-		else if (ScreenSpaceReflectionDebugMode == 14)
-		{
-			// SSR hit UV visualization
-			// R = hit UV.x, G = hit UV.y, B = hit strength
-			// This shows WHERE the SSR is sampling from
-			if (SSRHitStrength > 0.0)
-			{
-				OutColor = float4(SSRHitUV.x, SSRHitUV.y, SSRHitStrength, 1.0);
-			}
-			else
-			{
-				// No hit - show dark blue
-				OutColor = float4(0, 0, 0.2, 1);
-			}
-			return;
-		}
-
-		// SSR result: use hit color if hit, otherwise no reflection (no fallback)
-		// Note: ScreenSpaceReflectionIntensity is applied to blend factor, not color brightness
-		// This allows SSR to have independent intensity control from FresnelReflectionBlend
-		if (SSRHitStrength > 0.0)
-		{
-			ReflectedColor = SSRHitColor * SSRHitStrength;
-		}
-		// else: ReflectedColor stays at 0 (no Cubemap fallback)
-	}
-	// Mode 3: SSR + Cubemap (SSR hit → scene color, SSR miss → Cubemap fallback)
-	else if (ReflectionMode == 3)
-	{
-		float2 SSRHitUV;
-		float3 SSRHitColor;
-		float SSRHit = TraceSSR(ViewPos, ViewSpaceReflect, SSRHitUV, SSRHitColor);
-
-		// Get Cubemap color for fallback
-		float3 CubemapColor;
-		float3x3 ViewToWorld = transpose((float3x3)ViewMatrix);
-		float3 WorldReflect = mul(ViewSpaceReflect, ViewToWorld);
-
-		if (bUseReflectionCubemap > 0)
-		{
-			float MipLevel = ReflectionMipLevel + SpecularRoughness * 6.0;
-			CubemapColor = ReflectionCubemap.SampleLevel(ReflectionCubemapSampler, WorldReflect, MipLevel).rgb;
-			CubemapColor *= ReflectionIntensity;
-		}
-		else
-		{
-			float3 FallbackEnvColor = View.SkyLightColor.rgb;
-			if (dot(FallbackEnvColor, float3(1, 1, 1)) < 0.001)
-			{
-				FallbackEnvColor = View.DirectionalLightColor.rgb;
-			}
-			if (dot(FallbackEnvColor, float3(1, 1, 1)) < 0.001)
-			{
-				FallbackEnvColor = float3(1.0, 1.0, 1.0);
-			}
-			CubemapColor = FallbackEnvColor * 0.3;
-		}
-
-		// Store colors for separate blending (each with its own intensity)
-		CubemapColorForBlend = CubemapColor;
-		SSRColorForBlend = SSRHitColor;
-		SSRHitRatio = SSRHit;
-
-		// ReflectedColor not used for Mode 3 (handled separately in blend section)
-		SSRHitStrength = 1.0;  // Always have reflection (either SSR or Cubemap)
-	}
-	// Mode 1: Cubemap Reflection
-	else if (ReflectionMode == 1)
-	{
-		float3 CubemapColor;
-		if (bUseReflectionCubemap > 0)
-		{
-			// View Space -> World Space transform (inverse of View Matrix)
-			// ViewMatrix is World->View, so transpose gives View->World (orthogonal matrix)
-			float3x3 ViewToWorld = transpose((float3x3)ViewMatrix);
-			float3 WorldReflect = mul(ViewSpaceReflect, ViewToWorld);
-
-			// Cubemap sampling (Mip level controls blur)
-			float MipLevel = ReflectionMipLevel + SpecularRoughness * 6.0;  // Linked to roughness
-			CubemapColor = ReflectionCubemap.SampleLevel(ReflectionCubemapSampler, WorldReflect, MipLevel).rgb;
-			CubemapColor *= ReflectionIntensity;
-		}
-		else
-		{
-			// Fallback: use a dimmed environment light color for reflection
-			float3 FallbackEnvColor = View.SkyLightColor.rgb;
-			if (dot(FallbackEnvColor, float3(1, 1, 1)) < 0.001)
-			{
-				FallbackEnvColor = View.DirectionalLightColor.rgb;
-			}
-			if (dot(FallbackEnvColor, float3(1, 1, 1)) < 0.001)
-			{
-				FallbackEnvColor = float3(1.0, 1.0, 1.0);  // White fallback
-			}
-			CubemapColor = FallbackEnvColor * 0.3;
-		}
-
-		ReflectedColor = CubemapColor;
-	}
-	// Mode 0: No Reflection
-	// ReflectedColor stays at 0
-
-	// 6. Blend reflection with transmission
-	// Fresnel determines how much reflection vs transmission (physically-based)
-	// IMPORTANT: Only blend if we actually have reflection data
-	// - Mode 0 (None): No blending
-	// - Mode 1 (Cubemap): FresnelReflectionBlend controls blend
-	// - Mode 2 (SSR): ScreenSpaceReflectionIntensity controls blend
-	// - Mode 3 (SSR+Cubemap): Each uses its own intensity, then results are combined
-	float ReflectionBlendFactor = Fresnel * FresnelReflectionBlend;
-	if (ReflectionMode == 0)
-	{
-		ReflectionBlendFactor = 0.0;  // No reflection mode
-	}
-	else if (ReflectionMode == 2)
-	{
-		// SSR-only mode: use ScreenSpaceReflectionIntensity for independent control
-		ReflectionBlendFactor = Fresnel * ScreenSpaceReflectionIntensity * SSRHitStrength;
-	}
-	// Mode 1 (Cubemap): use FresnelReflectionBlend (default)
-
-	// Mode 3 special handling: blend each reflection type with its own intensity, then combine
-	if (ReflectionMode == 3)
-	{
-		// Cubemap blended with its intensity (FresnelReflectionBlend)
-		float3 CubemapResult = lerp(BaseColor, CubemapColorForBlend, Fresnel * FresnelReflectionBlend);
-		// SSR blended with its intensity (ScreenSpaceReflectionIntensity)
-		float3 SSRResult = lerp(BaseColor, SSRColorForBlend, Fresnel * ScreenSpaceReflectionIntensity);
-		// Combine based on SSR hit ratio
-		BaseColor = lerp(CubemapResult, SSRResult, SSRHitRatio);
-	}
-	else
-	{
-		BaseColor = lerp(BaseColor, ReflectedColor, ReflectionBlendFactor);
-	}
-
-	// 7. Add Specular + SSS
-	FinalColor = BaseColor + Specular + VolumeScatterContribution;
-
-	// 8. Apply PreExposure to match UE5 HDR pipeline
-	// SceneColor already has PreExposure applied, so fluid must match
-	// This ensures consistent brightness with other scene objects
+	// Apply PreExposure for UE5 HDR pipeline
 	FinalColor *= View.PreExposure;
 
-	// 9. Alpha calculation
-	// Opacity: base opacity (minimum alpha)
-	// ThicknessSensitivity: how steeply thickness adds opacity on top
-	//   0 = thickness has no effect (use base Opacity only)
-	//   1 = thickness strongly adds opacity (thick areas become opaque regardless of base Opacity)
-	float BaseAlpha = Opacity;
-	float ThicknessAlpha = saturate(1.0 - exp(-Thickness * ThicknessSensitivity * 5.0f));
-	// Take the maximum: base opacity OR thickness-based opacity
-	float Alpha = max(BaseAlpha, ThicknessAlpha);
-	// Only boost alpha at grazing angles (high Fresnel), not everywhere
-	// Use a softer contribution from Fresnel to avoid making thin fluid opaque
-	float FresnelAlphaBoost = Fresnel * FresnelReflectionBlend * 0.3;  // Reduced from 1.0 to 0.3
-	Alpha = max(Alpha, FresnelAlphaBoost);
+	// Edge alpha for anti-aliasing (only affects fluid boundaries)
+	float EdgeAlpha = saturate(Surface.Thickness * 5.0);
 
-	// C++ BlendState uses (SrcAlpha, InvSrcAlpha)
-	// Output RGB without premultiplied alpha
-	OutColor = float4(FinalColor, Alpha);
+	OutColor = float4(FinalColor, EdgeAlpha);
 }
