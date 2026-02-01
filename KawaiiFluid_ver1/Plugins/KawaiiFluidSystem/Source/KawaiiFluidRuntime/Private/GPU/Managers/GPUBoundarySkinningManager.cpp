@@ -2,6 +2,9 @@
 // FGPUBoundarySkinningManager - GPU Boundary Skinning and Adhesion System
 
 #include "GPU/Managers/GPUBoundarySkinningManager.h"
+
+#include <GPU/GPUFluidSpatialData.h>
+
 #include "GPU/GPUFluidSimulatorShaders.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
@@ -1120,7 +1123,7 @@ void FGPUBoundarySkinningManager::AddBoundarySkinningPass(
 
 void FGPUBoundarySkinningManager::AddBoundaryAdhesionPass(
 	FRDGBuilder& GraphBuilder,
-	FRDGBufferUAVRef ParticlesUAV,
+	const FSimulationSpatialData& SpatialData,
 	int32 CurrentParticleCount,
 	const FGPUFluidSimulationParams& Params,
 	FRDGBufferRef InSameFrameBoundaryBuffer,
@@ -1224,7 +1227,11 @@ void FGPUBoundarySkinningManager::AddBoundaryAdhesionPass(
 		TShaderMapRef<FBoundaryAdhesionCS> AdhesionShader(ShaderMap, PermutationVector);
 
 		FBoundaryAdhesionCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FBoundaryAdhesionCS::FParameters>();
-		PassParameters->Particles = ParticlesUAV;
+		// Bind SOA buffers
+		PassParameters->Positions = GraphBuilder.CreateUAV(SpatialData.SoA_Positions, PF_R32_FLOAT);
+		PassParameters->Velocities = GraphBuilder.CreateUAV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
+		PassParameters->Masses = GraphBuilder.CreateUAV(SpatialData.SoA_Masses, PF_R32_FLOAT);
+		PassParameters->Flags = GraphBuilder.CreateUAV(SpatialData.SoA_Flags, PF_R32_UINT);
 		PassParameters->ParticleCount = CurrentParticleCount;
 		PassParameters->BoundaryParticles = BoundaryParticlesSRV;
 		PassParameters->BoundaryParticleCount = BoundaryParticleCount;

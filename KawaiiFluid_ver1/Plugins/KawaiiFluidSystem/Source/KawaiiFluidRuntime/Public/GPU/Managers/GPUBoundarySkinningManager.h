@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <GPU/GPUFluidSpatialData.h>
+
 #include "CoreMinimal.h"
 #include "RenderGraphResources.h"
 #include "RHIResources.h"
@@ -254,7 +256,7 @@ public:
 	 */
 	void AddBoundaryAdhesionPass(
 		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
+		const FSimulationSpatialData& SpatialData,
 		int32 CurrentParticleCount,
 		const FGPUFluidSimulationParams& Params,
 		FRDGBufferRef InSameFrameBoundaryBuffer = nullptr,

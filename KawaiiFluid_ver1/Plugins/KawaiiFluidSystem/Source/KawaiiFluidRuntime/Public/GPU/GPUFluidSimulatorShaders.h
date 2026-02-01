@@ -1520,7 +1520,11 @@ public:
 	using FPermutationDomain = TShaderPermutationDomain<FGridResolutionDim>;
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
+		// SOA particle buffers
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Positions)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Masses)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, Flags)
 		SHADER_PARAMETER(int32, ParticleCount)
 		// Legacy boundary particles (unsorted)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUBoundaryParticle>, BoundaryParticles)
@@ -1634,8 +1638,10 @@ public:
 	SHADER_USE_PARAMETER_STRUCT(FStackPressureCS, FGlobalShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		// Particle and attachment buffers
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, Particles)
+		// SOA particle buffers
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, Positions)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, Masses)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUParticleAttachment>, Attachments)
 
 		// Spatial hash for neighbor search

@@ -983,7 +983,6 @@ private:
 	/** Add boundary adhesion pass (Flex-style adhesion to surface particles) */
 	void AddBoundaryAdhesionPass(
 		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
 		const FSimulationSpatialData& SpatialData,
 		const FGPUFluidSimulationParams& Params);
 

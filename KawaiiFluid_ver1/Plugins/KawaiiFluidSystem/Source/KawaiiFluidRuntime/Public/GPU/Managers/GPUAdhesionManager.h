@@ -135,7 +135,7 @@ public:
 	 */
 	void AddStackPressurePass(
 		FRDGBuilder& GraphBuilder,
-		FRDGBufferUAVRef ParticlesUAV,
+		const FSimulationSpatialData& SpatialData,
 		FRDGBufferSRVRef AttachmentSRV,
 		FRDGBufferSRVRef CellCountsSRV,
 		FRDGBufferSRVRef ParticleIndicesSRV,

@@ -1535,7 +1535,7 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 		{
 			FRDGBufferRef AttachmentBufferForStackPressure = GraphBuilder.RegisterExternalBuffer(PersistentAttachmentBuffer, TEXT("GPUFluidAttachmentsStackPressure"));
 			FRDGBufferSRVRef AttachmentSRVForStackPressure = GraphBuilder.CreateSRV(AttachmentBufferForStackPressure);
-			AdhesionManager->AddStackPressurePass(GraphBuilder, ParticlesUAV, AttachmentSRVForStackPressure, SpatialData.CellCountsSRV, SpatialData.ParticleIndicesSRV, CollisionManager.Get(), CurrentParticleCount, Params);
+			AdhesionManager->AddStackPressurePass(GraphBuilder, SpatialData, AttachmentSRVForStackPressure, SpatialData.CellCountsSRV, SpatialData.ParticleIndicesSRV, CollisionManager.Get(), CurrentParticleCount, Params);
 		}
 	}
 
@@ -1546,7 +1546,7 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 
 	if (IsBoundaryAdhesionEnabled())
 	{
-		AddBoundaryAdhesionPass(GraphBuilder, ParticlesUAV, SpatialData, Params);
+		AddBoundaryAdhesionPass(GraphBuilder, SpatialData, Params);
 	}
 
 	// Anisotropy
@@ -2238,7 +2238,7 @@ void FGPUFluidSimulator::ClearStaticBoundaryParticles()
 	UE_LOG(LogGPUFluidSimulator, Log, TEXT("Static boundary particles cleared"));
 }
 
-void FGPUFluidSimulator::AddBoundaryAdhesionPass(FRDGBuilder& GraphBuilder, FRDGBufferUAVRef ParticlesUAV, const FSimulationSpatialData& SpatialData, const FGPUFluidSimulationParams& Params)
+void FGPUFluidSimulator::AddBoundaryAdhesionPass(FRDGBuilder& GraphBuilder, const FSimulationSpatialData& SpatialData, const FGPUFluidSimulationParams& Params)
 {
 	if (BoundarySkinningManager.IsValid())
 	{
@@ -2281,7 +2281,7 @@ void FGPUFluidSimulator::AddBoundaryAdhesionPass(FRDGBuilder& GraphBuilder, FRDG
 		if (BoundaryBuffer != nullptr && BoundaryCount > 0)
 		{
 			BoundarySkinningManager->AddBoundaryAdhesionPass(
-				GraphBuilder, ParticlesUAV, CurrentParticleCount, Params,
+				GraphBuilder, SpatialData, CurrentParticleCount, Params,
 				BoundaryBuffer, BoundaryCount,
 				ZOrderSortedSRV, ZOrderCellStartSRV, ZOrderCellEndSRV);
 		}

@@ -32,11 +32,14 @@ struct FGPUBoundaryParticle
 };
 
 //=============================================================================
-// Shader Parameters
+// Shader Parameters (SOA - Structure of Arrays)
 //=============================================================================
 
-// Fluid particles
-RWStructuredBuffer<FGPUFluidParticle> Particles;
+// Fluid particle SOA buffers
+RWBuffer<float> Positions;              // float3 packed as 3 floats
+RWBuffer<float> Velocities;             // float3 packed as 3 floats
+RWBuffer<float> Masses;                 // float
+RWBuffer<uint> Flags;                   // uint
 int ParticleCount;
 
 // Boundary particles
@@ -184,10 +187,13 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
-	FGPUFluidParticle particle = Particles[idx];
+	// Read from SOA buffers
+	uint idx3 = idx * 3;
+	uint flags = Flags[idx];
+	float mass = Masses[idx];
 
 	// Skip if already attached to primitive (existing adhesion system handles this)
-	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+	if (HasFlag(flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 	{
 		return;
 	}
@@ -196,7 +202,8 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// They need adhesion to stay attracted to the boundary surface
 	// The attachment system only handles character movement (bone delta)
 
-	float3 pos = particle.PredictedPosition;
+	// Use Position for neighbor search (not PredictedPosition for boundary adhesion)
+	float3 pos = float3(Positions[idx3], Positions[idx3 + 1], Positions[idx3 + 2]);
 
 	// =========================================================================
 	// PARTICLE-LEVEL EARLY-OUT: Skip if particle is far from boundary AABB
@@ -267,12 +274,12 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							// Adhesion force (Akinci 2013)
 							// F_adhesion = -beta * m_i * psi_b * A(r,h) * r_normalized
 							float A = AdhesionKernel(r, h);
-							adhesionForce -= AdhesionForceStrength * particle.Mass * closeFactor * A * r_normalized;
+							adhesionForce -= AdhesionForceStrength * mass * closeFactor * A * r_normalized;
 
 							// Cohesion force (surface tension at boundary)
 							// F_cohesion = -gamma * m_i * psi_b * C(r,h) * r_normalized
 							float C = CohesionKernel(r, h);
-							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
+							cohesionForce -= CohesionStrength * mass * closeFactor * C * r_normalized;
 
 							// Accumulate weighted normal and friction for Coulomb friction
 							float normalWeight = A * closeFactor;
@@ -331,12 +338,12 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							// Adhesion force (Akinci 2013)
 							// F_adhesion = -beta * m_i * psi_b * A(r,h) * r_normalized
 							float A = AdhesionKernel(r, h);
-							adhesionForce -= AdhesionForceStrength * particle.Mass * closeFactor * A * r_normalized;
+							adhesionForce -= AdhesionForceStrength * mass * closeFactor * A * r_normalized;
 
 							// Cohesion force (surface tension at boundary)
 							// F_cohesion = -gamma * m_i * psi_b * C(r,h) * r_normalized
 							float C = CohesionKernel(r, h);
-							cohesionForce -= CohesionStrength * particle.Mass * closeFactor * C * r_normalized;
+							cohesionForce -= CohesionStrength * mass * closeFactor * C * r_normalized;
 
 							// Accumulate weighted normal and friction for Coulomb friction
 							float normalWeight = A * closeFactor;
@@ -418,6 +425,9 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		// else: top (floor-like) → ceilingFactor = 1.0 (default)
 	}
 
+	// Read current velocity from SOA
+	float3 velocity = float3(Velocities[idx3], Velocities[idx3 + 1], Velocities[idx3 + 2]);
+
 	// Apply forces to velocity (with ceiling factor applied to adhesion)
 	float3 totalForce = (adhesionForce + cohesionForce) * ceilingFactor;
 
@@ -430,7 +440,7 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	// Apply as velocity change (F = ma, dv = F/m * dt)
-	particle.Velocity += totalForce / particle.Mass * DeltaTime;
+	velocity += totalForce / mass * DeltaTime;
 
 	//=========================================================================
 	// Set NEAR_BOUNDARY flag if particle is near boundary (for debug visualization)
@@ -439,11 +449,11 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	//=========================================================================
 	if (normalWeightSum > SMALL_NUMBER)
 	{
-		particle.Flags = SetFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_BOUNDARY);
+		flags = SetFlag(flags, GPU_PARTICLE_FLAG_NEAR_BOUNDARY);
 	}
 	else
 	{
-		particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_BOUNDARY);
+		flags = ClearFlag(flags, GPU_PARTICLE_FLAG_NEAR_BOUNDARY);
 	}
 
 	//=========================================================================
@@ -453,7 +463,7 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	if (normalWeightSum > SMALL_NUMBER)
 	{
 		// Decompose velocity into normal and tangential components
-		float3 vel = particle.Velocity;
+		float3 vel = velocity;
 		float velNormalMag = dot(vel, avgNormal);
 		float3 velNormal = velNormalMag * avgNormal;
 		float3 velTangential = vel - velNormal;
@@ -473,14 +483,18 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float maxFrictionForce = avgFrictionCoeff * normalForce;
 
 			// Force required to stop (80% safety factor to prevent oscillation)
-			float requiredForce = tangentialSpeed * particle.Mass / DeltaTime * 0.8f;
+			float requiredForce = tangentialSpeed * mass / DeltaTime * 0.8f;
 			float frictionForceMag = min(maxFrictionForce, requiredForce);
 
 			// Apply friction as velocity change
-			float3 frictionAccel = frictionDir * frictionForceMag / particle.Mass;
-			particle.Velocity += frictionAccel * DeltaTime;
+			float3 frictionAccel = frictionDir * frictionForceMag / mass;
+			velocity += frictionAccel * DeltaTime;
 		}
 	}
 
-	Particles[idx] = particle;
+	// Write back to SOA buffers
+	Velocities[idx3] = velocity.x;
+	Velocities[idx3 + 1] = velocity.y;
+	Velocities[idx3 + 2] = velocity.z;
+	Flags[idx] = flags;
 }

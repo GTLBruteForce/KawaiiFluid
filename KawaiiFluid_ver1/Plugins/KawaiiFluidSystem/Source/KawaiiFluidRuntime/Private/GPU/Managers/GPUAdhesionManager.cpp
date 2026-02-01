@@ -368,7 +368,7 @@ void FGPUAdhesionManager::AddClearDetachedFlagPass(
 
 void FGPUAdhesionManager::AddStackPressurePass(
 	FRDGBuilder& GraphBuilder,
-	FRDGBufferUAVRef InParticlesUAV,
+	const FSimulationSpatialData& SpatialData,
 	FRDGBufferSRVRef InAttachmentSRV,
 	FRDGBufferSRVRef InCellCountsSRV,
 	FRDGBufferSRVRef InParticleIndicesSRV,
@@ -425,7 +425,10 @@ void FGPUAdhesionManager::AddStackPressurePass(
 		: GraphBuilder.CreateBuffer(DummyDesc, TEXT("DummyPlanes"));
 
 	FStackPressureCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FStackPressureCS::FParameters>();
-	PassParameters->Particles = InParticlesUAV;
+	// Bind SOA buffers
+	PassParameters->Positions = GraphBuilder.CreateSRV(SpatialData.SoA_Positions, PF_R32_FLOAT);
+	PassParameters->Velocities = GraphBuilder.CreateUAV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
+	PassParameters->Masses = GraphBuilder.CreateSRV(SpatialData.SoA_Masses, PF_R32_FLOAT);
 	PassParameters->Attachments = InAttachmentSRV;
 	PassParameters->CellCounts = InCellCountsSRV;
 	PassParameters->ParticleIndices = InParticleIndicesSRV;

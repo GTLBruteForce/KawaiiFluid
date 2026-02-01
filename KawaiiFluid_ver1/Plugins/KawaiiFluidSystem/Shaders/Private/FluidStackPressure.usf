@@ -11,10 +11,14 @@
 #include "FluidCollisionPrimitives.ush"
 
 //=============================================================================
-// Shader Parameters
+// Shader Parameters (SOA - Structure of Arrays)
 //=============================================================================
 
-RWStructuredBuffer<FGPUFluidParticle> Particles;
+// Fluid particle SOA buffers
+Buffer<float> Positions;                // float3 packed as 3 floats (read-only for neighbor search)
+RWBuffer<float> Velocities;             // float3 packed as 3 floats (read/write)
+Buffer<float> Masses;                   // float (read-only for weight calculation)
+
 StructuredBuffer<FGPUParticleAttachment> Attachments;
 StructuredBuffer<uint> CellCounts;
 StructuredBuffer<uint> ParticleIndices;
@@ -108,8 +112,10 @@ void StackPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    FGPUFluidParticle particle = Particles[idx];
-    float3 pos = particle.Position;
+    // Read from SOA buffers
+    uint idx3 = idx * 3;
+    float3 pos = float3(Positions[idx3], Positions[idx3 + 1], Positions[idx3 + 2]);
+    float3 velocity = float3(Velocities[idx3], Velocities[idx3 + 1], Velocities[idx3 + 2]);
 
     // Get surface normal at current position
     float3 surfaceNormal = GetAttachmentSurfaceNormal(attachment, pos);
@@ -173,8 +179,12 @@ void StackPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                         continue;
                     }
 
-                    FGPUFluidParticle neighbor = Particles[neighborIdx];
-                    float3 toNeighbor = neighbor.Position - pos;
+                    // Read neighbor from SOA
+                    uint neighborIdx3 = neighborIdx * 3;
+                    float3 neighborPos = float3(Positions[neighborIdx3], Positions[neighborIdx3 + 1], Positions[neighborIdx3 + 2]);
+                    float neighborMass = Masses[neighborIdx];
+
+                    float3 toNeighbor = neighborPos - pos;
                     float distSq = dot(toNeighbor, toNeighbor);
 
                     // Skip if too far or too close
@@ -200,7 +210,7 @@ void StackPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                         // Weight contribution scaled by how much "above" the neighbor is
                         // and by neighbor's mass
                         float heightFactor = heightDiff / dist;  // normalized height contribution
-                        stackWeight += neighbor.Mass * kernelWeight * heightFactor;
+                        stackWeight += neighborMass * kernelWeight * heightFactor;
                     }
                 }
             }
@@ -215,8 +225,11 @@ void StackPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         float3 stackForce = tangentDir * stackWeight * StackPressureScale;
 
         // Apply to velocity
-        particle.Velocity += stackForce * DeltaTime;
+        velocity += stackForce * DeltaTime;
 
-        Particles[idx] = particle;
+        // Write back to SOA
+        Velocities[idx3] = velocity.x;
+        Velocities[idx3 + 1] = velocity.y;
+        Velocities[idx3 + 2] = velocity.z;
     }
 }
