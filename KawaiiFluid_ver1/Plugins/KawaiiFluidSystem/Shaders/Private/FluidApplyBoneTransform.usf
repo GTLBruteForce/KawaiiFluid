@@ -121,8 +121,8 @@ void ApplyBoneTransformCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3 targetPos = boundaryWorldPos + localOffset;
 
 	// =========================================================================
-	// POSITION-BASED CORRECTION (이전 프레임 본 위치 사용)
-	// 현재 프레임 본 위치를 쓰면 한 프레임 빠름 → 이전 프레임 위치 사용
+	// VELOCITY-ONLY CORRECTION (본 델타 기반)
+	// 위치 보정 없이 속도만 본 이동량으로 갱신
 	// PreviousPosition = 이전 프레임에서 저장된 (본 위치 + LocalOffset)
 	// =========================================================================
 
@@ -137,11 +137,7 @@ void ApplyBoneTransformCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		boneVelocity = (targetPos - prevTargetPos) / DeltaTime;
 	}
 
-	// 위치: 이전 프레임 본 위치로 설정 (한 프레임 지연으로 동기화)
-	particle.Position = prevTargetPos;
-	particle.PredictedPosition = prevTargetPos;
-
-	// 속도: 본 속도로 설정
+	// 속도: 본 속도로 설정 (위치/PredictedPosition 보정 없음)
 	particle.Velocity = boneVelocity;
 
 	// Write back

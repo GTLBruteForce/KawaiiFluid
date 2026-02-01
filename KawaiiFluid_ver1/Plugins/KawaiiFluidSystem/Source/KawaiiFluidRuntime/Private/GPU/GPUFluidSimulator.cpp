@@ -1558,7 +1558,7 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 				AnisotropyParams.DensityWeight = CachedAnisotropyParams.DensityWeight;
 
 				// Use same radius as simulation (per Yu & Turk 2013, NVIDIA FleX)
-				AnisotropyParams.SmoothingRadius = Params.SmoothingRadius * 1.0f;
+				AnisotropyParams.SmoothingRadius = Params.SmoothingRadius * 3.0f;
 				AnisotropyParams.CellSize = Params.CellSize;
 
 				// Morton-sorted spatial lookup (cache-friendly sequential access)
