@@ -73,6 +73,38 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Emitter")
 	int32 GetSpawnedParticleCount() const;
 
+	//========================================
+	// Spawn Control API
+	//========================================
+
+	/** Start spawning particles.
+	 *  Fill mode: executes SpawnFill() once.
+	 *  Stream mode: starts continuous spawning. */
+	UFUNCTION(BlueprintCallable, Category = "Emitter|Control")
+	void StartSpawn();
+
+	/** Stop spawning particles (Stream mode only).
+	 *  Fill mode: no effect (already one-shot). */
+	UFUNCTION(BlueprintCallable, Category = "Emitter|Control")
+	void StopSpawn();
+
+	/** Toggle spawn state.
+	 *  If spawning, stops. If stopped, starts. */
+	UFUNCTION(BlueprintCallable, Category = "Emitter|Control")
+	void ToggleSpawn();
+
+	/** Check if currently spawning (Stream mode) or has spawned (Fill mode) */
+	UFUNCTION(BlueprintPure, Category = "Emitter|Control")
+	bool IsSpawning() const;
+
+	/** Set emitter enabled state */
+	UFUNCTION(BlueprintCallable, Category = "Emitter|Control")
+	void SetEnabled(bool bNewEnabled);
+
+	/** Get emitter enabled state */
+	UFUNCTION(BlueprintPure, Category = "Emitter|Control")
+	bool IsEnabled() const;
+
 protected:
 	//========================================
 	// Components

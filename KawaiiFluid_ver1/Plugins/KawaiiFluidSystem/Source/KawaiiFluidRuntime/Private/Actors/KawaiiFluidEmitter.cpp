@@ -58,3 +58,88 @@ int32 AKawaiiFluidEmitter::GetSpawnedParticleCount() const
 {
 	return EmitterComponent ? EmitterComponent->GetSpawnedParticleCount() : 0;
 }
+
+//========================================
+// Spawn Control API
+//========================================
+
+void AKawaiiFluidEmitter::StartSpawn()
+{
+	if (!EmitterComponent)
+	{
+		return;
+	}
+
+	if (EmitterComponent->IsFillMode())
+	{
+		EmitterComponent->SpawnFill();
+	}
+	else if (EmitterComponent->IsStreamMode())
+	{
+		EmitterComponent->StartStreamSpawn();
+	}
+}
+
+void AKawaiiFluidEmitter::StopSpawn()
+{
+	if (EmitterComponent && EmitterComponent->IsStreamMode())
+	{
+		EmitterComponent->StopStreamSpawn();
+	}
+}
+
+void AKawaiiFluidEmitter::ToggleSpawn()
+{
+	if (!EmitterComponent)
+	{
+		return;
+	}
+
+	if (EmitterComponent->IsStreamMode())
+	{
+		if (EmitterComponent->IsStreamSpawning())
+		{
+			EmitterComponent->StopStreamSpawn();
+		}
+		else
+		{
+			EmitterComponent->StartStreamSpawn();
+		}
+	}
+	else if (EmitterComponent->IsFillMode())
+	{
+		// Fill mode: just spawn (one-shot)
+		EmitterComponent->SpawnFill();
+	}
+}
+
+bool AKawaiiFluidEmitter::IsSpawning() const
+{
+	if (!EmitterComponent)
+	{
+		return false;
+	}
+
+	if (EmitterComponent->IsStreamMode())
+	{
+		return EmitterComponent->IsStreamSpawning();
+	}
+	else
+	{
+		// Fill mode: check if has spawned
+		return EmitterComponent->GetSpawnedParticleCount() > 0;
+	}
+}
+
+void AKawaiiFluidEmitter::SetEnabled(bool bNewEnabled)
+{
+	if (EmitterComponent)
+	{
+		EmitterComponent->bEnabled = bNewEnabled;
+	}
+}
+
+bool AKawaiiFluidEmitter::IsEnabled() const
+{
+	return EmitterComponent ? EmitterComponent->bEnabled : false;
+}
