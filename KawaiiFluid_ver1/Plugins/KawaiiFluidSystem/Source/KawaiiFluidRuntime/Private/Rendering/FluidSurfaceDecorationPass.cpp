@@ -342,8 +342,8 @@ void RenderFluidSurfaceDecorationPass(
 	PassParameters->GlobalOpacity = Params.LayerFinalOpacity;
 	PassParameters->BlendWithFluidColor = Params.LayerBlendWithFluidColor;
 
-	// Foam (auto-enable if texture is assigned)
-	PassParameters->bFoamEnabled = (Params.Foam.bEnabled || bFoamHasTexture) ? 1 : 0;
+	// Foam respect bEnabled flag only
+	PassParameters->bFoamEnabled = Params.Foam.bEnabled ? 1 : 0;
 	PassParameters->FoamColor = Params.Foam.FoamColor;
 	PassParameters->FoamVelocityThreshold = Params.Foam.VelocityThreshold;
 	PassParameters->FoamIntensity = Params.Foam.Intensity;

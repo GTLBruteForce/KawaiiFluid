@@ -450,19 +450,19 @@ void CalculateVelocityBasedWithVelocity(
 		float LogScale2 = -LogScale1 * 0.5f;
 		float LogScale3 = LogScale2;
 
-		// Clamp in log space
-		float LogMin = log(max(AnisotropyMin, 0.001f));
-		float LogMax = log(max(AnisotropyMax, 0.001f));
-		LogScale1 = clamp(LogScale1, LogMin, LogMax);
-		LogScale2 = clamp(LogScale2, LogMin, LogMax);
-		LogScale3 = clamp(LogScale3, LogMin, LogMax);
-
 		// Re-center logs to maintain volume = 1.0
 		float LogSum = LogScale1 + LogScale2 + LogScale3;
 		float LogAvg = LogSum / 3.0f;
 		LogScale1 -= LogAvg;
 		LogScale2 -= LogAvg;
 		LogScale3 -= LogAvg;
+
+		// Final clamp in log space (only once, after all operations)
+		float LogMin = log(max(AnisotropyMin, 0.001f));
+		float LogMax = log(max(AnisotropyMax, 0.001f));
+		LogScale1 = clamp(LogScale1, LogMin, LogMax);
+		LogScale2 = clamp(LogScale2, LogMin, LogMax);
+		LogScale3 = clamp(LogScale3, LogMin, LogMax);
 
 		// Convert back to linear space
 		Scale1 = exp(LogScale1);
@@ -847,21 +847,14 @@ void CalculateDensityBased(
 	LogScale2 *= AnisotropyScale;
 	LogScale3 *= AnisotropyScale;
 
-	// Step 3: Clamp in log space to prevent extreme shapes
-	float LogMin = log(max(AnisotropyMin, 0.001f));
-	float LogMax = log(max(AnisotropyMax, 0.001f));
-	LogScale1 = clamp(LogScale1, LogMin, LogMax);
-	LogScale2 = clamp(LogScale2, LogMin, LogMax);
-	LogScale3 = clamp(LogScale3, LogMin, LogMax);
-
-	// Step 4: Re-center logs to maintain volume = 1.0 (sum of logs = 0)
+	// Step 3: Re-center logs to maintain volume = 1.0 (sum of logs = 0)
 	float LogSum = LogScale1 + LogScale2 + LogScale3;
 	float LogAvg = LogSum / 3.0f;
 	LogScale1 -= LogAvg;
 	LogScale2 -= LogAvg;
 	LogScale3 -= LogAvg;
 
-	// Step 5: Neighbor-count based blending
+	// Step 4: Neighbor-count based blending
 	// Surface particles (fewer neighbors) get partial anisotropy
 	// Internal particles (more neighbors) get full anisotropy
 	float BlendFactor = saturate(
@@ -872,6 +865,13 @@ void CalculateDensityBased(
 	LogScale1 *= BlendFactor;
 	LogScale2 *= BlendFactor;
 	LogScale3 *= BlendFactor;
+
+	// Step 5: Final clamp in log space (only once, after all operations)
+	float LogMin = log(max(AnisotropyMin, 0.001f));
+	float LogMax = log(max(AnisotropyMax, 0.001f));
+	LogScale1 = clamp(LogScale1, LogMin, LogMax);
+	LogScale2 = clamp(LogScale2, LogMin, LogMax);
+	LogScale3 = clamp(LogScale3, LogMin, LogMax);
 
 	// Step 6: Convert back to linear space
 	Scale1 = exp(LogScale1);
@@ -1037,51 +1037,58 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 	else // MODE_HYBRID
 	{
-		// Hybrid: density axes + velocity stretching (use effective velocity)
-		// Both operations in log space for volume preservation
-		CalculateDensityBased(Idx, Axis1, Axis2, Axis3, Scale1, Scale2, Scale3, NeighborCount);
+		// Hybrid: blend between density-based and velocity-based using DensityWeight
+		// DensityWeight = 1.0: pure density, DensityWeight = 0.0: pure velocity
 
-		// Apply velocity stretching in log space
-		float Speed = length(EffectiveVelocity);
-		if (Speed > 0.001f)
+		// Calculate density-based anisotropy
+		float3 DensityAxis1, DensityAxis2, DensityAxis3;
+		float DensityScale1, DensityScale2, DensityScale3;
+		CalculateDensityBased(Idx, DensityAxis1, DensityAxis2, DensityAxis3,
+		                      DensityScale1, DensityScale2, DensityScale3, NeighborCount);
+
+		// Calculate velocity-based anisotropy
+		float3 VelocityAxis1, VelocityAxis2, VelocityAxis3;
+		float VelocityScale1, VelocityScale2, VelocityScale3;
+		CalculateVelocityBasedWithVelocity(EffectiveVelocity,
+		                                   VelocityAxis1, VelocityAxis2, VelocityAxis3,
+		                                   VelocityScale1, VelocityScale2, VelocityScale3);
+
+		// Blend scales in log space for volume preservation
+		float LogDens1 = log(max(DensityScale1, 0.001f));
+		float LogDens2 = log(max(DensityScale2, 0.001f));
+		float LogDens3 = log(max(DensityScale3, 0.001f));
+		float LogVel1 = log(max(VelocityScale1, 0.001f));
+		float LogVel2 = log(max(VelocityScale2, 0.001f));
+		float LogVel3 = log(max(VelocityScale3, 0.001f));
+
+		float LogScale1 = lerp(LogVel1, LogDens1, DensityWeight);
+		float LogScale2 = lerp(LogVel2, LogDens2, DensityWeight);
+		float LogScale3 = lerp(LogVel3, LogDens3, DensityWeight);
+
+		// Final clamp in log space
+		float LogMin = log(max(AnisotropyMin, 0.001f));
+		float LogMax = log(max(AnisotropyMax, 0.001f));
+		LogScale1 = clamp(LogScale1, LogMin, LogMax);
+		LogScale2 = clamp(LogScale2, LogMin, LogMax);
+		LogScale3 = clamp(LogScale3, LogMin, LogMax);
+
+		Scale1 = exp(LogScale1);
+		Scale2 = exp(LogScale2);
+		Scale3 = exp(LogScale3);
+
+		// Blend axes: use density axes when DensityWeight > 0.5, velocity axes otherwise
+		// This provides a hard transition to avoid axis interpolation artifacts
+		if (DensityWeight > 0.5f)
 		{
-			float3 VelDir = EffectiveVelocity / Speed;
-
-			// Convert current scales to log space
-			float LogScale1 = log(max(Scale1, 0.001f));
-			float LogScale2 = log(max(Scale2, 0.001f));
-			float LogScale3 = log(max(Scale3, 0.001f));
-
-			// Calculate velocity stretch in log space
-			float VelStretchFactor = Speed * VelocityStretchFactor * AnisotropyScale;
-			float LogVelStretch = log(max(1.0f + VelStretchFactor, 0.001f));
-
-			// Project velocity onto each axis and add stretch in log space
-			float Proj1 = abs(dot(VelDir, Axis1));
-			float Proj2 = abs(dot(VelDir, Axis2));
-			float Proj3 = abs(dot(VelDir, Axis3));
-			LogScale1 += LogVelStretch * Proj1;
-			LogScale2 += LogVelStretch * Proj2;
-			LogScale3 += LogVelStretch * Proj3;
-
-			// Clamp in log space
-			float LogMin = log(max(AnisotropyMin, 0.001f));
-			float LogMax = log(max(AnisotropyMax, 0.001f));
-			LogScale1 = clamp(LogScale1, LogMin, LogMax);
-			LogScale2 = clamp(LogScale2, LogMin, LogMax);
-			LogScale3 = clamp(LogScale3, LogMin, LogMax);
-
-			// Re-center logs to maintain volume = 1.0
-			float LogSum = LogScale1 + LogScale2 + LogScale3;
-			float LogAvg = LogSum / 3.0f;
-			LogScale1 -= LogAvg;
-			LogScale2 -= LogAvg;
-			LogScale3 -= LogAvg;
-
-			// Convert back to linear space
-			Scale1 = exp(LogScale1);
-			Scale2 = exp(LogScale2);
-			Scale3 = exp(LogScale3);
+			Axis1 = DensityAxis1;
+			Axis2 = DensityAxis2;
+			Axis3 = DensityAxis3;
+		}
+		else
+		{
+			Axis1 = VelocityAxis1;
+			Axis2 = VelocityAxis2;
+			Axis3 = VelocityAxis3;
 		}
 	}
 
