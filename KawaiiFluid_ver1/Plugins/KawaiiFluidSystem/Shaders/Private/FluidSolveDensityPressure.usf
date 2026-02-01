@@ -312,6 +312,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
+	// NEAR_BOUNDARY flag check - used later to skip position corrections
+	bool bIsNearBoundary = HasFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_BOUNDARY);
+
 	float3 pos = particle.PredictedPosition;
 
 	// Previous iteration's Lambda (for Jacobi-style update)
@@ -977,8 +980,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	//=========================================================================
 	// Apply Boundary Velocity Transfer
 	// Scale by 1/SolverIterationCount to avoid over-application in multi-iteration solver
+	// Skip for NEAR_BOUNDARY particles (they follow bone velocity)
 	//=========================================================================
-	if (boundaryVelWeight > SMALL_NUMBER && SolverIterationCount > 0)
+	if (boundaryVelWeight > SMALL_NUMBER && SolverIterationCount > 0 && !bIsNearBoundary)
 	{
 		float iterationScale = 1.0f / (float)SolverIterationCount;
 		particle.Velocity += (boundaryVelCorrection / boundaryVelWeight) * iterationScale;
@@ -1005,7 +1009,6 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Apply position correction
 	// PBF formula: Δp = (1/ρ₀) × Σⱼ (λᵢ + λⱼ + s_corr) × ∇W
 	// This is a SUM over neighbors, not an average
-
 	float3 deltaP_cm = deltaP * invRestDensity;
 	particle.PredictedPosition += deltaP_cm;
 
@@ -1013,8 +1016,12 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Apply Position-Based Surface Tension
 	// SurfaceTensionSurfaceThreshold > 0: Surface particles only (water-like)
 	// SurfaceTensionSurfaceThreshold == 0: All particles (jelly-like)
+	// Skip for NEAR_BOUNDARY particles (they follow bone position)
 	//=========================================
-	if (surfaceTensionConstraintCount > 0)
+	float deltaTime = sqrt(max(DeltaTimeSq, 0.0001f));  // Recover DeltaTime from DeltaTimeSq
+	float invDeltaTime = 1.0f / deltaTime;
+
+	if (surfaceTensionConstraintCount > 0 && !bIsNearBoundary)
 	{
 		float3 avgSTCorrection = surfaceTensionCorrection / (float)surfaceTensionConstraintCount;
 
@@ -1039,7 +1046,10 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		if (surfaceScale > 0.01f)
 		{
 			float relaxation = 1.0f - SurfaceTensionVelocityDamping;
-			particle.PredictedPosition += avgSTCorrection * surfaceScale * relaxation;
+			float3 posCorrection = avgSTCorrection * surfaceScale * relaxation;
+			particle.PredictedPosition += posCorrection;
+			// Also update velocity to match position change (for viscosity compatibility)
+			particle.Velocity += posCorrection * invDeltaTime;
 		}
 	}
 
@@ -1047,8 +1057,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Apply Fluid Cohesion (NVIDIA FleX style)
 	// Position-based constraint pulling particles toward rest distance
 	// Creates stringy, honey-like viscous effects
+	// Skip for NEAR_BOUNDARY particles (they follow bone position)
 	//=========================================
-	if (cohesionConstraintCount > 0)
+	if (cohesionConstraintCount > 0 && !bIsNearBoundary)
 	{
 		float3 avgCohesionCorrection = cohesionCorrection / (float)cohesionConstraintCount;
 
@@ -1061,7 +1072,10 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 		// Apply with damping for stability
 		float relaxation = 1.0f - SurfaceTensionVelocityDamping;
-		particle.PredictedPosition += avgCohesionCorrection * relaxation;
+		float3 posCorrection = avgCohesionCorrection * relaxation;
+		particle.PredictedPosition += posCorrection;
+		// Also update velocity to match position change (for viscosity compatibility)
+		particle.Velocity += posCorrection * invDeltaTime;
 	}
 
 	Particles[idx] = particle;

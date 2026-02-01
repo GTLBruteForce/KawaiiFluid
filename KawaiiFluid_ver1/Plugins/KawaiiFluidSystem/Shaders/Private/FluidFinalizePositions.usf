@@ -31,11 +31,23 @@ void FinalizePositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	FGPUFluidParticle particle = Particles[idx];
 
-	// Skip CPU-attached particles only (they follow bone position directly)
+	// Skip CPU-attached particles (they follow bone position directly)
 	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 	{
 		// For CPU-attached particles, just sync position
 		particle.Position = particle.PredictedPosition;
+		Particles[idx] = particle;
+		return;
+	}
+
+	// NEAR_BOUNDARY particles: position and velocity already set by ApplyBoneTransform
+	// Don't recalculate velocity from position change (would cause explosion)
+	if (HasFlag(particle.Flags, GPU_PARTICLE_FLAG_NEAR_BOUNDARY))
+	{
+		particle.Position = particle.PredictedPosition;
+		// Keep bone velocity, just apply damping
+		particle.Velocity *= GlobalDamping;
+		particle.Flags = ClearFlag(particle.Flags, GPU_PARTICLE_FLAG_JUST_DETACHED);
 		Particles[idx] = particle;
 		return;
 	}

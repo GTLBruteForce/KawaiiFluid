@@ -121,25 +121,28 @@ void ApplyBoneTransformCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3 targetPos = boundaryWorldPos + localOffset;
 
 	// =========================================================================
-	// VELOCITY-ONLY CORRECTION (위치 텔레포트 없음!)
-	// 위치를 직접 바꾸지 않고, bone이 이동한 만큼의 속도만 설정
-	// 물리 시뮬레이션이 position += velocity * dt로 자연스럽게 이동시킴
-	// 이렇게 하면 순간이동으로 인한 밀도 급증/압력 폭발 방지
+	// POSITION-BASED CORRECTION (이전 프레임 본 위치 사용)
+	// 현재 프레임 본 위치를 쓰면 한 프레임 빠름 → 이전 프레임 위치 사용
+	// PreviousPosition = 이전 프레임에서 저장된 (본 위치 + LocalOffset)
 	// =========================================================================
 
+	// 이전 프레임의 본 위치 사용 (PreviousPosition에 이미 저장되어 있음)
+	// PreviousPosition = 이전 프레임의 (boundaryWorldPos + localOffset)
+	float3 prevTargetPos = attachment.PreviousPosition;
+
+	// 본 이동 속도 = (현재 본 위치 - 이전 본 위치) / dt
+	float3 boneVelocity = float3(0, 0, 0);
 	if (DeltaTime > 0.0001f)
 	{
-		// 현재 위치에서 목표 위치까지의 변위
-		float3 displacement = targetPos - particle.Position;
-
-		// 한 프레임에 이 거리를 이동하기 위한 속도
-		// velocity = displacement / dt → position += velocity * dt = displacement
-		particle.Velocity = displacement / DeltaTime;
+		boneVelocity = (targetPos - prevTargetPos) / DeltaTime;
 	}
 
-	// 위치는 건드리지 않음! 물리가 알아서 이동시킴
-	// particle.Position = 변경 안함
-	// particle.PredictedPosition = 변경 안함
+	// 위치: 이전 프레임 본 위치로 설정 (한 프레임 지연으로 동기화)
+	particle.Position = prevTargetPos;
+	particle.PredictedPosition = prevTargetPos;
+
+	// 속도: 본 속도로 설정
+	particle.Velocity = boneVelocity;
 
 	// Write back
 	Particles[idx] = particle;
