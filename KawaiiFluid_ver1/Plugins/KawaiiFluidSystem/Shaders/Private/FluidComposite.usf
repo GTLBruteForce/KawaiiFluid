@@ -871,19 +871,41 @@ void CalculateRefraction(
 	float EdgeMask = saturate(abs(Surface.Normal.z) * 2.0);
 	float RefractionMask = ThicknessMask * EdgeMask;
 
-	// Calculate refraction offset
-	float2 RefractOffset = Surface.Normal.xy * RefractiveIndex * RefractionScale * RefractionMask;
+	// Fluid view position (reference for depth comparison)
+	float3 FluidViewPos = ReconstructViewPosition(UV, Surface.Depth);
 
-	// Edge fade: reduce refraction near screen edges where it would sample outside the screen
-	// This addresses the fundamental limitation of screen-space refraction
-	float EdgeFadeDistance = 0.1;  // 10% of screen from each edge
-	float2 EdgeFade = float2(
-		(RefractOffset.x < 0) ? smoothstep(0.0, EdgeFadeDistance, UV.x) : smoothstep(0.0, EdgeFadeDistance, 1.0 - UV.x),
-		(RefractOffset.y < 0) ? smoothstep(0.0, EdgeFadeDistance, UV.y) : smoothstep(0.0, EdgeFadeDistance, 1.0 - UV.y)
-	);
-	RefractOffset *= EdgeFade;
+	// =========================================================================
+	// Physics-based refraction using Snell's Law
+	// =========================================================================
 
-	float2 RefractedUV_Raw = UV + RefractOffset;  // Don't clamp yet - need to measure how far out of bounds
+	// Incident direction: from camera to surface (FluidViewPos IS the direction from origin)
+	float3 IncidentDir = normalize(FluidViewPos);
+
+	// Snell's Law: n1 * sin(θ1) = n2 * sin(θ2)
+	// eta = n1/n2 = 1.0/IOR (air to fluid)
+	float eta = 1.0 / RefractiveIndex;
+
+	// Calculate refracted direction
+	float3 RefractDir = refract(IncidentDir, Surface.Normal, eta);
+
+	// Check for total internal reflection
+	bool bTotalInternalReflection = (length(RefractDir) < 0.001);
+
+	// Distance to background (depth difference)
+	float DistToBackground = max(SceneLinearDepth - Surface.Depth, 1.0);
+
+	// Apparent depth formula: objects underwater appear at reduced depth
+	// apparent_depth = real_depth * (n1/n2) where n1=air(1.0), n2=water(IOR)
+	// eta = 1.0/IOR is already the ratio we need
+	float ApparentDepth = DistToBackground * eta;
+	float RefractDistance = ApparentDepth * RefractionScale;
+
+	// Calculate hit position and project to screen
+	float3 HitViewPos = FluidViewPos + RefractDir * RefractDistance;
+	float2 RefractedUV_Raw = bTotalInternalReflection ? UV : ProjectToScreenUV(HitViewPos);
+
+	// Apply refraction mask to blend between refracted and original UV
+	RefractedUV_Raw = lerp(UV, RefractedUV_Raw, RefractionMask);
 
 	// Calculate how far the UV is out of bounds (0 = in bounds, >0 = out of bounds)
 	float2 OutOfBoundsLow = max(0.0 - RefractedUV_Raw, 0.0);   // How far below 0
@@ -897,27 +919,29 @@ void CalculateRefraction(
 	// Now clamp UV for sampling
 	float2 RefractedUV = saturate(RefractedUV_Raw);
 
-	// Fluid view position (reference for depth comparison)
-	float3 FluidViewPos = ReconstructViewPosition(UV, Surface.Depth);
-
-	// Check if direct refraction is valid (refracted point should be behind fluid surface)
+	// Check if direct refraction is valid
 	float2 RefractedSceneUV = RefractedUV * SceneUVScale;
 	float RefractedDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(PointClampSampler, RefractedSceneUV, 0).r);
-	float3 RefractedViewPos = ReconstructViewPosition(RefractedUV, RefractedDepth);
 
-	// Check if refracted position is behind fluid AND not sky/background
-	// Sky has very large depth values that would pass the "behind fluid" test
-	// but sampling sky through refraction looks incorrect
+	// Reconstruct 3D view space position of the sampled point
+	float3 SampleViewPos = ReconstructViewPosition(RefractedUV, RefractedDepth);
+
+	// Vector from fluid surface to sampled point
+	float3 FluidToSample = SampleViewPos - FluidViewPos;
+
+	// The sample is valid if it's in the direction of the refracted ray (behind the fluid)
+	// If dot product is positive, sample is along refraction direction (behind fluid surface)
+	// If dot product is negative, sample is opposite direction (in front of fluid surface)
+	float DotWithRefractDir = dot(FluidToSample, RefractDir);
+
 	bool bNotSky = (RefractedDepth < BACKGROUND_DEPTH_THRESH);
-	bool bDepthValid = (RefractedViewPos.z < FluidViewPos.z) && bNotSky;
+	bool bDepthValid = (DotWithRefractDir > 0.0) && bNotSky;
 
-	// If depth is valid, use refracted color blended with original based on edge proximity
 	if (bDepthValid)
 	{
 		float3 RefractedColor = SceneColorTexture.Sample(InputSampler, RefractedSceneUV).rgb;
 		float3 OriginalColor = SceneColorTexture.Sample(InputSampler, SceneUV).rgb;
 
-		// Blend between original and refracted based on how much UV is out of bounds
 		OutRefractedColor = lerp(OriginalColor, RefractedColor, InBoundsBlend);
 		OutRefractedDepth = RefractedDepth;
 		OutRefractionValidity = InBoundsBlend;
@@ -961,20 +985,37 @@ void CalculateRefraction(
 		}
 		NeighborNormal = normalize(NeighborNormal);
 
-		// Calculate neighbor's refracted UV
-		float2 NeighborRefractOffset = NeighborNormal.xy * RefractiveIndex * RefractionScale * RefractionMask;
-		float2 NeighborRefractedUV = saturate(NeighborUV + NeighborRefractOffset);
+		// Physics-based refraction for neighbor
+		float3 NeighborFluidViewPos = ReconstructViewPosition(NeighborUV, NeighborFluidDepth);
+		float3 NeighborIncidentDir = normalize(NeighborFluidViewPos);
+		float3 NeighborRefractDir = refract(NeighborIncidentDir, NeighborNormal, eta);
+
+		float2 NeighborSceneUV = NeighborUV * SceneUVScale;
+		float NeighborSceneDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(PointClampSampler, NeighborSceneUV, 0).r);
+		float NeighborDistToBackground = max(NeighborSceneDepth - NeighborFluidDepth, 1.0);
+		float NeighborApparentDepth = NeighborDistToBackground * eta;
+		float NeighborRefractDistance = NeighborApparentDepth * RefractionScale;
+
+		float3 NeighborHitViewPos = NeighborFluidViewPos + NeighborRefractDir * NeighborRefractDistance;
+		float2 NeighborRefractedUV = (length(NeighborRefractDir) < 0.001) ? NeighborUV : ProjectToScreenUV(NeighborHitViewPos);
+		NeighborRefractedUV = lerp(NeighborUV, NeighborRefractedUV, RefractionMask);
+		NeighborRefractedUV = saturate(NeighborRefractedUV);
 
 		// Check if neighbor's refraction is valid
 		float2 NeighborRefractedSceneUV = NeighborRefractedUV * SceneUVScale;
 		float NeighborRefractedDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(PointClampSampler, NeighborRefractedSceneUV, 0).r);
 
-		float3 NeighborFluidViewPos = ReconstructViewPosition(NeighborUV, NeighborFluidDepth);
-		float3 NeighborRefractedViewPos = ReconstructViewPosition(NeighborRefractedUV, NeighborRefractedDepth);
+		// Reconstruct 3D view space position of neighbor's sampled point
+		float3 NeighborSampleViewPos = ReconstructViewPosition(NeighborRefractedUV, NeighborRefractedDepth);
 
-		// Same sky check for neighbor refraction
+		// Vector from neighbor's fluid surface to sampled point
+		float3 NeighborFluidToSample = NeighborSampleViewPos - NeighborFluidViewPos;
+
+		// Check if sample is along refraction direction (behind fluid)
+		float NeighborDotWithRefractDir = dot(NeighborFluidToSample, NeighborRefractDir);
+
 		bool bNeighborNotSky = (NeighborRefractedDepth < BACKGROUND_DEPTH_THRESH);
-		bool bNeighborValid = (NeighborRefractedViewPos.z < NeighborFluidViewPos.z) && bNeighborNotSky;
+		bool bNeighborValid = (NeighborDotWithRefractDir > 0.0) && bNeighborNotSky;
 
 		// Screen edge check for neighbor
 		float2 NeighborEdgeDist = min(NeighborRefractedUV, 1.0 - NeighborRefractedUV);

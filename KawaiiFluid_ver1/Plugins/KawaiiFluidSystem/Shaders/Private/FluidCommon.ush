@@ -120,7 +120,8 @@ float3 ReconstructViewPositionFromDepth(float2 ScreenUV, float LinearDepth, floa
  */
 float2 ProjectViewPositionToScreenUV(float3 ViewPos, float4x4 ProjectionMatrix)
 {
-	float4 ClipPos = mul(float4(ViewPos, 1.0), ProjectionMatrix);
+	float3 ProjSpacePos = float3(-ViewPos.x, -ViewPos.y, -ViewPos.z);
+	float4 ClipPos = mul(float4(ProjSpacePos, 1.0), ProjectionMatrix);
 	ClipPos.xy /= ClipPos.w;
 
 	// Clip Space -> UV (Y-axis flip applied)
