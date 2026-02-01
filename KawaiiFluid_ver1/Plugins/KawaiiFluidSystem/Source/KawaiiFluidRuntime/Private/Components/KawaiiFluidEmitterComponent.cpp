@@ -594,6 +594,7 @@ void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 	{
 		// === MANUAL MODE: Time-based layer spawning ===
 		// Spawn rate is fixed at ManualLayersPerSecond, independent of velocity
+		// Layer position spacing is velocity-based to ensure proper continuity during frame drops
 		const float LayerInterval = 1.0f / FMath::Max(ManualLayersPerSecond, 1.0f);
 		SpawnAccumulator += DeltaTime;
 
@@ -603,15 +604,17 @@ void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 		}
 
 		// Calculate number of layers to spawn
-		// Clamp to MaxLayersPerFrame to prevent particle explosion on frame drops
+		// No MaxLayersPerFrame limit - velocity-based spacing prevents overlap
 		const int32 RawLayerCount = FMath::FloorToInt(SpawnAccumulator / LayerInterval);
-		LayerCount = FMath::Min(RawLayerCount, MaxLayersPerFrame);
+		LayerCount = RawLayerCount;
 
-		// Discard excess accumulated time (same safety as Automatic mode)
-		SpawnAccumulator = FMath::Fmod(SpawnAccumulator, LayerInterval);
+		// Calculate time residual and convert to distance for proper positioning
+		// This ensures continuity with previously spawned particles during frame drops
+		const float TimeResidual = FMath::Fmod(SpawnAccumulator, LayerInterval);
+		SpawnAccumulator = TimeResidual;
 
-		// For Manual mode, still use LayerSpacing for position offset calculation
-		ResidualDistance = 0.0f;
+		// Velocity-based residual distance: how far the "newest" layer should be from entrance
+		ResidualDistance = TimeResidual * InitialSpeed;
 	}
 
 	if (LayerCount <= 0)
@@ -656,12 +659,21 @@ void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 
 	// === Spawn layers with position offset (reverse order - oldest first) ===
 	// Like UKawaiiFluidComponent: apply position offset to each layer to prevent overlap
+	// 
+	// Position spacing differs by mode:
+	// - Auto: LayerSpacing (particle spacing based, tied to spawn rate via velocity)
+	// - Manual: Velocity-based spacing (InitialSpeed / ManualLayersPerSecond)
+	//   This ensures proper continuity during frame drops
+	const float LayerPositionSpacing = (StreamSpawnRateMode == EStreamSpawnRateMode::Manual)
+		? (InitialSpeed / FMath::Max(ManualLayersPerSecond, 1.0f))
+		: LayerSpacing;
+
 	for (int32 i = LayerCount - 1; i >= 0; --i)
 	{
 		// Calculate position offset for each layer
 		// i = LayerCount-1: oldest layer (farthest from spawn point)
 		// i = 0: newest layer (closest to spawn point)
-		const float PositionOffset = static_cast<float>(i) * LayerSpacing + ResidualDistance;
+		const float PositionOffset = static_cast<float>(i) * LayerPositionSpacing + ResidualDistance;
 		const FVector OffsetLocation = BaseLocation + OffsetDir * PositionOffset;
 
 		SpawnStreamLayerBatch(OffsetLocation, LayerDir, VelocityDir, InitialSpeed,
