@@ -828,13 +828,16 @@ float3 CalculateVolumeScattering(FFluidSurfaceData Surface)
 // -----------------------------------------------------------------------------
 
 /**
- * Calculate refracted background color with view-space depth rejection.
+ * Calculate refracted background color with neighbor sampling fallback.
+ * When refraction fails (points to object in front of fluid),
+ * sample nearby valid refraction pixels and blend their colors.
+ *
  * @param UV Screen UV coordinate
  * @param Surface Fluid surface data
  * @param SceneLinearDepth Scene depth at original UV
  * @param OutRefractedColor Output refracted background color
  * @param OutRefractedDepth Output depth at refracted position (for caustics)
- * @param OutRefractionValidity Output validity factor (1.0 if refraction used, 0.0 if fallback)
+ * @param OutRefractionValidity Output validity factor (1.0 if direct refraction, 0.0~1.0 for neighbor blend)
  */
 void CalculateRefraction(
 	float2 UV,
@@ -861,30 +864,137 @@ void CalculateRefraction(
 
 	// Calculate refraction offset
 	float2 RefractOffset = Surface.Normal.xy * RefractiveIndex * RefractionScale * RefractionMask;
-	float2 RefractedUV = saturate(UV + RefractOffset);
-	float2 RefractedSceneUV = RefractedUV * SceneUVScale;
 
-	// Sample depth at refracted position
-	OutRefractedDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(InputSampler, RefractedSceneUV, 0).r);
+	// Edge fade: reduce refraction near screen edges where it would sample outside the screen
+	// This addresses the fundamental limitation of screen-space refraction
+	float EdgeFadeDistance = 0.1;  // 10% of screen from each edge
+	float2 EdgeFade = float2(
+		(RefractOffset.x < 0) ? smoothstep(0.0, EdgeFadeDistance, UV.x) : smoothstep(0.0, EdgeFadeDistance, 1.0 - UV.x),
+		(RefractOffset.y < 0) ? smoothstep(0.0, EdgeFadeDistance, UV.y) : smoothstep(0.0, EdgeFadeDistance, 1.0 - UV.y)
+	);
+	RefractOffset *= EdgeFade;
 
-	// View-space depth comparison for proper rejection
+	float2 RefractedUV_Raw = UV + RefractOffset;  // Don't clamp yet - need to measure how far out of bounds
+
+	// Calculate how far the UV is out of bounds (0 = in bounds, >0 = out of bounds)
+	float2 OutOfBoundsLow = max(0.0 - RefractedUV_Raw, 0.0);   // How far below 0
+	float2 OutOfBoundsHigh = max(RefractedUV_Raw - 1.0, 0.0);  // How far above 1
+	float OutOfBoundsAmount = length(OutOfBoundsLow + OutOfBoundsHigh);
+
+	// Blend factor: 1.0 when in bounds, fades to 0.0 as UV goes further out of bounds
+	// The divisor (0.05) controls how quickly the fade happens
+	float InBoundsBlend = saturate(1.0 - OutOfBoundsAmount / 0.05);
+
+	// Now clamp UV for sampling
+	float2 RefractedUV = saturate(RefractedUV_Raw);
+
+	// Fluid view position (reference for depth comparison)
 	float3 FluidViewPos = ReconstructViewPosition(UV, Surface.Depth);
-	float3 RefractedSceneViewPos = ReconstructViewPosition(RefractedUV, OutRefractedDepth);
 
-	// More negative Z = farther from camera
-	bool bRefractedSceneIsBehindFluid = (RefractedSceneViewPos.z < FluidViewPos.z);
+	// Check if direct refraction is valid (refracted point should be behind fluid surface)
+	float2 RefractedSceneUV = RefractedUV * SceneUVScale;
+	float RefractedDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(PointClampSampler, RefractedSceneUV, 0).r);
+	float3 RefractedViewPos = ReconstructViewPosition(RefractedUV, RefractedDepth);
 
-	// Screen edge check
-	float2 EdgeDist = min(RefractedUV, 1.0 - RefractedUV);
-	bool bInsideScreen = (min(EdgeDist.x, EdgeDist.y) > 0.01);
+	// Check if refracted position is behind fluid AND not sky/background
+	// Sky has very large depth values that would pass the "behind fluid" test
+	// but sampling sky through refraction looks incorrect
+	bool bNotSky = (RefractedDepth < BACKGROUND_DEPTH_THRESH);
+	bool bDepthValid = (RefractedViewPos.z < FluidViewPos.z) && bNotSky;
 
-	// Binary decision: use refracted UV only if valid
-	bool bUseRefraction = bRefractedSceneIsBehindFluid && bInsideScreen;
-	float2 FinalUV = bUseRefraction ? RefractedUV : UV;
-	float2 FinalSceneUV = FinalUV * SceneUVScale;
+	// If depth is valid, use refracted color blended with original based on edge proximity
+	if (bDepthValid)
+	{
+		float3 RefractedColor = SceneColorTexture.Sample(InputSampler, RefractedSceneUV).rgb;
+		float3 OriginalColor = SceneColorTexture.Sample(InputSampler, SceneUV).rgb;
 
-	OutRefractedColor = SceneColorTexture.Sample(InputSampler, FinalSceneUV).rgb;
-	OutRefractionValidity = bUseRefraction ? 1.0 : 0.0;
+		// Blend between original and refracted based on how much UV is out of bounds
+		OutRefractedColor = lerp(OriginalColor, RefractedColor, InBoundsBlend);
+		OutRefractedDepth = RefractedDepth;
+		OutRefractionValidity = InBoundsBlend;
+		return;
+	}
+
+	// Direct refraction failed - sample valid neighbors
+	float2 PixelSize = 1.0 / ViewportSize;
+	float SearchRadius = 8.0;  // Search radius in pixels
+
+	// 8 directions
+	float2 Directions[8] = {
+		float2(1, 0), float2(-1, 0), float2(0, 1), float2(0, -1),
+		float2(0.707, 0.707), float2(-0.707, 0.707), float2(0.707, -0.707), float2(-0.707, -0.707)
+	};
+
+	float3 AccumColor = float3(0, 0, 0);
+	float AccumDepth = 0.0;
+	float ValidWeight = 0.0;
+
+	for (int i = 0; i < 8; i++)
+	{
+		// Sample at neighbor position
+		float2 NeighborUV = UV + Directions[i] * PixelSize * SearchRadius;
+		NeighborUV = saturate(NeighborUV);
+
+		// Get neighbor's fluid depth
+		float NeighborFluidDepth = FluidDepthTexture.SampleLevel(PointClampSampler, NeighborUV, 0).r;
+
+		// Skip if no fluid at neighbor
+		if (NeighborFluidDepth > BACKGROUND_DEPTH_THRESH)
+		{
+			continue;
+		}
+
+		// Get neighbor's normal for refraction calculation
+		float3 NeighborNormal = FluidNormalTexture.SampleLevel(PointClampSampler, NeighborUV, 0).xyz;
+		if (length(NeighborNormal) < 0.1)
+		{
+			continue;
+		}
+		NeighborNormal = normalize(NeighborNormal);
+
+		// Calculate neighbor's refracted UV
+		float2 NeighborRefractOffset = NeighborNormal.xy * RefractiveIndex * RefractionScale * RefractionMask;
+		float2 NeighborRefractedUV = saturate(NeighborUV + NeighborRefractOffset);
+
+		// Check if neighbor's refraction is valid
+		float2 NeighborRefractedSceneUV = NeighborRefractedUV * SceneUVScale;
+		float NeighborRefractedDepth = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(PointClampSampler, NeighborRefractedSceneUV, 0).r);
+
+		float3 NeighborFluidViewPos = ReconstructViewPosition(NeighborUV, NeighborFluidDepth);
+		float3 NeighborRefractedViewPos = ReconstructViewPosition(NeighborRefractedUV, NeighborRefractedDepth);
+
+		// Same sky check for neighbor refraction
+		bool bNeighborNotSky = (NeighborRefractedDepth < BACKGROUND_DEPTH_THRESH);
+		bool bNeighborValid = (NeighborRefractedViewPos.z < NeighborFluidViewPos.z) && bNeighborNotSky;
+
+		// Screen edge check for neighbor
+		float2 NeighborEdgeDist = min(NeighborRefractedUV, 1.0 - NeighborRefractedUV);
+		bNeighborValid = bNeighborValid && (min(NeighborEdgeDist.x, NeighborEdgeDist.y) > 0.01);
+
+		if (bNeighborValid)
+		{
+			// Neighbor has valid refraction - accumulate
+			float3 NeighborColor = SceneColorTexture.SampleLevel(InputSampler, NeighborRefractedSceneUV, 0).rgb;
+			AccumColor += NeighborColor;
+			AccumDepth += NeighborRefractedDepth;
+			ValidWeight += 1.0;
+		}
+	}
+
+	if (ValidWeight > 0.0)
+	{
+		// Use averaged neighbor colors
+		OutRefractedColor = AccumColor / ValidWeight;
+		OutRefractedDepth = AccumDepth / ValidWeight;
+		OutRefractionValidity = ValidWeight / 8.0;  // How many neighbors were valid
+	}
+	else
+	{
+		// No valid neighbors - fallback to original scene color
+		OutRefractedColor = SceneColorTexture.Sample(InputSampler, SceneUV).rgb;
+		OutRefractedDepth = SceneLinearDepth;
+		OutRefractionValidity = 0.0;
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -910,10 +1020,11 @@ float CalculateCaustics(float2 UV, FFluidSurfaceData Surface, float RefractedDep
 	float Brightness = 1.0 + Pattern * CausticIntensity;
 
 	// Fade based on fluid properties
+	// RefractionValidity removed - apply caustics even in fallback regions
 	float DepthFade = saturate(1.0 - Surface.Depth * 0.0003);
 	float ThicknessFade = exp(-Surface.Thickness * 0.015);
 	float TransparencyFade = saturate(1.0 - Opacity * 0.7);
-	float CausticFade = DepthFade * ThicknessFade * TransparencyFade * RefractionValidity;
+	float CausticFade = DepthFade * ThicknessFade * TransparencyFade;
 
 	return lerp(1.0, Brightness, CausticFade);
 }

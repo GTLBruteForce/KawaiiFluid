@@ -159,6 +159,7 @@ void UKawaiiFluidVolumeComponent::PostEditChangeProperty(FPropertyChangedEvent& 
 		{
 			bShowBoundsInEditor = true;
 			bShowBoundsAtRuntime = false;
+			SetVisibility(true);
 		}
 	}
 
