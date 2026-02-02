@@ -26,21 +26,6 @@ enum class EKawaiiFluidEmitterMode : uint8
 };
 
 /**
- * Spawn rate mode for Stream emitter
- */
-UENUM(BlueprintType)
-enum class EStreamSpawnRateMode : uint8
-{
-	/** Spawn rate is automatically determined by InitialSpeed (velocity-based).
-	 *  Faster velocity = higher spawn rate. Natural for water streams. */
-	Automatic UMETA(DisplayName = "Auto"),
-	
-	/** Spawn rate is manually specified as layers per second.
-	 *  Allows independent control of velocity and spawn density. */
-	Manual UMETA(DisplayName = "Manual")
-};
-
-/**
  * Shape type for Shape emitter mode
  */
 UENUM(BlueprintType)
@@ -141,18 +126,16 @@ public:
 		meta = (EditCondition = "EmitterMode == EKawaiiFluidEmitterMode::Stream", EditConditionHides, ClampMin = "1.0"))
 	float StreamRadius = 25.0f;
 
-	/** Spawn rate mode: Automatic (velocity-based) or Manual (fixed rate) */
+	/** Layers per second (target spawn rate).
+	 *  Higher values create denser streams.
+	 *  Position spacing = InitialSpeed / LayersPerSecond.
+	 *  Note: Limited to 1 layer per frame to prevent explosion during frame drops.
+	 *  Effective rate may be lower than this value at low FPS. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Emitter|Stream",
-		meta = (EditCondition = "EmitterMode == EKawaiiFluidEmitterMode::Stream", EditConditionHides))
-	EStreamSpawnRateMode StreamSpawnRateMode = EStreamSpawnRateMode::Automatic;
-
-	/** Manual spawn rate (layers per second).
-	 *  Only used when StreamSpawnRateMode is Manual.
-	 *  Each layer contains multiple particles based on StreamRadius and particle spacing. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Emitter|Stream",
-		meta = (EditCondition = "EmitterMode == EKawaiiFluidEmitterMode::Stream && StreamSpawnRateMode == EStreamSpawnRateMode::Manual", 
-		        EditConditionHides, ClampMin = "1.0", ClampMax = "1000.0"))
-	float ManualLayersPerSecond = 60.0f;
+		meta = (DisplayName = "Layers Per Second",
+		        EditCondition = "EmitterMode == EKawaiiFluidEmitterMode::Stream", 
+		        EditConditionHides, ClampMin = "1.0", ClampMax = "300.0"))
+	float LayersPerSecond = 60.0f;
 
 	/** Enable jitter for stream particles.
 	 *  Adds random offset to particle positions for natural appearance. */
@@ -292,9 +275,6 @@ protected:
 	/** Accumulated time for rate-based spawning */
 	float SpawnAccumulator = 0.0f;
 
-	/** Accumulated distance for HexagonalStream layer spawning */
-	float LayerDistanceAccumulator = 0.0f;
-
 	/** Total particles spawned by this emitter */
 	int32 SpawnedParticleCount = 0;
 
@@ -428,7 +408,6 @@ protected:
 	float StreamParticleSpacing = 0.0f;
 	// Note: StreamJitter moved to UPROPERTY (bUseStreamJitter, StreamJitterAmount)
 	float StreamLayerSpacingRatio = 0.816f;
-	int32 MaxLayersPerFrame = 1;  // Prevents particle explosion on frame drops
 
 	/** Cached SourceID for this emitter (allocated from Subsystem, 0~63 range) */
 	int32 CachedSourceID = -1;

@@ -544,16 +544,14 @@ void UKawaiiFluidEmitterComponent::ProcessContinuousSpawn(float DeltaTime)
 
 void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 {
-	// Calculate Spacing exactly like KawaiiFluidComponent does:
-	// Use StreamParticleSpacing if set, otherwise Preset->SmoothingRadius * 0.56f
-	// Note: 0.56 (not 0.5) to match Fill mode's HCP compensation (1.122x)
-	// This prevents initial high-density causing solver stress at spawn
+	// Get EffectiveSpacing from Preset
 	float EffectiveSpacing = StreamParticleSpacing;
-	if (EffectiveSpacing <= 0.0f)
+	
+	if (AKawaiiFluidVolume* Vol = GetTargetVolume())
 	{
-		if (AKawaiiFluidVolume* Vol = GetTargetVolume())
+		if (UKawaiiFluidPresetDataAsset* Pst = Vol->GetPreset())
 		{
-			if (UKawaiiFluidPresetDataAsset* Pst = Vol->GetPreset())
+			if (EffectiveSpacing <= 0.0f)
 			{
 				EffectiveSpacing = Pst->SmoothingRadius * 0.56f;
 			}
@@ -563,135 +561,83 @@ void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 	{
 		EffectiveSpacing = 10.0f;  // fallback
 	}
-	const float LayerSpacing = EffectiveSpacing * StreamLayerSpacingRatio;
 
-	// === Spawn Rate Mode Branching ===
-	int32 LayerCount = 0;
-	float ResidualDistance = 0.0f;
+	// === LayersPerSecond-based spawning ===
+	const float LayerInterval = 1.0f / FMath::Max(LayersPerSecond, 1.0f);
+	SpawnAccumulator += DeltaTime;
 
-	if (StreamSpawnRateMode == EStreamSpawnRateMode::Automatic)
+	// Gate: Time-based (LayersPerSecond)
+	if (SpawnAccumulator < LayerInterval)
 	{
-		// === AUTOMATIC MODE: Velocity-based layer spawning ===
-		// Spawn rate is determined by InitialSpeed - faster velocity = more layers per second
-		const float DistanceThisFrame = InitialSpeed * DeltaTime;
-		LayerDistanceAccumulator += DistanceThisFrame;
+		return;  // Not time yet according to LayersPerSecond
+	}
 
-		if (LayerDistanceAccumulator < LayerSpacing)
-		{
-			return;  // Not enough distance accumulated for a layer
-		}
+	// Calculate layer count
+	int32 LayerCount = FMath::FloorToInt(SpawnAccumulator / LayerInterval);
 
-		// Calculate number of layers to spawn
-		// Clamp to MaxLayersPerFrame to prevent particle explosion on frame drops
-		const int32 RawLayerCount = FMath::FloorToInt(LayerDistanceAccumulator / LayerSpacing);
-		LayerCount = FMath::Min(RawLayerCount, MaxLayersPerFrame);
-
-		// IMPORTANT: Discard ALL excess accumulated distance, not just what we spawned
-		// Only keep the fractional residual from LayerSpacing, discarding any "skipped" layers
-		ResidualDistance = FMath::Fmod(LayerDistanceAccumulator, LayerSpacing);
+	// === Limit to 1 layer per frame to prevent explosion during frame drops ===
+	// Spawning multiple layers in one frame causes overlap (LayerSpacing << ParticleSpacing for slow fluids)
+	// With 1 layer/frame, physics simulation moves previous layer before next spawn, ensuring proper separation
+	constexpr int32 MaxLayersPerFrame = 1;
+	
+	if (LayerCount > MaxLayersPerFrame)
+	{
+		LayerCount = MaxLayersPerFrame;
+		SpawnAccumulator = 0.0f;  // Discard excess time (accept density loss)
 	}
 	else
 	{
-		// === MANUAL MODE: Time-based layer spawning ===
-		// Spawn rate is fixed at ManualLayersPerSecond, independent of velocity
-		// Layer position spacing is velocity-based to ensure proper continuity during frame drops
-		const float LayerInterval = 1.0f / FMath::Max(ManualLayersPerSecond, 1.0f);
-		SpawnAccumulator += DeltaTime;
-
-		if (SpawnAccumulator < LayerInterval)
-		{
-			return;  // Not enough time accumulated for a layer
-		}
-
-		// Calculate number of layers to spawn
-		// No MaxLayersPerFrame limit - velocity-based spacing prevents overlap
-		const int32 RawLayerCount = FMath::FloorToInt(SpawnAccumulator / LayerInterval);
-		LayerCount = RawLayerCount;
-
-		// Calculate time residual and convert to distance for proper positioning
-		// This ensures continuity with previously spawned particles during frame drops
-		const float TimeResidual = FMath::Fmod(SpawnAccumulator, LayerInterval);
-		SpawnAccumulator = TimeResidual;
-
-		// Velocity-based residual distance: how far the "newest" layer should be from entrance
-		ResidualDistance = TimeResidual * InitialSpeed;
-	}
-
-	if (LayerCount <= 0)
-	{
-		return;
+		SpawnAccumulator -= LayerCount * LayerInterval;
 	}
 
 	// === Direction calculation ===
 	const FVector BaseLocation = GetComponentLocation() + SpawnOffset;
 	const FQuat ComponentQuat = GetComponentQuat();
 	
-	// Calculate layer and velocity directions based on bUseWorldSpaceVelocity
 	FVector LayerDir;
 	FVector VelocityDir;
-	FVector OffsetDir;  // Direction for layer position offset
 	
 	if (bUseWorldSpaceVelocity)
 	{
-		// World space: velocity direction is used directly (not rotated by component)
 		VelocityDir = InitialVelocityDirection.GetSafeNormal();
-		LayerDir = VelocityDir;  // Layer perpendicular to velocity
-		OffsetDir = VelocityDir;  // Offset along velocity direction
+		LayerDir = VelocityDir;
 	}
 	else
 	{
-		// Local space: rotate directions with component
 		FVector LocalDir = InitialVelocityDirection.GetSafeNormal();
 		LayerDir = ComponentQuat.RotateVector(LocalDir);
 		VelocityDir = LayerDir;
-		OffsetDir = LayerDir;
 	}
 
-	// === Batch collection arrays ===
+	// === Spawn layers with LayersPerSecond-based spacing ===
+	// LayerSpacing = distance traveled in one LayerInterval
+	const float LayerSpacing = InitialSpeed * LayerInterval;
+	
 	TArray<FVector> AllPositions;
 	TArray<FVector> AllVelocities;
-	
-	// Reserve estimated capacity
-	const float RadiusSq = StreamRadius * StreamRadius;
-	const int32 EstimatedPerLayer = FMath::CeilToInt((PI * RadiusSq) / (EffectiveSpacing * EffectiveSpacing));
-	AllPositions.Reserve(EstimatedPerLayer * LayerCount);
-	AllVelocities.Reserve(EstimatedPerLayer * LayerCount);
 
-	// === Spawn layers with position offset (reverse order - oldest first) ===
-	// Like UKawaiiFluidComponent: apply position offset to each layer to prevent overlap
-	// 
-	// Position spacing differs by mode:
-	// - Auto: LayerSpacing (particle spacing based, tied to spawn rate via velocity)
-	// - Manual: Velocity-based spacing (InitialSpeed / ManualLayersPerSecond)
-	//   This ensures proper continuity during frame drops
-	const float LayerPositionSpacing = (StreamSpawnRateMode == EStreamSpawnRateMode::Manual)
-		? (InitialSpeed / FMath::Max(ManualLayersPerSecond, 1.0f))
-		: LayerSpacing;
-
-	for (int32 i = LayerCount - 1; i >= 0; --i)
+	for (int32 LayerIdx = 0; LayerIdx < LayerCount; ++LayerIdx)
 	{
-		// Calculate position offset for each layer
-		// i = LayerCount-1: oldest layer (farthest from spawn point)
-		// i = 0: newest layer (closest to spawn point)
-		const float PositionOffset = static_cast<float>(i) * LayerPositionSpacing + ResidualDistance;
-		const FVector OffsetLocation = BaseLocation + OffsetDir * PositionOffset;
-
-		SpawnStreamLayerBatch(OffsetLocation, LayerDir, VelocityDir, InitialSpeed,
-			StreamRadius, EffectiveSpacing, AllPositions, AllVelocities);
+		// Position offset based on LayerInterval
+		const FVector LayerPos = BaseLocation + VelocityDir * (LayerIdx * LayerSpacing);
+		
+		SpawnStreamLayerBatch(
+			LayerPos,
+			LayerDir,
+			VelocityDir,
+			InitialSpeed,
+			StreamRadius,
+			EffectiveSpacing,
+			AllPositions,
+			AllVelocities
+		);
 	}
 
-	// === Send all layers in single batch ===
+	// === Send all particles in single batch ===
 	if (AllPositions.Num() > 0)
 	{
 		QueueSpawnRequest(AllPositions, AllVelocities);
 	}
-
-	// === Update accumulator with residual distance (Automatic mode only) ===
-	if (StreamSpawnRateMode == EStreamSpawnRateMode::Automatic)
-	{
-		LayerDistanceAccumulator = ResidualDistance;
-	}
-	// Note: Manual mode's SpawnAccumulator is already updated in the branching logic above
 
 	// === Recycle (Stream mode only): After spawning, remove oldest particles if over MaxParticleCount ===
 	// TODO: Implement Quota system for multiple emitters sharing a Volume
