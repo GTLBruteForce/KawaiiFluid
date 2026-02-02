@@ -37,8 +37,8 @@ struct FGPUBoundaryParticle
 
 // Fluid particle SOA buffers
 RWBuffer<float> Positions;              // float3 packed as 3 floats
-RWBuffer<float> Velocities;             // float3 packed as 3 floats
-RWBuffer<float> Masses;                 // float
+RWBuffer<uint2> PackedVelocities;       // B plan: half3 packed as uint2
+float UniformParticleMass;              // B plan: uniform mass (same for all particles)
 RWBuffer<uint> Flags;                   // uint
 int ParticleCount;
 
@@ -190,7 +190,7 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Read from SOA buffers
 	uint idx3 = idx * 3;
 	uint flags = Flags[idx];
-	float mass = Masses[idx];
+	float mass = UniformParticleMass;
 
 	// Skip if already attached to primitive (existing adhesion system handles this)
 	if (HasFlag(flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
@@ -426,7 +426,7 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	// Read current velocity from SOA
-	float3 velocity = float3(Velocities[idx3], Velocities[idx3 + 1], Velocities[idx3 + 2]);
+	float3 velocity = UnpackVelocity(PackedVelocities[idx]);
 
 	// Apply forces to velocity (with ceiling factor applied to adhesion)
 	float3 totalForce = (adhesionForce + cohesionForce) * ceilingFactor;
@@ -493,8 +493,6 @@ void BoundaryAdhesionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	// Write back to SOA buffers
-	Velocities[idx3] = velocity.x;
-	Velocities[idx3 + 1] = velocity.y;
-	Velocities[idx3 + 2] = velocity.z;
+	PackedVelocities[idx] = PackVelocity(velocity);
 	Flags[idx] = flags;
 }

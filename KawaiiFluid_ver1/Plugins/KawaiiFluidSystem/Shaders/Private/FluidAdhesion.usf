@@ -14,7 +14,7 @@
 // Particle SOA buffers
 RWBuffer<float> Positions;
 RWBuffer<float> PredictedPositions;
-RWBuffer<float> Velocities;
+RWBuffer<uint2> PackedVelocities;  // B plan: half3 packed
 RWBuffer<uint> Flags;
 int ParticleCount;
 float ParticleRadius;
@@ -378,7 +378,7 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	uint idx3 = idx * 3;
 	float3 position = float3(Positions[idx3], Positions[idx3 + 1], Positions[idx3 + 2]);
 	float3 predictedPosition = float3(PredictedPositions[idx3], PredictedPositions[idx3 + 1], PredictedPositions[idx3 + 2]);
-	float3 velocity = float3(Velocities[idx3], Velocities[idx3 + 1], Velocities[idx3 + 2]);
+	float3 velocity = UnpackVelocity(PackedVelocities[idx]);
 	uint flags = Flags[idx];
 	FGPUBoneTransform bone = BoneTransforms[attachment.BoneIndex];
 	float3 previousVelocity = velocity;
@@ -549,9 +549,7 @@ void UpdateAttachedPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	PredictedPositions[idx3] = predictedPosition.x;
 	PredictedPositions[idx3 + 1] = predictedPosition.y;
 	PredictedPositions[idx3 + 2] = predictedPosition.z;
-	Velocities[idx3] = velocity.x;
-	Velocities[idx3 + 1] = velocity.y;
-	Velocities[idx3 + 2] = velocity.z;
+	PackedVelocities[idx] = PackVelocity(velocity);
 	Flags[idx] = flags;
 	Attachments[idx] = attachment;
 }

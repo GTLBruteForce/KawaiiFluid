@@ -181,13 +181,18 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 	TShaderMapRef<FSolveDensityPressureCS> ComputeShader(ShaderMap, PermutationVector);
 
 	FSolveDensityPressureCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FSolveDensityPressureCS::FParameters>();
+
 	// SoA (Structure of Arrays) Particle Buffers
 	PassParameters->Positions = GraphBuilder.CreateUAV(SpatialData.SoA_Positions, PF_R32_FLOAT);
 	PassParameters->PredictedPositions = GraphBuilder.CreateUAV(SpatialData.SoA_PredictedPositions, PF_R32_FLOAT);
-	PassParameters->Velocities = GraphBuilder.CreateUAV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
-	PassParameters->Masses = GraphBuilder.CreateUAV(SpatialData.SoA_Masses, PF_R32_FLOAT);
-	PassParameters->Densities = GraphBuilder.CreateUAV(SpatialData.SoA_Densities, PF_R32_FLOAT);
-	PassParameters->Lambdas = GraphBuilder.CreateUAV(SpatialData.SoA_Lambdas, PF_R32_FLOAT);
+
+	// Half-precision packed buffers (B plan bandwidth optimization - 50% reduction)
+	PassParameters->PackedVelocities = GraphBuilder.CreateUAV(SpatialData.SoA_PackedVelocities, PF_R32G32_UINT);
+	PassParameters->PackedDensityLambda = GraphBuilder.CreateUAV(SpatialData.SoA_PackedDensityLambda, PF_R32_UINT);
+
+	// Uniform particle mass (all particles same mass from Preset)
+	PassParameters->UniformParticleMass = Params.ParticleMass;
+
 	PassParameters->Flags = GraphBuilder.CreateUAV(SpatialData.SoA_Flags, PF_R32_UINT);
 	PassParameters->NeighborCountsBuffer = GraphBuilder.CreateUAV(SpatialData.SoA_NeighborCounts, PF_R32_UINT);
 	// Hash table mode (legacy)
@@ -604,7 +609,7 @@ void FGPUFluidSimulator::AddFinalizePositionsPass(
 	FFinalizePositionsCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FFinalizePositionsCS::FParameters>();
 	PassParameters->Positions = GraphBuilder.CreateUAV(SpatialData.SoA_Positions, PF_R32_FLOAT);
 	PassParameters->PredictedPositions = GraphBuilder.CreateUAV(SpatialData.SoA_PredictedPositions, PF_R32_FLOAT);
-	PassParameters->Velocities = GraphBuilder.CreateUAV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
+	PassParameters->PackedVelocities = GraphBuilder.CreateUAV(SpatialData.SoA_PackedVelocities, PF_R32G32_UINT);  // B plan
 	PassParameters->Flags = GraphBuilder.CreateUAV(SpatialData.SoA_Flags, PF_R32_UINT);
 	PassParameters->ParticleCount = CurrentParticleCount;
 	PassParameters->DeltaTime = Params.DeltaTime;

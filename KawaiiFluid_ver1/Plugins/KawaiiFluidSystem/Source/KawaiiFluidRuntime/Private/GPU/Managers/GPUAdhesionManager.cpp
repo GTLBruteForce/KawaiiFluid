@@ -157,7 +157,7 @@ void FGPUAdhesionManager::AddAdhesionPass(
 	// Bind SOA buffers
 	PassParameters->Positions = GraphBuilder.CreateUAV(SpatialData.SoA_Positions, PF_R32_FLOAT);
 	PassParameters->PredictedPositions = GraphBuilder.CreateUAV(SpatialData.SoA_PredictedPositions, PF_R32_FLOAT);
-	PassParameters->Velocities = GraphBuilder.CreateUAV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
+	PassParameters->PackedVelocities = GraphBuilder.CreateUAV(SpatialData.SoA_PackedVelocities, PF_R32G32_UINT);  // B plan
 	PassParameters->Flags = GraphBuilder.CreateUAV(SpatialData.SoA_Flags, PF_R32_UINT);
 	PassParameters->ParticleCount = CurrentParticleCount;
 	PassParameters->ParticleRadius = Params.ParticleRadius;
@@ -293,7 +293,7 @@ void FGPUAdhesionManager::AddUpdateAttachedPositionsPass(
 	// Bind SOA buffers
 	PassParameters->Positions = GraphBuilder.CreateUAV(SpatialData.SoA_Positions, PF_R32_FLOAT);
 	PassParameters->PredictedPositions = GraphBuilder.CreateUAV(SpatialData.SoA_PredictedPositions, PF_R32_FLOAT);
-	PassParameters->Velocities = GraphBuilder.CreateUAV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
+	PassParameters->PackedVelocities = GraphBuilder.CreateUAV(SpatialData.SoA_PackedVelocities, PF_R32G32_UINT);
 	PassParameters->Flags = GraphBuilder.CreateUAV(SpatialData.SoA_Flags, PF_R32_UINT);
 	PassParameters->ParticleCount = CurrentParticleCount;
 	PassParameters->Attachments = AttachmentUAV;
@@ -427,8 +427,8 @@ void FGPUAdhesionManager::AddStackPressurePass(
 	FStackPressureCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FStackPressureCS::FParameters>();
 	// Bind SOA buffers
 	PassParameters->Positions = GraphBuilder.CreateSRV(SpatialData.SoA_Positions, PF_R32_FLOAT);
-	PassParameters->Velocities = GraphBuilder.CreateUAV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
-	PassParameters->Masses = GraphBuilder.CreateSRV(SpatialData.SoA_Masses, PF_R32_FLOAT);
+	PassParameters->PackedVelocities = GraphBuilder.CreateUAV(SpatialData.SoA_PackedVelocities, PF_R32G32_UINT);
+	PassParameters->UniformParticleMass = Params.ParticleMass;
 	PassParameters->Attachments = InAttachmentSRV;
 	PassParameters->CellCounts = InCellCountsSRV;
 	PassParameters->ParticleIndices = InParticleIndicesSRV;

@@ -12,7 +12,7 @@
 
 RWBuffer<float> Positions;              // float3 as 3 floats
 RWBuffer<float> PredictedPositions;     // float3 as 3 floats
-RWBuffer<float> Velocities;             // float3 as 3 floats
+RWBuffer<uint2> PackedVelocities;       // half3 packed as uint2 (B plan optimization)
 RWBuffer<uint> Flags;
 
 int ParticleCount;
@@ -39,7 +39,7 @@ void FinalizePositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Read current values
 	float3 position = float3(Positions[idx3], Positions[idx3 + 1], Positions[idx3 + 2]);
 	float3 predictedPosition = float3(PredictedPositions[idx3], PredictedPositions[idx3 + 1], PredictedPositions[idx3 + 2]);
-	float3 velocity = float3(Velocities[idx3], Velocities[idx3 + 1], Velocities[idx3 + 2]);
+	float3 velocity = UnpackVelocity(PackedVelocities[idx]);
 
 	// Skip CPU-attached particles (they follow bone position directly)
 	if (HasFlag(flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
@@ -61,9 +61,7 @@ void FinalizePositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 		// Keep bone velocity, just apply damping
 		velocity *= GlobalDamping;
-		Velocities[idx3] = velocity.x;
-		Velocities[idx3 + 1] = velocity.y;
-		Velocities[idx3 + 2] = velocity.z;
+		PackedVelocities[idx] = PackVelocity(velocity);
 
 		Flags[idx] = ClearFlag(flags, GPU_PARTICLE_FLAG_JUST_DETACHED);
 		return;
@@ -99,9 +97,7 @@ void FinalizePositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	Positions[idx3 + 1] = position.y;
 	Positions[idx3 + 2] = position.z;
 
-	Velocities[idx3] = velocity.x;
-	Velocities[idx3 + 1] = velocity.y;
-	Velocities[idx3 + 2] = velocity.z;
+	PackedVelocities[idx] = PackVelocity(velocity);
 
 	Flags[idx] = flags;
 }

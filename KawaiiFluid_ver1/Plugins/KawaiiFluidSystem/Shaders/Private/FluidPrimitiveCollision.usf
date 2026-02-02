@@ -14,8 +14,8 @@
 // Particle buffers (SoA - Structure of Arrays)
 RWBuffer<float> Positions;
 RWBuffer<float> PredictedPositions;
-RWBuffer<float> Velocities;
-Buffer<float> Densities;            // Read-only for feedback
+RWBuffer<uint2> PackedVelocities;   // B plan: half3 packed
+Buffer<uint> PackedDensityLambda;   // B plan: half2 packed (read-only for feedback)
 Buffer<int> SourceIDs;              // Read-only for feedback
 RWBuffer<uint> Flags;
 
@@ -225,8 +225,9 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Read SoA buffers
 	float3 pos = float3(PredictedPositions[idx3], PredictedPositions[idx3 + 1], PredictedPositions[idx3 + 2]);
 	float3 originalPos = float3(Positions[idx3], Positions[idx3 + 1], Positions[idx3 + 2]);
-	float3 vel = float3(Velocities[idx3], Velocities[idx3 + 1], Velocities[idx3 + 2]);
-	float density = Densities[idx];
+	float3 vel = UnpackVelocity(PackedVelocities[idx]);
+	float density, lambda;
+	UnpackDensityLambda(PackedDensityLambda[idx], density, lambda);
 	int sourceID = SourceIDs[idx];
 	bool bCollided = false;
 
@@ -370,9 +371,7 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	PredictedPositions[idx3 + 1] = pos.y;
 	PredictedPositions[idx3 + 2] = pos.z;
 
-	Velocities[idx3] = vel.x;
-	Velocities[idx3 + 1] = vel.y;
-	Velocities[idx3 + 2] = vel.z;
+	PackedVelocities[idx] = PackVelocity(vel);
 
 	Flags[idx] = flags;
 }

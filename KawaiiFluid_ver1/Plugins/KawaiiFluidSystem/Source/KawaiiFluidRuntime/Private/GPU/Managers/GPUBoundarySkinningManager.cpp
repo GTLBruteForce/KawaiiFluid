@@ -1229,8 +1229,8 @@ void FGPUBoundarySkinningManager::AddBoundaryAdhesionPass(
 		FBoundaryAdhesionCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FBoundaryAdhesionCS::FParameters>();
 		// Bind SOA buffers
 		PassParameters->Positions = GraphBuilder.CreateUAV(SpatialData.SoA_Positions, PF_R32_FLOAT);
-		PassParameters->Velocities = GraphBuilder.CreateUAV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
-		PassParameters->Masses = GraphBuilder.CreateUAV(SpatialData.SoA_Masses, PF_R32_FLOAT);
+		PassParameters->PackedVelocities = GraphBuilder.CreateUAV(SpatialData.SoA_PackedVelocities, PF_R32G32_UINT);
+		PassParameters->UniformParticleMass = Params.ParticleMass;
 		PassParameters->Flags = GraphBuilder.CreateUAV(SpatialData.SoA_Flags, PF_R32_UINT);
 		PassParameters->ParticleCount = CurrentParticleCount;
 		PassParameters->BoundaryParticles = BoundaryParticlesSRV;

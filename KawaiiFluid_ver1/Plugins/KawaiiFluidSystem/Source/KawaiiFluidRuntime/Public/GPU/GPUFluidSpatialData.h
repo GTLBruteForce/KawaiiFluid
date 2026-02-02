@@ -65,16 +65,21 @@ struct FSimulationSpatialData
 
 	// SoA (Structure of Arrays) Particle Buffers (Memory Bandwidth Optimization)
 	// Split after BuildSpatialStructures, Merge after PostSimulation
-	FRDGBufferRef SoA_Positions = nullptr;
-	FRDGBufferRef SoA_PredictedPositions = nullptr;
-	FRDGBufferRef SoA_Velocities = nullptr;
-	FRDGBufferRef SoA_Masses = nullptr;
-	FRDGBufferRef SoA_Densities = nullptr;
-	FRDGBufferRef SoA_Lambdas = nullptr;
-	FRDGBufferRef SoA_Flags = nullptr;
-	FRDGBufferRef SoA_NeighborCounts = nullptr;
-	FRDGBufferRef SoA_ParticleIDs = nullptr;
-	FRDGBufferRef SoA_SourceIDs = nullptr;
+	//
+	// Bandwidth optimization (B plan):
+	// - Position: float3 (full precision, critical for stability)
+	// - Velocity: half3 packed as uint2 (50% bandwidth reduction)
+	// - Density+Lambda: half2 packed as uint (50% bandwidth reduction)
+	// - Mass: removed (uniform constant from Preset)
+
+	FRDGBufferRef SoA_Positions = nullptr;           // float3 as 3 floats
+	FRDGBufferRef SoA_PredictedPositions = nullptr;  // float3 as 3 floats
+	FRDGBufferRef SoA_PackedVelocities = nullptr;    // uint2 = half4 (vel.xy, vel.z, padding)
+	FRDGBufferRef SoA_PackedDensityLambda = nullptr; // uint = half2 (density, lambda)
+	FRDGBufferRef SoA_Flags = nullptr;               // uint
+	FRDGBufferRef SoA_NeighborCounts = nullptr;      // uint
+	FRDGBufferRef SoA_ParticleIDs = nullptr;         // int
+	FRDGBufferRef SoA_SourceIDs = nullptr;           // int
 
 	// Legacy aliases (for backward compatibility during transition)
 	FRDGBufferRef& WorldBoundaryBuffer = SkinnedBoundaryBuffer;

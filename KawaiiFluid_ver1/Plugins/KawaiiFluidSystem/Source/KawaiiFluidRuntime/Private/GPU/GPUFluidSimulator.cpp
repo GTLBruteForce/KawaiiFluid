@@ -620,13 +620,18 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	{
 		RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_SplitAoSToSoA");
 
-		// Create SoA buffers (float3 stored as 3 floats, so 3× particle count)
+		// Create SoA buffers with bandwidth optimization (B plan)
+		// Position: float3 (full precision, critical for simulation stability)
 		SpatialData.SoA_Positions = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), CurrentParticleCount * 3), TEXT("SoA_Positions"));
 		SpatialData.SoA_PredictedPositions = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), CurrentParticleCount * 3), TEXT("SoA_PredictedPositions"));
-		SpatialData.SoA_Velocities = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), CurrentParticleCount * 3), TEXT("SoA_Velocities"));
-		SpatialData.SoA_Masses = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), CurrentParticleCount), TEXT("SoA_Masses"));
-		SpatialData.SoA_Densities = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), CurrentParticleCount), TEXT("SoA_Densities"));
-		SpatialData.SoA_Lambdas = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), CurrentParticleCount), TEXT("SoA_Lambdas"));
+
+		// Half-precision packed buffers (bandwidth optimization)
+		// PackedVelocities: uint2 per particle = 8 bytes (half4: vel.xy, vel.z, padding)
+		// PackedDensityLambda: uint per particle = 4 bytes (half2: density, lambda)
+		SpatialData.SoA_PackedVelocities = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32) * 2, CurrentParticleCount), TEXT("SoA_PackedVelocities"));
+		SpatialData.SoA_PackedDensityLambda = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), CurrentParticleCount), TEXT("SoA_PackedDensityLambda"));
+
+		// Other buffers
 		SpatialData.SoA_Flags = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), CurrentParticleCount), TEXT("SoA_Flags"));
 		SpatialData.SoA_NeighborCounts = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), CurrentParticleCount), TEXT("SoA_NeighborCounts"));
 		SpatialData.SoA_ParticleIDs = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(int32), CurrentParticleCount), TEXT("SoA_ParticleIDs"));
@@ -639,10 +644,9 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		PassParams->SourceParticles = ParticlesSRVLocal;
 		PassParams->OutPositions = GraphBuilder.CreateUAV(SpatialData.SoA_Positions, PF_R32_FLOAT);
 		PassParams->OutPredictedPositions = GraphBuilder.CreateUAV(SpatialData.SoA_PredictedPositions, PF_R32_FLOAT);
-		PassParams->OutVelocities = GraphBuilder.CreateUAV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
-		PassParams->OutMasses = GraphBuilder.CreateUAV(SpatialData.SoA_Masses, PF_R32_FLOAT);
-		PassParams->OutDensities = GraphBuilder.CreateUAV(SpatialData.SoA_Densities, PF_R32_FLOAT);
-		PassParams->OutLambdas = GraphBuilder.CreateUAV(SpatialData.SoA_Lambdas, PF_R32_FLOAT);
+		// Half-precision packed buffers (bandwidth optimization)
+		PassParams->OutPackedVelocities = GraphBuilder.CreateUAV(SpatialData.SoA_PackedVelocities, PF_R32G32_UINT);
+		PassParams->OutPackedDensityLambda = GraphBuilder.CreateUAV(SpatialData.SoA_PackedDensityLambda, PF_R32_UINT);
 		PassParams->OutFlags = GraphBuilder.CreateUAV(SpatialData.SoA_Flags, PF_R32_UINT);
 		PassParams->OutNeighborCounts = GraphBuilder.CreateUAV(SpatialData.SoA_NeighborCounts, PF_R32_UINT);
 		PassParams->OutParticleIDs = GraphBuilder.CreateUAV(SpatialData.SoA_ParticleIDs, PF_R32_SINT);
@@ -686,14 +690,14 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 
 		PassParams->InPositions = GraphBuilder.CreateSRV(SpatialData.SoA_Positions, PF_R32_FLOAT);
 		PassParams->InPredictedPositions = GraphBuilder.CreateSRV(SpatialData.SoA_PredictedPositions, PF_R32_FLOAT);
-		PassParams->InVelocities = GraphBuilder.CreateSRV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
-		PassParams->InMasses = GraphBuilder.CreateSRV(SpatialData.SoA_Masses, PF_R32_FLOAT);
-		PassParams->InDensities = GraphBuilder.CreateSRV(SpatialData.SoA_Densities, PF_R32_FLOAT);
-		PassParams->InLambdas = GraphBuilder.CreateSRV(SpatialData.SoA_Lambdas, PF_R32_FLOAT);
+		// Half-precision packed buffers (bandwidth optimization)
+		PassParams->InPackedVelocities = GraphBuilder.CreateSRV(SpatialData.SoA_PackedVelocities, PF_R32G32_UINT);
+		PassParams->InPackedDensityLambda = GraphBuilder.CreateSRV(SpatialData.SoA_PackedDensityLambda, PF_R32_UINT);
 		PassParams->InFlags = GraphBuilder.CreateSRV(SpatialData.SoA_Flags, PF_R32_UINT);
 		PassParams->InNeighborCounts = GraphBuilder.CreateSRV(SpatialData.SoA_NeighborCounts, PF_R32_UINT);
 		PassParams->InParticleIDs = GraphBuilder.CreateSRV(SpatialData.SoA_ParticleIDs, PF_R32_SINT);
 		PassParams->InSourceIDs = GraphBuilder.CreateSRV(SpatialData.SoA_SourceIDs, PF_R32_SINT);
+		PassParams->MergeUniformParticleMass = Params.ParticleMass;
 		PassParams->TargetParticles = ParticlesUAVLocal;
 		PassParams->MergeParticleCount = CurrentParticleCount;
 
@@ -1648,7 +1652,7 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 				FAnisotropyComputeParams AnisotropyParams;
 				// SoA particle buffers
 				AnisotropyParams.PositionsSRV = GraphBuilder.CreateSRV(SpatialData.SoA_Positions, PF_R32_FLOAT);
-				AnisotropyParams.VelocitiesSRV = GraphBuilder.CreateSRV(SpatialData.SoA_Velocities, PF_R32_FLOAT);
+				AnisotropyParams.PackedVelocitiesSRV = GraphBuilder.CreateSRV(SpatialData.SoA_PackedVelocities, PF_R32G32_UINT);  // B plan
 				AnisotropyParams.FlagsSRV = GraphBuilder.CreateSRV(SpatialData.SoA_Flags, PF_R32_UINT);
 
 				// Attachment buffer for anisotropy

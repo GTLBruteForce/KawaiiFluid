@@ -1,6 +1,7 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 
 #include "/Engine/Private/Common.ush"
+#include "FluidGPUPhysics.ush"  // Half precision packing utilities (UnpackVelocity, etc.)
 #include "FluidSpatialHash.ush"
 #include "FluidMortonUtils.ush"
 #include "FluidCollisionPrimitives.ush"  // Contains FGPUParticleAttachment, FGPUCollisionSphere/Capsule/Box, quaternion utils
@@ -29,7 +30,7 @@
 
 // SoA (Structure of Arrays) Particle Buffers
 Buffer<float> InPositions;               // [ParticleCount * 3] float3 as 3 consecutive floats
-Buffer<float> InVelocities;              // [ParticleCount * 3] float3 as 3 consecutive floats
+Buffer<uint2> InPackedVelocities;        // B plan: half3 packed as uint2
 Buffer<uint> InFlags;                    // [ParticleCount] uint
 
 // Input: Attachment buffer (for surface normal of attached particles)
@@ -705,7 +706,7 @@ void CalculateVelocityBased(
 	out float Scale1, out float Scale2, out float Scale3)
 {
 	uint idx3 = ParticleIndex * 3;
-	float3 velocity = float3(InVelocities[idx3], InVelocities[idx3 + 1], InVelocities[idx3 + 2]);
+	float3 velocity = UnpackVelocity(InPackedVelocities[ParticleIndex]);
 	CalculateVelocityBasedWithVelocity(velocity, Axis1, Axis2, Axis3, Scale1, Scale2, Scale3);
 }
 
@@ -1175,7 +1176,7 @@ void ApplyVelocityStretching(
 	inout float Scale1, inout float Scale2, inout float Scale3)
 {
 	uint idx3 = ParticleIndex * 3;
-	float3 velocity = float3(InVelocities[idx3], InVelocities[idx3 + 1], InVelocities[idx3 + 2]);
+	float3 velocity = UnpackVelocity(InPackedVelocities[ParticleIndex]);
 	float Speed = length(velocity);
 
 	if (Speed < 0.001f)
@@ -1294,7 +1295,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Read particle data (SOA)
 	uint idx3 = Idx * 3;
 	uint flags = InFlags[Idx];
-	float3 velocity = float3(InVelocities[idx3], InVelocities[idx3 + 1], InVelocities[idx3 + 2]);
+	float3 velocity = UnpackVelocity(InPackedVelocities[Idx]);
 	bool bIsAttached = (flags & FLAG_IS_ATTACHED) != 0;
 	// Note: FLAG_NEAR_BOUNDARY from SoA_Flags may be stale (split before UpdateBoneDeltaAttachment)
 	// So we check BoneDeltaAttachment directly below

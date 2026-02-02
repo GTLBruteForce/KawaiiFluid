@@ -12,7 +12,7 @@
 
 RWBuffer<float> Positions;
 RWBuffer<float> PredictedPositions;
-RWBuffer<float> Velocities;
+RWBuffer<uint2> PackedVelocities;  // B plan: half3 packed
 RWBuffer<uint> Flags;
 
 int ParticleCount;
@@ -276,7 +276,7 @@ void BoundsCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Read SoA buffers
 	float3 pos = float3(PredictedPositions[idx3], PredictedPositions[idx3 + 1], PredictedPositions[idx3 + 2]);
 	float3 originalPos = float3(Positions[idx3], Positions[idx3 + 1], Positions[idx3 + 2]);
-	float3 vel = float3(Velocities[idx3], Velocities[idx3 + 1], Velocities[idx3 + 2]);
+	float3 vel = UnpackVelocity(PackedVelocities[idx]);
 
 	// Apply collision based on mode (with position-level friction)
 	if (bUseOBB != 0)
@@ -293,9 +293,7 @@ void BoundsCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	PredictedPositions[idx3 + 1] = pos.y;
 	PredictedPositions[idx3 + 2] = pos.z;
 
-	Velocities[idx3] = vel.x;
-	Velocities[idx3 + 1] = vel.y;
-	Velocities[idx3 + 2] = vel.z;
+	PackedVelocities[idx] = PackVelocity(vel);
 
 	Flags[idx] = flags;
 }

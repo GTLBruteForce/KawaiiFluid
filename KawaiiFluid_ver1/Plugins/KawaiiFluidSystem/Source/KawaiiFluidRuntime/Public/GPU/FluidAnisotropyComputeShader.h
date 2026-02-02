@@ -27,9 +27,9 @@ struct FGPUCollisionBox;
 struct KAWAIIFLUIDRUNTIME_API FAnisotropyComputeParams
 {
 	// Input buffers (SoA - Structure of Arrays)
-	FRDGBufferSRVRef PositionsSRV = nullptr;		// float3 positions as Buffer<float> [count*3]
-	FRDGBufferSRVRef VelocitiesSRV = nullptr;		// float3 velocities as Buffer<float> [count*3]
-	FRDGBufferSRVRef FlagsSRV = nullptr;			// uint flags as Buffer<uint> [count]
+	FRDGBufferSRVRef PositionsSRV = nullptr;			// float3 positions as Buffer<float> [count*3]
+	FRDGBufferSRVRef PackedVelocitiesSRV = nullptr;		// B plan: half3 packed as Buffer<uint2> [count]
+	FRDGBufferSRVRef FlagsSRV = nullptr;				// uint flags as Buffer<uint> [count]
 	FRDGBufferSRVRef AttachmentsSRV = nullptr;		// FGPUParticleAttachment buffer (for surface normal)
 
 	// TODO(KHJ): Remove legacy hash-based lookup - bUseZOrderSorting is always true
@@ -150,7 +150,7 @@ public:
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		// SoA (Structure of Arrays) Particle Buffers
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InPositions)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InVelocities)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<uint2>, InPackedVelocities)  // B plan: half3 packed
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<uint>, InFlags)
 
 		// Input: Attachment buffer (FGPUParticleAttachment) - for surface normal of attached particles

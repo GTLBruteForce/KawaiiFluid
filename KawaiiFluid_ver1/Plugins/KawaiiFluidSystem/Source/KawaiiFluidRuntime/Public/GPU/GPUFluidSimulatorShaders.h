@@ -261,10 +261,16 @@ public:
 		// SoA (Structure of Arrays) Particle Buffers
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Positions)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, PredictedPositions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Masses)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Densities)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Lambdas)
+
+		// Half-precision packed buffers (bandwidth optimization)
+		// PackedVelocities: uint2 = half4 (vel.xy in .x, vel.z+padding in .y)
+		// PackedDensityLambda: uint = half2 (density, lambda)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, PackedVelocities)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, PackedDensityLambda)
+
+		// Uniform particle mass (all particles same mass)
+		SHADER_PARAMETER(float, UniformParticleMass)
+
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, Flags)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, NeighborCountsBuffer)
 		// Hash table mode (legacy)
@@ -486,7 +492,7 @@ public:
 		// Particle SOA buffers
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Positions)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, PredictedPositions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, PackedVelocities)  // B plan: half3 packed
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, Flags)
 		SHADER_PARAMETER(int32, ParticleCount)
 		SHADER_PARAMETER(float, ParticleRadius)
@@ -535,7 +541,7 @@ public:
 		// Particle SOA buffers
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Positions)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, PredictedPositions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, PackedVelocities)  // B plan: half3 packed
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, Flags)
 		SHADER_PARAMETER(int32, ParticleCount)
 		SHADER_PARAMETER(float, ParticleRadius)
@@ -592,8 +598,8 @@ public:
 		// Particle SOA buffers
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Positions)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, PredictedPositions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, Densities)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, PackedVelocities)  // B plan: half3 packed
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<uint>, PackedDensityLambda)  // B plan: half2 packed
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<int>, SourceIDs)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, Flags)
 		SHADER_PARAMETER(int32, ParticleCount)
@@ -670,7 +676,7 @@ public:
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Positions)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, PredictedPositions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, PackedVelocities)  // B plan: half3 packed
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, Flags)
 		SHADER_PARAMETER(int32, ParticleCount)
 		SHADER_PARAMETER(float, DeltaTime)
@@ -1208,7 +1214,7 @@ public:
 		// Particle SOA buffers
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Positions)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, PredictedPositions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, PackedVelocities)  // B plan: half3 packed
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, Flags)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUParticleAttachment>, Attachments)
 		SHADER_PARAMETER(int32, ParticleCount)
@@ -1272,7 +1278,7 @@ public:
 		// Particle SOA buffers
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Positions)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, PredictedPositions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, PackedVelocities)  // B plan: half3 packed
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, Flags)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUParticleAttachment>, Attachments)
 		SHADER_PARAMETER(int32, ParticleCount)
@@ -1512,8 +1518,8 @@ public:
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		// SOA particle buffers
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Positions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Masses)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, PackedVelocities)  // B plan: half3 packed
+		SHADER_PARAMETER(float, UniformParticleMass)  // B plan: uniform mass
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, Flags)
 		SHADER_PARAMETER(int32, ParticleCount)
 		// Legacy boundary particles (unsorted)
@@ -1630,8 +1636,8 @@ public:
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		// SOA particle buffers
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, Positions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, Velocities)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, Masses)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, PackedVelocities)  // B plan: half3 packed
+		SHADER_PARAMETER(float, UniformParticleMass)  // B plan: uniform mass
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUParticleAttachment>, Attachments)
 
 		// Spatial hash for neighbor search
@@ -2538,12 +2544,13 @@ class FSplitAoSToSoACS : public FGlobalShader
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, SourceParticles)
+		// Full precision (Position is critical)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, OutPositions)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, OutPredictedPositions)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, OutVelocities)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, OutMasses)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, OutDensities)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, OutLambdas)
+		// Half precision packed (bandwidth optimization)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, OutPackedVelocities)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, OutPackedDensityLambda)
+		// Other fields
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, OutFlags)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, OutNeighborCounts)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<int>, OutParticleIDs)
@@ -2571,16 +2578,19 @@ class FMergeSoAToAoSCS : public FGlobalShader
 	SHADER_USE_PARAMETER_STRUCT(FMergeSoAToAoSCS, FGlobalShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		// Full precision
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InPositions)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InPredictedPositions)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InVelocities)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InMasses)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InDensities)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InLambdas)
+		// Half precision packed (bandwidth optimization)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<uint2>, InPackedVelocities)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<uint>, InPackedDensityLambda)
+		// Other fields
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<uint>, InFlags)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<uint>, InNeighborCounts)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<int>, InParticleIDs)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<int>, InSourceIDs)
+		// Uniform mass
+		SHADER_PARAMETER(float, MergeUniformParticleMass)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUFluidParticle>, TargetParticles)
 		SHADER_PARAMETER(int32, MergeParticleCount)
 	END_SHADER_PARAMETER_STRUCT()

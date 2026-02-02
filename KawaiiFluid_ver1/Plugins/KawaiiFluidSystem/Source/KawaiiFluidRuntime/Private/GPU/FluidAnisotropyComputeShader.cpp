@@ -29,7 +29,7 @@ void FFluidAnisotropyPassBuilder::AddAnisotropyPass(
 	FRDGBuilder& GraphBuilder,
 	const FAnisotropyComputeParams& Params)
 {
-	if (Params.ParticleCount <= 0 || !Params.PositionsSRV || !Params.VelocitiesSRV || !Params.FlagsSRV)
+	if (Params.ParticleCount <= 0 || !Params.PositionsSRV || !Params.PackedVelocitiesSRV || !Params.FlagsSRV)
 	{
 		return;
 	}
@@ -193,7 +193,7 @@ void FFluidAnisotropyPassBuilder::AddAnisotropyPass(
 
 	// Input buffers (SoA)
 	PassParameters->InPositions = Params.PositionsSRV;
-	PassParameters->InVelocities = Params.VelocitiesSRV;
+	PassParameters->InPackedVelocities = Params.PackedVelocitiesSRV;  // B plan
 	PassParameters->InFlags = Params.FlagsSRV;
 	PassParameters->InAttachments = AttachmentsSRV;
 

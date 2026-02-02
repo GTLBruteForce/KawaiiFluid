@@ -16,8 +16,8 @@
 
 // Fluid particle SOA buffers
 Buffer<float> Positions;                // float3 packed as 3 floats (read-only for neighbor search)
-RWBuffer<float> Velocities;             // float3 packed as 3 floats (read/write)
-Buffer<float> Masses;                   // float (read-only for weight calculation)
+RWBuffer<uint2> PackedVelocities;       // B plan: half3 packed as uint2 (read/write)
+float UniformParticleMass;              // B plan: uniform mass (same for all particles)
 
 StructuredBuffer<FGPUParticleAttachment> Attachments;
 StructuredBuffer<uint> CellCounts;
@@ -115,7 +115,7 @@ void StackPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     // Read from SOA buffers
     uint idx3 = idx * 3;
     float3 pos = float3(Positions[idx3], Positions[idx3 + 1], Positions[idx3 + 2]);
-    float3 velocity = float3(Velocities[idx3], Velocities[idx3 + 1], Velocities[idx3 + 2]);
+    float3 velocity = UnpackVelocity(PackedVelocities[idx]);
 
     // Get surface normal at current position
     float3 surfaceNormal = GetAttachmentSurfaceNormal(attachment, pos);
@@ -182,7 +182,7 @@ void StackPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
                     // Read neighbor from SOA
                     uint neighborIdx3 = neighborIdx * 3;
                     float3 neighborPos = float3(Positions[neighborIdx3], Positions[neighborIdx3 + 1], Positions[neighborIdx3 + 2]);
-                    float neighborMass = Masses[neighborIdx];
+                    float neighborMass = UniformParticleMass;
 
                     float3 toNeighbor = neighborPos - pos;
                     float distSq = dot(toNeighbor, toNeighbor);
@@ -228,8 +228,6 @@ void StackPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         velocity += stackForce * DeltaTime;
 
         // Write back to SOA
-        Velocities[idx3] = velocity.x;
-        Velocities[idx3 + 1] = velocity.y;
-        Velocities[idx3 + 2] = velocity.z;
+        PackedVelocities[idx] = PackVelocity(velocity);
     }
 }

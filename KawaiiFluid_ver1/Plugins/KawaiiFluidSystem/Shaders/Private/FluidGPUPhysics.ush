@@ -517,3 +517,106 @@ struct FGPUCollisionFeedback
 #define COLLIDER_TYPE_CAPSULE  1
 #define COLLIDER_TYPE_BOX      2
 #define COLLIDER_TYPE_CONVEX   3
+
+//=============================================================================
+// Half Precision Packing Utilities (B Plan Bandwidth Optimization)
+// Used by SoA buffers to reduce memory bandwidth by 50%
+//=============================================================================
+
+/**
+ * Pack two floats into one uint (2x float16)
+ * @param v - float2 to pack
+ * @return Packed uint containing two half-precision values
+ */
+uint PackHalf2(float2 v)
+{
+	return f32tof16(v.x) | (f32tof16(v.y) << 16);
+}
+
+/**
+ * Unpack one uint into two floats
+ * @param packed - uint containing two half-precision values
+ * @return float2 with unpacked values
+ */
+float2 UnpackHalf2(uint packed)
+{
+	return float2(f16tof32(packed), f16tof32(packed >> 16));
+}
+
+/**
+ * Pack float3 velocity into uint2 (half4: xy in .x, z+padding in .y)
+ * Total: 12 bytes → 8 bytes (33% bandwidth reduction)
+ * @param vel - float3 velocity to pack
+ * @return uint2 with packed half-precision velocity
+ */
+uint2 PackVelocity(float3 vel)
+{
+	uint2 packed;
+	packed.x = PackHalf2(float2(vel.x, vel.y));
+	packed.y = PackHalf2(float2(vel.z, 0.0f));
+	return packed;
+}
+
+/**
+ * Unpack uint2 into float3 velocity
+ * @param packed - uint2 containing packed velocity
+ * @return float3 unpacked velocity
+ */
+float3 UnpackVelocity(uint2 packed)
+{
+	float2 xy = UnpackHalf2(packed.x);
+	float2 zw = UnpackHalf2(packed.y);
+	return float3(xy.x, xy.y, zw.x);
+}
+
+/**
+ * Pack Density + Lambda into one uint (half2)
+ * Total: 8 bytes → 4 bytes (50% bandwidth reduction)
+ * @param density - particle density
+ * @param lambda - PBF lambda constraint multiplier
+ * @return uint with packed half-precision values
+ */
+uint PackDensityLambda(float density, float lambda)
+{
+	return PackHalf2(float2(density, lambda));
+}
+
+/**
+ * Unpack uint into Density and Lambda
+ * @param packed - uint containing packed density/lambda
+ * @param density - output density
+ * @param lambda - output lambda
+ */
+void UnpackDensityLambda(uint packed, out float density, out float lambda)
+{
+	float2 dl = UnpackHalf2(packed);
+	density = dl.x;
+	lambda = dl.y;
+}
+
+//=============================================================================
+// SoA Buffer Read/Write Helpers
+// Unified interface for reading/writing packed velocity buffers
+//=============================================================================
+
+/**
+ * Read velocity from packed SoA buffer
+ * @param PackedVelocities - uint2 buffer containing packed velocities
+ * @param idx - particle index
+ * @return float3 unpacked velocity
+ */
+float3 ReadPackedVelocity(Buffer<uint2> PackedVelocities, uint idx)
+{
+	return UnpackVelocity(PackedVelocities[idx]);
+}
+
+/**
+ * Write velocity to packed SoA buffer
+ * @param PackedVelocities - RWBuffer<uint2> to write to
+ * @param idx - particle index
+ * @param vel - float3 velocity to pack and write
+ */
+void WritePackedVelocity(RWBuffer<uint2> PackedVelocities, uint idx, float3 vel)
+{
+	PackedVelocities[idx] = PackVelocity(vel);
+}

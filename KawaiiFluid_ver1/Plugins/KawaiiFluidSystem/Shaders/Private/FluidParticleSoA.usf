@@ -1,26 +1,35 @@
 // Copyright KawaiiFluid Team. All Rights Reserved.
 // Particle SoA (Structure of Arrays) Conversion Shaders
 //
-// Memory bandwidth optimization: Split AoS FGPUFluidParticle into separate
-// field buffers so simulation passes only read/write fields they need.
+// Memory bandwidth optimization:
+// 1. Split AoS FGPUFluidParticle into separate field buffers
+// 2. Half-precision packing for Velocity/Density/Lambda (50% bandwidth reduction)
+// 3. Uniform Mass (removed from per-particle storage)
 
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"
 #include "FluidGPUPhysics.ush"
 
+// Half Precision Packing Utilities: defined in FluidGPUPhysics.ush
+// PackHalf2, UnpackHalf2, PackVelocity, UnpackVelocity, PackDensityLambda, UnpackDensityLambda
+
 //=============================================================================
 // Split Pass: AoS → SoA
 // Converts FGPUFluidParticle (64 bytes) into separate field buffers
+// With half-precision packing for bandwidth optimization
 //=============================================================================
 
 StructuredBuffer<FGPUFluidParticle> SourceParticles;
 
+// Full precision (Position is critical for simulation stability)
 RWBuffer<float> OutPositions;              // float3 packed as 3 floats
 RWBuffer<float> OutPredictedPositions;     // float3 packed as 3 floats
-RWBuffer<float> OutVelocities;             // float3 packed as 3 floats
-RWBuffer<float> OutMasses;                 // float
-RWBuffer<float> OutDensities;              // float
-RWBuffer<float> OutLambdas;                // float
+
+// Half precision packed (bandwidth optimization)
+RWBuffer<uint2> OutPackedVelocities;       // uint2 = half4 (vel.xy, vel.z, padding)
+RWBuffer<uint> OutPackedDensityLambda;     // uint = half2 (density, lambda)
+
+// Other fields
 RWBuffer<uint> OutFlags;                   // uint
 RWBuffer<uint> OutNeighborCounts;          // uint
 RWBuffer<int> OutParticleIDs;              // int
@@ -37,7 +46,7 @@ void SplitAoSToSoACS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	FGPUFluidParticle p = SourceParticles[idx];
 
-	// Write to separate field buffers (float3 stored as 3 consecutive floats)
+	// Position: full precision (float3 stored as 3 consecutive floats)
 	uint idx3 = idx * 3;
 	OutPositions[idx3 + 0] = p.Position.x;
 	OutPositions[idx3 + 1] = p.Position.y;
@@ -47,13 +56,13 @@ void SplitAoSToSoACS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	OutPredictedPositions[idx3 + 1] = p.PredictedPosition.y;
 	OutPredictedPositions[idx3 + 2] = p.PredictedPosition.z;
 
-	OutVelocities[idx3 + 0] = p.Velocity.x;
-	OutVelocities[idx3 + 1] = p.Velocity.y;
-	OutVelocities[idx3 + 2] = p.Velocity.z;
+	// Velocity: half precision packed (12B → 8B) for SolveDensityPressure
+	OutPackedVelocities[idx] = PackVelocity(p.Velocity);
 
-	OutMasses[idx] = p.Mass;
-	OutDensities[idx] = p.Density;
-	OutLambdas[idx] = p.Lambda;
+	// Density + Lambda: half precision packed (8B → 4B)
+	OutPackedDensityLambda[idx] = PackDensityLambda(p.Density, p.Lambda);
+
+	// Other fields: unchanged
 	OutFlags[idx] = p.Flags;
 	OutNeighborCounts[idx] = p.NeighborCount;
 	OutParticleIDs[idx] = p.ParticleID;
@@ -63,18 +72,21 @@ void SplitAoSToSoACS(uint3 DispatchThreadId : SV_DispatchThreadID)
 //=============================================================================
 // Merge Pass: SoA → AoS
 // Converts separate field buffers back into FGPUFluidParticle (64 bytes)
+// Unpacks half-precision data back to full precision
 //=============================================================================
 
 Buffer<float> InPositions;
 Buffer<float> InPredictedPositions;
-Buffer<float> InVelocities;
-Buffer<float> InMasses;
-Buffer<float> InDensities;
-Buffer<float> InLambdas;
+// Half precision packed (bandwidth optimization)
+Buffer<uint2> InPackedVelocities;
+Buffer<uint> InPackedDensityLambda;
 Buffer<uint> InFlags;
 Buffer<uint> InNeighborCounts;
 Buffer<int> InParticleIDs;
 Buffer<int> InSourceIDs;
+
+// Uniform mass for all particles (from Preset)
+float MergeUniformParticleMass;
 
 RWStructuredBuffer<FGPUFluidParticle> TargetParticles;
 
@@ -91,6 +103,8 @@ void MergeSoAToAoSCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	uint idx3 = idx * 3;
 
 	FGPUFluidParticle p;
+
+	// Position: full precision
 	p.Position.x = InPositions[idx3 + 0];
 	p.Position.y = InPositions[idx3 + 1];
 	p.Position.z = InPositions[idx3 + 2];
@@ -99,13 +113,19 @@ void MergeSoAToAoSCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	p.PredictedPosition.y = InPredictedPositions[idx3 + 1];
 	p.PredictedPosition.z = InPredictedPositions[idx3 + 2];
 
-	p.Velocity.x = InVelocities[idx3 + 0];
-	p.Velocity.y = InVelocities[idx3 + 1];
-	p.Velocity.z = InVelocities[idx3 + 2];
+	// Velocity: unpack from half-precision (8B packed)
+	p.Velocity = UnpackVelocity(InPackedVelocities[idx]);
 
-	p.Mass = InMasses[idx];
-	p.Density = InDensities[idx];
-	p.Lambda = InLambdas[idx];
+	// Density + Lambda: unpack from half-precision (4B packed)
+	float density, lambda;
+	UnpackDensityLambda(InPackedDensityLambda[idx], density, lambda);
+	p.Density = density;
+	p.Lambda = lambda;
+
+	// Mass: uniform constant (same for all particles)
+	p.Mass = MergeUniformParticleMass;
+
+	// Other fields: unchanged
 	p.Flags = InFlags[idx];
 	p.NeighborCount = InNeighborCounts[idx];
 	p.ParticleID = InParticleIDs[idx];

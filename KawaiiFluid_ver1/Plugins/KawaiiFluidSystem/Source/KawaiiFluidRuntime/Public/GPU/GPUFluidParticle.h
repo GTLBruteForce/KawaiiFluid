@@ -106,6 +106,9 @@ struct FGPUFluidSimulationParams
 	float CellSize;               // Hash cell size (typically = SmoothingRadius)
 	int32 ParticleCount;          // Number of active particles
 
+	// Uniform particle mass (B plan optimization - same for all particles)
+	float ParticleMass;           // Particle mass (kg), from Preset
+
 	// Time
 	float DeltaTime;              // Simulation substep delta time
 	float DeltaTimeSq;            // DeltaTime squared
@@ -196,6 +199,7 @@ struct FGPUFluidSimulationParams
 		, SpikyGradCoeff(0.0f)
 		, CellSize(20.0f)
 		, ParticleCount(0)
+		, ParticleMass(1.0f)
 		, DeltaTime(0.016f)
 		, DeltaTimeSq(0.000256f)
 		, BoundsCenter(FVector3f::ZeroVector)

@@ -452,6 +452,7 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	GPUParams.Compliance = SPHScaling::GetScaledCompliance(
 		Preset->Compressibility, Preset->SmoothingRadius, Preset->ComplianceExponent);
 	GPUParams.ParticleRadius = Preset->ParticleRadius;
+	GPUParams.ParticleMass = Preset->ParticleMass;  // Uniform particle mass (B plan optimization)
 	GPUParams.ViscosityCoefficient = Preset->Viscosity;
 	// Cohesion (Akinci 2013 force-based) - set in Surface Tension section below
 	GPUParams.GlobalDamping = Preset->GetDamping();

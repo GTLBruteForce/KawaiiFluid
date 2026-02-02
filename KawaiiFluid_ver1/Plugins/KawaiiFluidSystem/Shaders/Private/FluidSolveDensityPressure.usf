@@ -7,12 +7,152 @@
 // 2. rsqrt: Uses fast inverse square root instead of sqrt
 // 3. Loop Unroll: Explicit 27-cell unrolling for cellRadius=1 case
 // 4. Neighbor Caching: First iteration builds neighbor list, subsequent iterations reuse
+// 5. Wave Intrinsics: Register-to-register data sharing within warp (30-50% memory reduction)
+// 6. Half Precision: Velocity/Density/Lambda as FP16 (50% bandwidth reduction)
+// 7. Uniform Mass: Single mass constant instead of per-particle buffer (4B/neighbor saved)
+// 8. Shared Memory (LDS): Tile-based caching for 256 spatially adjacent particles
+// 9. ALU Optimization: Inline kernels, single rsqrt, branchless tensile/ST, precomputed constants
 
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"
 #include "FluidGPUPhysics.ush"
 #include "FluidSpatialHash.ush"
 #include "FluidMortonUtils.ush"  // Unified Morton code functions
+
+// Half Precision Packing Utilities: defined in FluidGPUPhysics.ush
+// PackHalf2, UnpackHalf2, PackVelocity, UnpackVelocity, PackDensityLambda, UnpackDensityLambda
+
+//=============================================================================
+// Shared Memory (LDS) for Tile-Based Caching
+// Thread Group (256 threads) processes spatially adjacent particles (Z-Order sorted)
+// When neighbor is in same tile, read from LDS (~20x faster than Global Memory)
+//
+// Memory hierarchy (fastest to slowest):
+// 1. Shared Memory (LDS): ~20 cycles, same tile (256 particles)
+// 2. Wave Intrinsics: ~4 cycles, same warp (32/64 particles)
+// 3. Global Memory: ~400 cycles, different tile
+//=============================================================================
+#define TILE_SIZE THREAD_GROUP_SIZE  // 256
+
+groupshared float3 gs_Positions[TILE_SIZE];
+groupshared float  gs_Lambdas[TILE_SIZE];
+groupshared uint   gs_Flags[TILE_SIZE];
+
+//=============================================================================
+// Wave Intrinsics Helper
+// When Z-Order sorted, adjacent threads process spatially adjacent particles.
+// If neighbor's index is within the warp range, we can use WaveReadLaneAt
+// to read from another thread's register (instant!) instead of Global Memory.
+//=============================================================================
+
+#ifndef COMPILER_SUPPORTS_WAVE_INTRINSICS
+	#define COMPILER_SUPPORTS_WAVE_INTRINSICS 1
+#endif
+
+// Reduced struct: No Mass (uniform), Lambda read separately when needed
+struct FWaveParticleData
+{
+	float3 Position;
+	float Lambda;
+	uint Flags;
+};
+
+// Get neighbor data - uses Wave Intrinsics if neighbor is in same warp, otherwise Global Memory
+// Mass removed (uniform constant), Lambda read from packed DensityLambda buffer
+FWaveParticleData GetNeighborData(
+	uint neighborIdx,
+	uint waveStartIdx,
+	uint waveSize,
+	FWaveParticleData myData,
+	uint4 activeLaneMask,
+	RWBuffer<float> InPredictedPositions,
+	RWBuffer<uint> InPackedDensityLambda,
+	RWBuffer<uint> InFlags)
+{
+	FWaveParticleData result;
+
+#if COMPILER_SUPPORTS_WAVE_INTRINSICS
+	// Check if neighbor is within this warp's particle index range
+	uint laneOffset = neighborIdx - waveStartIdx;
+
+	// Check if target lane is active (didn't return early)
+	bool bLaneActive = false;
+	if (laneOffset < 32)
+		bLaneActive = (activeLaneMask.x & (1u << laneOffset)) != 0;
+	else if (laneOffset < 64)
+		bLaneActive = (activeLaneMask.y & (1u << (laneOffset - 32))) != 0;
+
+	if (laneOffset < waveSize && bLaneActive)
+	{
+		// FAST PATH: Neighbor is in same warp AND active - use Wave Intrinsics
+		result.Position.x = WaveReadLaneAt(myData.Position.x, laneOffset);
+		result.Position.y = WaveReadLaneAt(myData.Position.y, laneOffset);
+		result.Position.z = WaveReadLaneAt(myData.Position.z, laneOffset);
+		result.Lambda = WaveReadLaneAt(myData.Lambda, laneOffset);
+		result.Flags = WaveReadLaneAt(myData.Flags, laneOffset);
+	}
+	else
+	{
+		// SLOW PATH: Different warp OR inactive lane - must use Global Memory
+		uint neighborIdx3 = neighborIdx * 3;
+		result.Position = float3(
+			InPredictedPositions[neighborIdx3],
+			InPredictedPositions[neighborIdx3 + 1],
+			InPredictedPositions[neighborIdx3 + 2]);
+
+		// Unpack Lambda from packed DensityLambda buffer (half2: density, lambda)
+		float neighborDensity;  // unused here
+		UnpackDensityLambda(InPackedDensityLambda[neighborIdx], neighborDensity, result.Lambda);
+		result.Flags = InFlags[neighborIdx];
+	}
+#else
+	// Fallback for platforms without Wave Intrinsics support
+	uint neighborIdx3 = neighborIdx * 3;
+	result.Position = float3(
+		InPredictedPositions[neighborIdx3],
+		InPredictedPositions[neighborIdx3 + 1],
+		InPredictedPositions[neighborIdx3 + 2]);
+
+	float neighborDensity;
+	UnpackDensityLambda(InPackedDensityLambda[neighborIdx], neighborDensity, result.Lambda);
+	result.Flags = InFlags[neighborIdx];
+#endif
+
+	return result;
+}
+
+// Get neighbor data with Shared Memory + Wave Intrinsics hierarchy:
+// 1. Check if neighbor is in same tile (shared memory) -> Fastest (~20 cycles)
+// 2. Check if neighbor is in same warp (wave intrinsics) -> Fast (~4 cycles)
+// 3. Otherwise read from Global Memory -> Slowest (~400 cycles)
+FWaveParticleData GetNeighborDataWithTile(
+	uint neighborIdx,
+	uint tileStartIdx,
+	uint waveStartIdx,
+	uint waveSize,
+	FWaveParticleData myData,
+	uint4 activeLaneMask,
+	RWBuffer<float> InPredictedPositions,
+	RWBuffer<uint> InPackedDensityLambda,
+	RWBuffer<uint> InFlags)
+{
+	FWaveParticleData result;
+
+	// Check if neighbor is in same tile (shared memory)
+	uint tileOffset = neighborIdx - tileStartIdx;
+	if (tileOffset < TILE_SIZE)
+	{
+		// FASTEST PATH: Neighbor in same tile - use Shared Memory (LDS)
+		result.Position = gs_Positions[tileOffset];
+		result.Lambda = gs_Lambdas[tileOffset];
+		result.Flags = gs_Flags[tileOffset];
+		return result;
+	}
+
+	// Fall back to existing GetNeighborData (Wave Intrinsics + Global Memory)
+	return GetNeighborData(neighborIdx, waveStartIdx, waveSize, myData, activeLaneMask,
+		InPredictedPositions, InPackedDensityLambda, InFlags);
+}
 
 //=============================================================================
 // Shader Parameters
@@ -21,12 +161,16 @@
 // SoA (Structure of Arrays) Particle Buffers
 RWBuffer<float> Positions;                     // [ParticleCount * 3] float3 as 3 consecutive floats
 RWBuffer<float> PredictedPositions;            // [ParticleCount * 3] float3 as 3 consecutive floats
-RWBuffer<float> Velocities;                    // [ParticleCount * 3] float3 as 3 consecutive floats
-RWBuffer<float> Masses;                        // [ParticleCount] float
-RWBuffer<float> Densities;                     // [ParticleCount] float
-RWBuffer<float> Lambdas;                       // [ParticleCount] float
+
+// Half-precision packed buffers for bandwidth optimization
+RWBuffer<uint2> PackedVelocities;              // [ParticleCount] uint2 = half3 velocity (xy in .x, z in .y)
+RWBuffer<uint> PackedDensityLambda;            // [ParticleCount] uint = half2 (density, lambda)
+
+// Uniform particle mass (all particles same mass, from Preset)
+float UniformParticleMass;
+
 RWBuffer<uint> Flags;                          // [ParticleCount] uint
-RWBuffer<uint> NeighborCountsBuffer;           // [ParticleCount] uint (renamed to avoid collision with local variable)
+RWBuffer<uint> NeighborCountsBuffer;           // [ParticleCount] uint
 
 // Hash table mode (legacy)
 StructuredBuffer<uint> CellCounts;
@@ -160,123 +304,11 @@ uint GetMortonCellIDFromCellCoord(int3 cellCoord)
 	return Morton3D(uoffset.x, uoffset.y, uoffset.z);
 }
 
-//=============================================================================
-// Z-Order Mode: Build Neighbor List using CellStart/End (Sequential Access)
-// Particles are sorted by Morton code, so sequential access = cache coherent
-// IMPORTANT: Cell ID must use Morton code (same as FluidCellStartEnd.usf)
-//=============================================================================
-#define BUILD_AND_PROCESS_CELL_ZORDER(DX, DY, DZ) \
-{ \
-	int3 neighborCell = centerCell + int3(DX, DY, DZ); \
-	uint cellID = GetMortonCellIDFromCellCoord(neighborCell); \
-	uint cellStart = CellStart[cellID]; \
-	uint cellEnd = CellEnd[cellID]; \
-	if (cellStart != INVALID_INDEX && cellEnd != INVALID_INDEX) \
-	{ \
-		uint maxNeighborIdx = min(cellEnd, (uint)(ParticleCount - 1)); \
-		for (uint neighborIdx = cellStart; neighborIdx <= maxNeighborIdx; ++neighborIdx) \
-		{ \
-			uint neighborIdx3 = neighborIdx * 3; \
-			uint neighborFlags = Flags[neighborIdx]; \
-			if (HasFlag(neighborFlags, GPU_PARTICLE_FLAG_IS_ATTACHED)) continue; \
-			float3 neighborPos = float3(PredictedPositions[neighborIdx3], PredictedPositions[neighborIdx3 + 1], PredictedPositions[neighborIdx3 + 2]); \
-			float3 r_cm = pos - neighborPos; \
-			float r2_cm = dot(r_cm, r_cm); \
-			float r2 = r2_cm * CM_TO_M_SQ; \
-			if (r2 < h2) \
-			{ \
-				if (cachedCount < MAX_NEIGHBORS_PER_PARTICLE) \
-				{ \
-					uint cacheIdx = idx * MAX_NEIGHBORS_PER_PARTICLE + cachedCount; \
-					NeighborList[cacheIdx] = neighborIdx; \
-					cachedCount++; \
-				} \
-				float mass = Masses[neighborIdx]; \
-				float w = Poly6Kernel(r2, h2); \
-				density += mass * Poly6Coeff * w; \
-				if (neighborIdx != idx) neighborCount++; \
-				float3 r = r_cm * CM_TO_M; \
-				float3 gradW = SpikyGradientFast(r, r2, h, h2); \
-				gradW *= SpikyCoeff * CM_TO_M; \
-				float3 gradC_j = -gradW * invRestDensity; \
-				sumGradC2 += dot(gradC_j, gradC_j); \
-				gradC_i += gradW * invRestDensity; \
-				if (neighborIdx != idx && r2 >= SMALL_NUMBER) \
-				{ \
-					float lambda_j_prev = Lambdas[neighborIdx]; \
-					float diff = h2 - r2; \
-					float W_r = diff * diff * diff; \
-					float ratio = W_r * InvW_DeltaQ; \
-					float ratio2 = ratio * ratio; \
-					float ratioN = ratio2; \
-					if (TensileN >= 4) ratioN *= ratio2; \
-					if (TensileN >= 6) ratioN *= ratio2; \
-					float scorr = -tensileK_scaled * ratioN; \
-					deltaP += (lambda_i_prev + lambda_j_prev + scorr) * gradW; \
-					constraintCount++; \
-				} \
-			} \
-		} \
-	} \
-}
-
-//=============================================================================
-// First Iteration: Build Neighbor List + Compute (Legacy Hash Table Mode)
-// Searches 27 cells, caches valid neighbors, and performs calculation
-//=============================================================================
-#define BUILD_AND_PROCESS_CELL(DX, DY, DZ) \
-{ \
-	int3 neighborCell = centerCell + int3(DX, DY, DZ); \
-	uint hash = HashCell(neighborCell); \
-	uint count = min(CellCounts[hash], (uint)MAX_PARTICLES_PER_CELL); \
-	uint startIdx = hash * MAX_PARTICLES_PER_CELL; \
-	for (uint i = 0; i < count; ++i) \
-	{ \
-		uint neighborIdx = ParticleIndices[startIdx + i]; \
-		if (neighborIdx >= (uint)ParticleCount) continue; \
-		uint neighborIdx3 = neighborIdx * 3; \
-		uint neighborFlags = Flags[neighborIdx]; \
-		if (HasFlag(neighborFlags, GPU_PARTICLE_FLAG_IS_ATTACHED)) continue; \
-		float3 neighborPos = float3(PredictedPositions[neighborIdx3], PredictedPositions[neighborIdx3 + 1], PredictedPositions[neighborIdx3 + 2]); \
-		float3 r_cm = pos - neighborPos; \
-		float r2_cm = dot(r_cm, r_cm); \
-		float r2 = r2_cm * CM_TO_M_SQ; \
-		if (r2 < h2) \
-		{ \
-			/* Cache this neighbor for future iterations */ \
-			if (cachedCount < MAX_NEIGHBORS_PER_PARTICLE) \
-			{ \
-				uint cacheIdx = idx * MAX_NEIGHBORS_PER_PARTICLE + cachedCount; \
-				NeighborList[cacheIdx] = neighborIdx; \
-				cachedCount++; \
-			} \
-			float mass = Masses[neighborIdx]; \
-			float w = Poly6Kernel(r2, h2); \
-			density += mass * Poly6Coeff * w; \
-			if (neighborIdx != idx) neighborCount++; \
-			float3 r = r_cm * CM_TO_M; \
-			float3 gradW = SpikyGradientFast(r, r2, h, h2); \
-			gradW *= SpikyCoeff * CM_TO_M; \
-			float3 gradC_j = -gradW * invRestDensity; \
-			sumGradC2 += dot(gradC_j, gradC_j); \
-			gradC_i += gradW * invRestDensity; \
-			if (neighborIdx != idx && r2 >= SMALL_NUMBER) \
-			{ \
-				float lambda_j_prev = Lambdas[neighborIdx]; \
-				float diff = h2 - r2; \
-				float W_r = diff * diff * diff; \
-				float ratio = W_r * InvW_DeltaQ; \
-				float ratio2 = ratio * ratio; \
-				float ratioN = ratio2; \
-				if (TensileN >= 4) ratioN *= ratio2; \
-				if (TensileN >= 6) ratioN *= ratio2; \
-				float scorr = -tensileK_scaled * ratioN; \
-				deltaP += (lambda_i_prev + lambda_j_prev + scorr) * gradW; \
-				constraintCount++; \
-			} \
-		} \
-	} \
-}
+// NOTE: Legacy macros BUILD_AND_PROCESS_CELL_ZORDER and BUILD_AND_PROCESS_CELL removed.
+// All neighbor processing now uses GetNeighborDataWithTile() with:
+// 1. Shared Memory (LDS): Same tile (256 particles) - ~20 cycles
+// 2. Wave Intrinsics: Same warp (32/64 particles) - ~4 cycles
+// 3. Global Memory: Different tile - ~400 cycles
 
 //=============================================================================
 // Main Compute Shader - Combined Density + Pressure with Neighbor Caching
@@ -286,42 +318,91 @@ uint GetMortonCellIDFromCellCoord(int3 cellCoord)
 void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
 	uint idx = DispatchThreadId.x;
+
+	//=========================================================================
+	// PHASE 1: Load data to Shared Memory (ALL threads must participate)
+	// This includes threads beyond ParticleCount - they load zeros
+	// GroupMemoryBarrierWithGroupSync requires ALL threads to reach it
+	//=========================================================================
+	uint localIdx = idx % TILE_SIZE;
+	uint tileStartIdx = idx - localIdx;
+
+	// Read particle data (or zeros if beyond ParticleCount)
+	uint idx3 = idx * 3;
+	float3 pos = float3(0.0f, 0.0f, 0.0f);
+	uint flags = 0;
+	float prevDensity = 0.0f;
+	float lambda_i_prev = 0.0f;
+	float3 vel = float3(0.0f, 0.0f, 0.0f);
+
+	if (idx < (uint)ParticleCount)
+	{
+		pos = float3(PredictedPositions[idx3], PredictedPositions[idx3 + 1], PredictedPositions[idx3 + 2]);
+		flags = Flags[idx];
+		UnpackDensityLambda(PackedDensityLambda[idx], prevDensity, lambda_i_prev);
+		vel = UnpackVelocity(PackedVelocities[idx]);
+	}
+
+	// Load to Shared Memory (LDS)
+	gs_Positions[localIdx] = pos;
+	gs_Lambdas[localIdx] = lambda_i_prev;
+	gs_Flags[localIdx] = flags;
+
+	// Synchronize - ALL threads must hit this barrier
+	GroupMemoryBarrierWithGroupSync();
+
+	//=========================================================================
+	// PHASE 2: Early returns (AFTER barrier - safe to diverge now)
+	//=========================================================================
 	if (idx >= (uint)ParticleCount)
 	{
 		return;
 	}
 
-	// Read SOA buffers
-	uint idx3 = idx * 3;
-	uint flags = Flags[idx];
-
 	// Skip attached particles
 	if (HasFlag(flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 	{
-		Densities[idx] = RestDensity;
-		Lambdas[idx] = 0.0f;
+		PackedDensityLambda[idx] = PackDensityLambda(RestDensity, 0.0f);
 		return;
 	}
 
 	// Skip sleeping particles - they are excluded from constraint solving
-	// This reduces micro-jitter and improves performance (NVIDIA Flex technique)
 	if (HasFlag(flags, GPU_PARTICLE_FLAG_IS_SLEEPING))
 	{
-		// Keep density at rest for sleeping particles
-		Densities[idx] = RestDensity;
-		Lambdas[idx] = 0.0f;
-		// Position remains unchanged - sleeping particles don't move
+		PackedDensityLambda[idx] = PackDensityLambda(RestDensity, 0.0f);
 		return;
 	}
 
 	// NEAR_BOUNDARY flag check - used later to skip position corrections
 	bool bIsNearBoundary = HasFlag(flags, GPU_PARTICLE_FLAG_NEAR_BOUNDARY);
 
-	float3 pos = float3(PredictedPositions[idx3], PredictedPositions[idx3 + 1], PredictedPositions[idx3 + 2]);
-	float3 vel = float3(Velocities[idx3], Velocities[idx3 + 1], Velocities[idx3 + 2]);
+	//=========================================================================
+	// Wave Intrinsics Setup
+	// Z-Order sorting means adjacent threads process spatially adjacent particles.
+	// When neighborIdx falls within [waveStartIdx, waveStartIdx + waveSize),
+	// we can use WaveReadLaneAt for instant register-to-register access.
+	//=========================================================================
+#if COMPILER_SUPPORTS_WAVE_INTRINSICS
+	uint waveSize = WaveGetLaneCount();  // 32 (NVIDIA) or 64 (AMD)
+	uint laneIndex = WaveGetLaneIndex(); // 0 ~ waveSize-1
+	uint waveStartIdx = idx - laneIndex; // Particle index of lane 0 in this warp
 
-	// Previous iteration's Lambda (for Jacobi-style update)
-	float lambda_i_prev = Lambdas[idx];
+	// Get mask of active lanes (threads that didn't return early)
+	// Bit N = 1 means lane N is still active and has valid register data
+	uint4 activeLaneMask = WaveActiveBallot(true);
+#else
+	// Fallback: set invalid range so GetNeighborData always uses Global Memory
+	uint waveSize = 0;
+	uint waveStartIdx = 0xFFFFFFFF;
+	uint4 activeLaneMask = uint4(0, 0, 0, 0);
+#endif
+
+	// Load own data to registers for Wave Intrinsics sharing
+	// Note: Mass removed (using UniformParticleMass constant instead)
+	FWaveParticleData myData;
+	myData.Position = pos;
+	myData.Lambda = lambda_i_prev;
+	myData.Flags = flags;
 
 	// Convert smoothing radius from cm to m for kernel calculations
 	float h = SmoothingRadius * CM_TO_M;
@@ -348,6 +429,25 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// Higher value = stronger anti-clumping = particles spread evenly
 	// When bEnableTensileInstability = 0, tensileK_scaled = 0, making scorr = 0
 	float tensileK_scaled = TensileK * (float)bEnableTensileInstability;
+
+	// Precompute Tensile exponent multipliers (branchless)
+	// TensileN=2: mult4=0, mult6=0 → ratio^2
+	// TensileN=4: mult4=1, mult6=0 → ratio^4
+	// TensileN=6: mult4=1, mult6=1 → ratio^6
+	float tensileMult4 = (TensileN >= 4) ? 1.0f : 0.0f;
+	float tensileMult6 = (TensileN >= 6) ? 1.0f : 0.0f;
+
+	// Precompute Surface Tension constants (avoid repeated additions in hot loop)
+	float stActivationWithTolerance = SurfaceTensionActivationDistance + SurfaceTensionTolerance;
+	float stFalloffRange = SmoothingRadius - SurfaceTensionFalloffDistance;
+	float stInvFalloffRange = 1.0f / max(stFalloffRange, 0.001f);
+	float stToleranceRange = SurfaceTensionFalloffDistance - stActivationWithTolerance;
+	float stInvToleranceRange = 1.0f / max(stToleranceRange, 0.001f);
+	bool bDoSurfaceTension = bEnablePositionBasedSurfaceTension && (SurfaceTensionStrength > 0.0f);
+
+	// Precompute combined coefficients
+	float massPoly6 = UniformParticleMass * Poly6Coeff;
+	float spikyScale = SpikyCoeff * CM_TO_M;
 
 	//=========================================================================
 	// Branch based on iteration index for neighbor caching
@@ -391,17 +491,19 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 						uint maxNeighborIdx = min(cellEnd, (uint)(ParticleCount - 1));
 						for (uint neighborIdx = cellStart; neighborIdx <= maxNeighborIdx; ++neighborIdx)
 						{
-							uint neighborIdx3 = neighborIdx * 3;
-							uint neighborFlags = Flags[neighborIdx];
+							// Shared Memory + Wave Intrinsics: Get neighbor data
+						// 1st: Check tile (LDS), 2nd: Check warp (registers), 3rd: Global Memory
+						FWaveParticleData neighborData = GetNeighborDataWithTile(
+							neighborIdx, tileStartIdx, waveStartIdx, waveSize, myData, activeLaneMask,
+							PredictedPositions, PackedDensityLambda, Flags);
 
 							// Skip attached neighbors - they cluster at bone and cause explosion
-							if (HasFlag(neighborFlags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+							if (HasFlag(neighborData.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 							{
 								continue;
 							}
 
-							float3 neighborPos = float3(PredictedPositions[neighborIdx3], PredictedPositions[neighborIdx3 + 1], PredictedPositions[neighborIdx3 + 2]);
-							float3 r_cm = pos - neighborPos;
+							float3 r_cm = pos - neighborData.Position;
 							float r2_cm = dot(r_cm, r_cm);
 							float r2 = r2_cm * CM_TO_M_SQ;
 
@@ -414,68 +516,63 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 									cachedCount++;
 								}
 
-								float mass = Masses[neighborIdx];
-								float w = Poly6Kernel(r2, h2);
-								density += mass * Poly6Coeff * w;
+								//=============================================================
+								// ALU Optimized: Inline kernels, single rsqrt, branchless math
+								//=============================================================
+
+								// Poly6: inline without branch (already checked r2 < h2)
+								float diff = h2 - r2;
+								float diff3 = diff * diff * diff;
+								density += massPoly6 * diff3;
 								if (neighborIdx != idx) neighborCount++;
 
+								// Compute rsqrt ONCE - reuse for gradient and surface tension
+								float r2_safe = r2 + SMALL_NUMBER;
+								float rLenInv = rsqrt(r2_safe);
+								float rLen = r2_safe * rLenInv;  // sqrt(r2)
+
+								// Spiky gradient: inline (h - rLen already > 0 since r2 < h2)
+								float diffSpiky = h - rLen;
 								float3 r = r_cm * CM_TO_M;
-								float3 gradW = SpikyGradientFast(r, r2, h, h2);
-								gradW *= SpikyCoeff * CM_TO_M;
+								float3 gradW = (r * rLenInv) * (diffSpiky * diffSpiky * spikyScale);
 
 								float3 gradC_j = -gradW * invRestDensity;
 								sumGradC2 += dot(gradC_j, gradC_j);
 								gradC_i += gradW * invRestDensity;
 
-								if (neighborIdx != idx && r2 >= SMALL_NUMBER)
+								if (neighborIdx != idx)
 								{
-									float lambda_j_prev = Lambdas[neighborIdx];
-									// Branchless tensile instability using pre-computed tensileK_scaled
-									// When disabled, tensileK_scaled = 0, so scorr = 0
-									float diff = h2 - r2;
-									float W_r = diff * diff * diff;
-									float ratio = W_r * InvW_DeltaQ;
+									// Branchless tensile instability
+									float ratio = diff3 * InvW_DeltaQ;
 									float ratio2 = ratio * ratio;
-									float ratioN = ratio2;
-									if (TensileN >= 4) ratioN *= ratio2;
-									if (TensileN >= 6) ratioN *= ratio2;
+									// ratioN = ratio2 * (ratio2^mult4) * (ratio2^mult6)
+									// When mult=0: ratio2^0 = 1, When mult=1: ratio2^1 = ratio2
+									float ratioN = ratio2 * lerp(1.0f, ratio2, tensileMult4) * lerp(1.0f, ratio2, tensileMult6);
 									float scorr = -tensileK_scaled * ratioN;
-									deltaP += (lambda_i_prev + lambda_j_prev + scorr) * gradW;
+									deltaP += (lambda_i_prev + neighborData.Lambda + scorr) * gradW;
 									constraintCount++;
 
-									float dist_cm = sqrt(r2_cm);
-									float3 pullDirection = -r_cm / max(dist_cm, SMALL_NUMBER);
-
-									//=============================================================
-									// Surface Tension (NVIDIA FleX style)
-									// Position-based constraint that pulls particles toward rest distance
-									// Creates spherical droplets by minimizing surface area
-									//=============================================================
-									if (bEnablePositionBasedSurfaceTension && SurfaceTensionStrength > 0.0f)
+									// Surface Tension: reuse rsqrt, branchless falloff
+									if (bDoSurfaceTension)
 									{
-										float stActivationWithTolerance = SurfaceTensionActivationDistance + SurfaceTensionTolerance;
-										if (dist_cm > stActivationWithTolerance)
-										{
-											float stStrength = SurfaceTensionStrength;
+										float dist_cm = r2_cm * rsqrt(r2_cm + SMALL_NUMBER);  // sqrt approximation
+										float3 pullDirection = -r_cm * rLenInv * CM_TO_M;  // reuse rLenInv (scaled)
 
-											// Falloff: linear decrease from FalloffDistance to SmoothingRadius
-											if (dist_cm > SurfaceTensionFalloffDistance)
-											{
-												float falloffRange = SmoothingRadius - SurfaceTensionFalloffDistance;
-												float falloffT = (dist_cm - SurfaceTensionFalloffDistance) / max(falloffRange, 0.001f);
-												stStrength *= saturate(1.0f - falloffT);
-											}
+										// Branchless activation check
+										float distFromActivation = dist_cm - stActivationWithTolerance;
+										float activationMask = step(0.0f, distFromActivation);
 
-											// Quadratic correction near tolerance boundary
-											float distFromTolerance = dist_cm - stActivationWithTolerance;
-											float toleranceRange = SurfaceTensionFalloffDistance - stActivationWithTolerance;
-											float normalizedDist = saturate(distFromTolerance / max(toleranceRange, 0.001f));
-											float easedStrength = normalizedDist * normalizedDist;
+										// Branchless falloff
+										float falloffT = saturate((dist_cm - SurfaceTensionFalloffDistance) * stInvFalloffRange);
+										float stStrength = SurfaceTensionStrength * (1.0f - falloffT);
 
-											float stCorrectionMag = distFromTolerance * stStrength * easedStrength;
+										// Quadratic easing
+										float normalizedDist = saturate(distFromActivation * stInvToleranceRange);
+										float easedStrength = normalizedDist * normalizedDist;
+
+										float stCorrectionMag = distFromActivation * stStrength * easedStrength * activationMask;
 										surfaceTensionCorrection += pullDirection * stCorrectionMag;
-											surfaceTensionConstraintCount++;
-										}
+										surfaceTensionConstraintCount += (uint)activationMask;
 									}
 								}
 							}
@@ -509,17 +606,19 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 								continue;
 							}
 
-							uint neighborIdx3 = neighborIdx * 3;
-							uint neighborFlags = Flags[neighborIdx];
+							// Shared Memory + Wave Intrinsics: Get neighbor data
+							// Note: Legacy hash mode has less spatial coherence, but still benefits
+							FWaveParticleData neighborData = GetNeighborDataWithTile(
+								neighborIdx, tileStartIdx, waveStartIdx, waveSize, myData, activeLaneMask,
+								PredictedPositions, PackedDensityLambda, Flags);
 
 							// Skip attached neighbors - they cluster at bone and cause explosion
-							if (HasFlag(neighborFlags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+							if (HasFlag(neighborData.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 							{
 								continue;
 							}
 
-							float3 neighborPos = float3(PredictedPositions[neighborIdx3], PredictedPositions[neighborIdx3 + 1], PredictedPositions[neighborIdx3 + 2]);
-							float3 r_cm = pos - neighborPos;
+							float3 r_cm = pos - neighborData.Position;
 							float r2_cm = dot(r_cm, r_cm);
 							float r2 = r2_cm * CM_TO_M_SQ;
 
@@ -533,64 +632,58 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 									cachedCount++;
 								}
 
-								float mass = Masses[neighborIdx];
-								float w = Poly6Kernel(r2, h2);
-								density += mass * Poly6Coeff * w;
+								//=============================================================
+								// ALU Optimized: Inline kernels, single rsqrt, branchless math
+								//=============================================================
 
-								if (neighborIdx != idx)
-								{
-									neighborCount++;
-								}
+								// Poly6: inline without branch
+								float diff = h2 - r2;
+								float diff3 = diff * diff * diff;
+								density += massPoly6 * diff3;
+								if (neighborIdx != idx) neighborCount++;
 
+								// Compute rsqrt ONCE
+								float r2_safe = r2 + SMALL_NUMBER;
+								float rLenInv = rsqrt(r2_safe);
+								float rLen = r2_safe * rLenInv;
+
+								// Spiky gradient: inline
+								float diffSpiky = h - rLen;
 								float3 r = r_cm * CM_TO_M;
-								float3 gradW = SpikyGradientFast(r, r2, h, h2);
-								gradW *= SpikyCoeff * CM_TO_M;
+								float3 gradW = (r * rLenInv) * (diffSpiky * diffSpiky * spikyScale);
 
 								float3 gradC_j = -gradW * invRestDensity;
 								sumGradC2 += dot(gradC_j, gradC_j);
 								gradC_i += gradW * invRestDensity;
 
-								if (neighborIdx != idx && r2 >= SMALL_NUMBER)
+								if (neighborIdx != idx)
 								{
-									float lambda_j_prev = Lambdas[neighborIdx];
-									// Branchless tensile instability using pre-computed tensileK_scaled
-									float diff = h2 - r2;
-									float W_r = diff * diff * diff;
-									float ratio = W_r * InvW_DeltaQ;
+									// Branchless tensile instability
+									float ratio = diff3 * InvW_DeltaQ;
 									float ratio2 = ratio * ratio;
-									float ratioN = ratio2;
-									if (TensileN >= 4) ratioN *= ratio2;
-									if (TensileN >= 6) ratioN *= ratio2;
+									float ratioN = ratio2 * lerp(1.0f, ratio2, tensileMult4) * lerp(1.0f, ratio2, tensileMult6);
 									float scorr = -tensileK_scaled * ratioN;
-									deltaP += (lambda_i_prev + lambda_j_prev + scorr) * gradW;
+									deltaP += (lambda_i_prev + neighborData.Lambda + scorr) * gradW;
 									constraintCount++;
 
-									float dist_cm = sqrt(r2_cm);
-									float3 pullDirection = -r_cm / max(dist_cm, SMALL_NUMBER);
-
-									//=============================================================
-									// Surface Tension (Position-Based)
-									//=============================================================
-									if (bEnablePositionBasedSurfaceTension && SurfaceTensionStrength > 0.0f)
+									// Surface Tension: reuse rsqrt, branchless falloff
+									if (bDoSurfaceTension)
 									{
-										float stActivationWithTolerance2 = SurfaceTensionActivationDistance + SurfaceTensionTolerance;
-										if (dist_cm > stActivationWithTolerance2)
-										{
-											float stStrength = SurfaceTensionStrength;
-											if (dist_cm > SurfaceTensionFalloffDistance)
-											{
-												float falloffRange = SmoothingRadius - SurfaceTensionFalloffDistance;
-												float falloffT = (dist_cm - SurfaceTensionFalloffDistance) / max(falloffRange, 0.001f);
-												stStrength *= saturate(1.0f - falloffT);
-											}
-											float distFromTolerance2 = dist_cm - stActivationWithTolerance2;
-											float toleranceRange2 = SurfaceTensionFalloffDistance - stActivationWithTolerance2;
-											float normalizedDist2 = saturate(distFromTolerance2 / max(toleranceRange2, 0.001f));
-											float easedStrength2 = normalizedDist2 * normalizedDist2;
-											float stCorrectionMag = distFromTolerance2 * stStrength * easedStrength2;
-											surfaceTensionCorrection += pullDirection * stCorrectionMag;
-											surfaceTensionConstraintCount++;
-										}
+										float dist_cm = r2_cm * rsqrt(r2_cm + SMALL_NUMBER);
+										float3 pullDirection = -r_cm * rLenInv * CM_TO_M;
+
+										float distFromActivation = dist_cm - stActivationWithTolerance;
+										float activationMask = step(0.0f, distFromActivation);
+
+										float falloffT = saturate((dist_cm - SurfaceTensionFalloffDistance) * stInvFalloffRange);
+										float stStrength = SurfaceTensionStrength * (1.0f - falloffT);
+
+										float normalizedDist = saturate(distFromActivation * stInvToleranceRange);
+										float easedStrength = normalizedDist * normalizedDist;
+
+										float stCorrectionMag = distFromActivation * stStrength * easedStrength * activationMask;
+										surfaceTensionCorrection += pullDirection * stCorrectionMag;
+										surfaceTensionConstraintCount += (uint)activationMask;
 									}
 								}
 							}
@@ -621,81 +714,78 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			uint n = reverseOrder ? (cachedCount - 1 - ni) : ni;
 			uint neighborIdx = NeighborList[baseIdx + n];
 
-			uint neighborIdx3 = neighborIdx * 3;
-			uint neighborFlags = Flags[neighborIdx];
+			// Shared Memory + Wave Intrinsics: Get neighbor data
+			// For cached iterations, Position and Lambda have changed, so we need fresh reads.
+			// Shared Memory is refreshed each iteration via GroupMemoryBarrierWithGroupSync.
+			FWaveParticleData neighborData = GetNeighborDataWithTile(
+				neighborIdx, tileStartIdx, waveStartIdx, waveSize, myData, activeLaneMask,
+				PredictedPositions, PackedDensityLambda, Flags);
 
 			// Skip attached neighbors - they cluster at bone and cause explosion
-			if (HasFlag(neighborFlags, GPU_PARTICLE_FLAG_IS_ATTACHED))
+			if (HasFlag(neighborData.Flags, GPU_PARTICLE_FLAG_IS_ATTACHED))
 			{
 				continue;
 			}
 
-			float3 neighborPos = float3(PredictedPositions[neighborIdx3], PredictedPositions[neighborIdx3 + 1], PredictedPositions[neighborIdx3 + 2]);
-			float3 r_cm = pos - neighborPos;
+			float3 r_cm = pos - neighborData.Position;
 			float r2_cm = dot(r_cm, r_cm);
 			float r2 = r2_cm * CM_TO_M_SQ;
 
 			// Still need distance check as positions changed
 			if (r2 < h2)
 			{
-				float mass = Masses[neighborIdx];
-				float w = Poly6Kernel(r2, h2);
-				density += mass * Poly6Coeff * w;
+				//=============================================================
+				// ALU Optimized: Inline kernels, single rsqrt, branchless math
+				//=============================================================
 
-				if (neighborIdx != idx)
-				{
-					neighborCount++;
-				}
+				// Poly6: inline without branch
+				float diff = h2 - r2;
+				float diff3 = diff * diff * diff;
+				density += massPoly6 * diff3;
+				if (neighborIdx != idx) neighborCount++;
 
+				// Compute rsqrt ONCE
+				float r2_safe = r2 + SMALL_NUMBER;
+				float rLenInv = rsqrt(r2_safe);
+				float rLen = r2_safe * rLenInv;
+
+				// Spiky gradient: inline
+				float diffSpiky = h - rLen;
 				float3 r = r_cm * CM_TO_M;
-				float3 gradW = SpikyGradientFast(r, r2, h, h2);
-				gradW *= SpikyCoeff * CM_TO_M;
+				float3 gradW = (r * rLenInv) * (diffSpiky * diffSpiky * spikyScale);
 
 				float3 gradC_j = -gradW * invRestDensity;
 				sumGradC2 += dot(gradC_j, gradC_j);
 				gradC_i += gradW * invRestDensity;
 
-				if (neighborIdx != idx && r2 >= SMALL_NUMBER)
+				if (neighborIdx != idx)
 				{
-					float lambda_j_prev = Lambdas[neighborIdx];
-					// Branchless tensile instability using pre-computed tensileK_scaled
-					float diff = h2 - r2;
-					float W_r = diff * diff * diff;
-					float ratio = W_r * InvW_DeltaQ;
+					// Branchless tensile instability
+					float ratio = diff3 * InvW_DeltaQ;
 					float ratio2 = ratio * ratio;
-					float ratioN = ratio2;
-					if (TensileN >= 4) ratioN *= ratio2;
-					if (TensileN >= 6) ratioN *= ratio2;
+					float ratioN = ratio2 * lerp(1.0f, ratio2, tensileMult4) * lerp(1.0f, ratio2, tensileMult6);
 					float scorr = -tensileK_scaled * ratioN;
-					deltaP += (lambda_i_prev + lambda_j_prev + scorr) * gradW;
+					deltaP += (lambda_i_prev + neighborData.Lambda + scorr) * gradW;
 					constraintCount++;
 
-					float dist_cm = sqrt(r2_cm);
-					float3 pullDirection = -r_cm / max(dist_cm, SMALL_NUMBER);
-
-					//=============================================================
-					// Surface Tension (Position-Based)
-					//=============================================================
-					if (bEnablePositionBasedSurfaceTension && SurfaceTensionStrength > 0.0f)
+					// Surface Tension: reuse rsqrt, branchless falloff
+					if (bDoSurfaceTension)
 					{
-						float stActivationWithTolerance3 = SurfaceTensionActivationDistance + SurfaceTensionTolerance;
-						if (dist_cm > stActivationWithTolerance3)
-						{
-							float stStrength = SurfaceTensionStrength;
-							if (dist_cm > SurfaceTensionFalloffDistance)
-							{
-								float falloffRange = SmoothingRadius - SurfaceTensionFalloffDistance;
-								float falloffT = (dist_cm - SurfaceTensionFalloffDistance) / max(falloffRange, 0.001f);
-								stStrength *= saturate(1.0f - falloffT);
-							}
-							float distFromTolerance3 = dist_cm - stActivationWithTolerance3;
-							float toleranceRange3 = SurfaceTensionFalloffDistance - stActivationWithTolerance3;
-							float normalizedDist3 = saturate(distFromTolerance3 / max(toleranceRange3, 0.001f));
-							float easedStrength3 = normalizedDist3 * normalizedDist3;
-							float stCorrectionMag = distFromTolerance3 * stStrength * easedStrength3;
-							surfaceTensionCorrection += pullDirection * stCorrectionMag;
-							surfaceTensionConstraintCount++;
-						}
+						float dist_cm = r2_cm * rsqrt(r2_cm + SMALL_NUMBER);
+						float3 pullDirection = -r_cm * rLenInv * CM_TO_M;
+
+						float distFromActivation = dist_cm - stActivationWithTolerance;
+						float activationMask = step(0.0f, distFromActivation);
+
+						float falloffT = saturate((dist_cm - SurfaceTensionFalloffDistance) * stInvFalloffRange);
+						float stStrength = SurfaceTensionStrength * (1.0f - falloffT);
+
+						float normalizedDist = saturate(distFromActivation * stInvToleranceRange);
+						float easedStrength = normalizedDist * normalizedDist;
+
+						float stCorrectionMag = distFromActivation * stStrength * easedStrength * activationMask;
+						surfaceTensionCorrection += pullDirection * stCorrectionMag;
+						surfaceTensionConstraintCount += (uint)activationMask;
 					}
 				}
 			}
@@ -966,15 +1056,16 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	// Write back to SOA buffers
+	// Position: still float3 (precision critical for simulation stability)
 	PredictedPositions[idx3] = pos.x;
 	PredictedPositions[idx3 + 1] = pos.y;
 	PredictedPositions[idx3 + 2] = pos.z;
 
-	Velocities[idx3] = vel.x;
-	Velocities[idx3 + 1] = vel.y;
-	Velocities[idx3 + 2] = vel.z;
+	// Velocity: packed half3 (bandwidth optimization)
+	PackedVelocities[idx] = PackVelocity(vel);
 
-	Densities[idx] = density;
-	Lambdas[idx] = lambda;
+	// Density + Lambda: packed half2 (bandwidth optimization)
+	PackedDensityLambda[idx] = PackDensityLambda(density, lambda);
+
 	NeighborCountsBuffer[idx] = neighborCount;
 }
