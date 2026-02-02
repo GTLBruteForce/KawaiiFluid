@@ -53,7 +53,7 @@ RWStructuredBuffer<float4> OutAnisotropyAxis1;
 RWStructuredBuffer<float4> OutAnisotropyAxis2;
 RWStructuredBuffer<float4> OutAnisotropyAxis3;
 
-// Output: Render offset for surface particles (이웃 방향으로 당겨서 렌더링)
+// Output: Render offset for surface particles (pull toward neighbors for rendering)
 RWStructuredBuffer<float3> OutRenderOffset;
 float ParticleRadius;
 
@@ -360,16 +360,16 @@ bool CalculateBoundaryAnisotropy(
 	Axis3 = float3(0, 0, 1);
 	Scale1 = Scale2 = Scale3 = 1.0f;
 
-	// 콜라이더가 없으면 구형으로 fallback
+	// Fallback to sphere if no colliders
 	if (SphereCount == 0 && CapsuleCount == 0 && BoxCount == 0)
 	{
 		return false;
 	}
 
-	// 가장 가까운 콜라이더의 surface normal 계산
+	// Calculate surface normal from closest collider
 	float3 worldNormal = GetClosestColliderNormal(ParticlePos, ColliderSearchRadius);
 
-	// 노말을 못찾으면 (콜라이더가 범위 밖이면) fallback
+	// Fallback if normal not found (collider out of range)
 	if (length(worldNormal) < 0.001f)
 	{
 		return false;
@@ -381,11 +381,11 @@ bool CalculateBoundaryAnisotropy(
 	BuildOrthonormalBasis(Axis3, Axis1, Axis2);
 
 	// Pancake shape with custom aspect ratio and volume
-	// 가로:높이 = 4:1, 부피 = 3.0
-	float aspectRatio = 4.0f;   // 가로/높이 비율
-	float targetVolume = 3.0f;  // 목표 부피
+	// Aspect ratio (width:height) = 4:1, target volume = 3.0
+	float aspectRatio = 4.0f;   // width/height ratio
+	float targetVolume = 3.0f;  // target volume
 
-	// 계산: Scale1 = Scale2 = aspectRatio * Scale3
+	// Calculation: Scale1 = Scale2 = aspectRatio * Scale3
 	// Volume = aspectRatio² × Scale3³ = targetVolume
 	// Scale3 = (targetVolume / aspectRatio²)^(1/3)
 	Scale3 = pow(targetVolume / (aspectRatio * aspectRatio), 1.0f / 3.0f);
@@ -727,7 +727,7 @@ void CalculateDensityBased(
 	out float3 Axis1, out float3 Axis2, out float3 Axis3,
 	out float Scale1, out float Scale2, out float Scale3,
 	out int OutNeighborCount,
-	out float3 OutSmoothedCenter)  // 이웃들의 가중 평균 위치 (렌더 오프셋용)
+	out float3 OutSmoothedCenter)  // Weighted average position of neighbors (for render offset)
 {
 	// Default: identity (sphere with scale 1.0, NOT AnisotropyScale)
 	Axis1 = float3(1, 0, 0);
@@ -735,7 +735,7 @@ void CalculateDensityBased(
 	Axis3 = float3(0, 0, 1);
 	Scale1 = Scale2 = Scale3 = 1.0f;
 	OutNeighborCount = 0;
-	OutSmoothedCenter = float3(0, 0, 0);  // 초기화
+	OutSmoothedCenter = float3(0, 0, 0);  // initialize
 
 	uint idx3 = ParticleIndex * 3;
 	float3 CenterPos = float3(InPositions[idx3], InPositions[idx3 + 1], InPositions[idx3 + 2]);
@@ -877,7 +877,7 @@ void CalculateDensityBased(
 
 	// Compute Smoothed Position (weighted average)
 	float3 SmoothedCenter = SumWP / SumW;
-	OutSmoothedCenter = SmoothedCenter;  // 렌더 오프셋 계산용으로 반환
+	OutSmoothedCenter = SmoothedCenter;  // return for render offset calculation
 
 	// =========================================================================
 	// PASS 2: Compute Covariance from LOCAL CACHE (no memory access!)
@@ -1289,7 +1289,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3 Axis1, Axis2, Axis3;
 	float Scale1, Scale2, Scale3;
 	int NeighborCount = 0;
-	float3 SmoothedCenter = float3(0, 0, 0);  // 이웃들의 가중 평균 위치
+	float3 SmoothedCenter = float3(0, 0, 0);  // weighted average position of neighbors
 	float3 renderOffset = float3(0, 0, 0);    // 표면 입자 렌더링 오프셋
 
 	// Read particle data (SOA)
@@ -1318,13 +1318,13 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	bool bUsedSurfaceNormal = false;
 	if (bEnableSurfaceNormalAnisotropy)
 	{
-		// 파티클 위치 읽기
+		// Read particle position
 		float3 particlePos = float3(InPositions[idx3], InPositions[idx3 + 1], InPositions[idx3 + 2]);
 
-		// NEAR_BOUNDARY 플래그 체크
+		// Check NEAR_BOUNDARY flag
 		bool bIsNearBoundary = (flags & FLAG_NEAR_BOUNDARY) != 0;
 
-		// NEAR_BOUNDARY 입자만 콜라이더 노말 계산 (모든 입자에 적용하면 비용이 큼)
+		// Calculate collider normal only for NEAR_BOUNDARY particles (expensive if applied to all)
 		if (bIsNearBoundary)
 		{
 			bUsedSurfaceNormal = CalculateBoundaryAnisotropy(Idx, particlePos, Axis1, Axis2, Axis3, Scale1, Scale2, Scale3);
@@ -1335,19 +1335,19 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	if (bUsedSurfaceNormal)
 	{
 		// Surface normal anisotropy was used, now add subtle velocity-based stretch
-		// 속도 방향으로 살짝 늘어나게 (너무 강하지 않게)
+		// Subtle stretch along velocity direction (not too strong)
 		float Speed = length(EffectiveVelocity);
 
-		if (Speed > 0.1f)  // 최소 속도 threshold
+		if (Speed > 0.1f)  // minimum speed threshold
 		{
 			float3 VelDir = EffectiveVelocity / Speed;
 
-			// 약한 속도 stretch (0.2 = 기본의 20% 강도)
-			float BoundaryVelStretchFactor = 0.002f;  // 매우 약하게
+			// Weak velocity stretch (0.002 = very subtle)
+			float BoundaryVelStretchFactor = 0.002f;  // very weak
 			float VelStretch = 1.0f + Speed * BoundaryVelStretchFactor;
-			VelStretch = clamp(VelStretch, 1.0f, 1.3f);  // 최대 30%까지만 늘어남
+			VelStretch = clamp(VelStretch, 1.0f, 1.3f);  // max 30% stretch
 
-			// 속도 방향으로 각 축에 projection해서 stretch 적용
+			// Apply stretch by projecting velocity direction onto each axis
 			float Proj1 = abs(dot(VelDir, Axis1));
 			float Proj2 = abs(dot(VelDir, Axis2));
 			float Proj3 = abs(dot(VelDir, Axis3));
@@ -1362,6 +1362,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			Scale3 = clamp(Scale3, AnisotropyMin, AnisotropyMax);
 		}
 	}
+	// Apply clamp
 	else if (AnisotropyMode == MODE_VELOCITY_BASED)
 	{
 		// Pure velocity-based: axes from velocity direction
@@ -1460,9 +1461,9 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 
 	// =========================================================================
-	// 표면 입자 렌더 오프셋 계산
-	// 이웃이 1개 이상이면 SmoothedCenter 방향으로 ParticleRadius만큼 당김
-	// NEAR_BOUNDARY 입자는 이미 콜라이더에 붙어있으므로 오프셋 불필요
+	// Surface particle render offset calculation
+	// If neighbor count >= 1, pull toward SmoothedCenter by diameter (ParticleRadius * 2)
+	// NEAR_BOUNDARY particles don't need offset as they're already attached to collider
 	// =========================================================================
 	if (!bUsedSurfaceNormal && NeighborCount >= 1)
 	{
@@ -1471,7 +1472,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		float dist = length(toNeighbors);
 		if (dist > 0.001f)
 		{
-			renderOffset = (toNeighbors / dist) * ParticleRadius;
+			renderOffset = (toNeighbors / dist) * (ParticleRadius * 2.0f);  // pull by diameter
 		}
 	}
 

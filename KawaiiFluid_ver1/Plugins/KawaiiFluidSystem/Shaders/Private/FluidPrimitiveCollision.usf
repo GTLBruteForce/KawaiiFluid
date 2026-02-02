@@ -245,7 +245,7 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float penetration = max(0.0f, -effectiveDist);
 			float3 impactWorld = pos - normal * sdf;
 
-			// Apply collision response for all colliders (both bone and static)
+			// Apply collision response
 			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, sphere.Friction, sphere.Restitution);
 			originalPos = pos;  // Update for subsequent collisions
 			bCollided = true;
@@ -269,7 +269,7 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float penetration = max(0.0f, -effectiveDist);
 			float3 impactWorld = pos - normal * sdf;
 
-			// Apply collision response for all colliders (both bone and static)
+			// Apply collision response
 			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, capsule.Friction, capsule.Restitution);
 			originalPos = pos;
 			bCollided = true;
@@ -293,7 +293,7 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float penetration = max(0.0f, -effectiveDist);
 			float3 impactWorld = pos - normal * sdf;
 
-			// Apply collision response for all colliders (both bone and static)
+			// Apply collision response
 			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, box.Friction, box.Restitution);
 			originalPos = pos;
 
@@ -344,7 +344,7 @@ void PrimitiveCollisionCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			float penetration = max(0.0f, -effectiveDist);
 			float3 impactWorld = pos - normal * sdf;
 
-			// Apply collision response for all colliders (both bone and static)
+			// Apply collision response
 			ApplyCollisionResponseWithFriction(pos, originalPos, vel, normal, penetration, convex.Friction, convex.Restitution);
 			originalPos = pos;
 

@@ -215,7 +215,7 @@ void FFluidAnisotropyPassBuilder::AddAnisotropyPass(
 	FRDGBufferUAVRef OutRenderOffsetUAV = Params.OutRenderOffsetUAV;
 	if (!OutRenderOffsetUAV)
 	{
-		// 더미 버퍼 생성 (셰이더에서 쓰기는 하지만 사용하지 않음)
+		// Create dummy buffer (written by shader but unused)
 		FRDGBufferDesc DummyDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), FMath::Max(1, Params.ParticleCount));
 		FRDGBufferRef DummyBuffer = GraphBuilder.CreateBuffer(DummyDesc, TEXT("DummyRenderOffset"));
 		OutRenderOffsetUAV = GraphBuilder.CreateUAV(DummyBuffer);
