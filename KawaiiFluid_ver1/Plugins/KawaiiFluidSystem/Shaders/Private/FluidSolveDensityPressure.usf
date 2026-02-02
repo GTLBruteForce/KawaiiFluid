@@ -121,10 +121,12 @@ FWaveParticleData GetNeighborData(
 	return result;
 }
 
-// Get neighbor data with Shared Memory + Wave Intrinsics hierarchy:
-// 1. Check if neighbor is in same tile (shared memory) -> Fastest (~20 cycles)
-// 2. Check if neighbor is in same warp (wave intrinsics) -> Fast (~4 cycles)
-// 3. Otherwise read from Global Memory -> Slowest (~400 cycles)
+// Get neighbor data with optimal memory hierarchy:
+// 1. Wave Intrinsics (registers): ~4 cycles - same warp (32/64 threads)
+// 2. Shared Memory (LDS): ~20 cycles - same tile (256 threads)
+// 3. Global Memory (VRAM): ~400 cycles - different tile
+//
+// NOTE: Warp(32) ⊂ Tile(256), so Wave check must come FIRST
 FWaveParticleData GetNeighborDataWithTile(
 	uint neighborIdx,
 	uint tileStartIdx,
@@ -138,20 +140,51 @@ FWaveParticleData GetNeighborDataWithTile(
 {
 	FWaveParticleData result;
 
-	// Check if neighbor is in same tile (shared memory)
+#if COMPILER_SUPPORTS_WAVE_INTRINSICS
+	// 1. Wave Intrinsics check (FASTEST: ~4 cycles, register-to-register)
+	uint laneOffset = neighborIdx - waveStartIdx;
+
+	// Check if target lane is active
+	bool bLaneActive = false;
+	if (laneOffset < 32)
+		bLaneActive = (activeLaneMask.x & (1u << laneOffset)) != 0;
+	else if (laneOffset < 64)
+		bLaneActive = (activeLaneMask.y & (1u << (laneOffset - 32))) != 0;
+
+	if (laneOffset < waveSize && bLaneActive)
+	{
+		// Register read via Wave Intrinsics
+		result.Position.x = WaveReadLaneAt(myData.Position.x, laneOffset);
+		result.Position.y = WaveReadLaneAt(myData.Position.y, laneOffset);
+		result.Position.z = WaveReadLaneAt(myData.Position.z, laneOffset);
+		result.Lambda = WaveReadLaneAt(myData.Lambda, laneOffset);
+		result.Flags = WaveReadLaneAt(myData.Flags, laneOffset);
+		return result;
+	}
+#endif
+
+	// 2. Tile (LDS) check (FAST: ~20 cycles)
 	uint tileOffset = neighborIdx - tileStartIdx;
 	if (tileOffset < TILE_SIZE)
 	{
-		// FASTEST PATH: Neighbor in same tile - use Shared Memory (LDS)
 		result.Position = gs_Positions[tileOffset];
 		result.Lambda = gs_Lambdas[tileOffset];
 		result.Flags = gs_Flags[tileOffset];
 		return result;
 	}
 
-	// Fall back to existing GetNeighborData (Wave Intrinsics + Global Memory)
-	return GetNeighborData(neighborIdx, waveStartIdx, waveSize, myData, activeLaneMask,
-		InPredictedPositions, InPackedDensityLambda, InFlags);
+	// 3. Global Memory (SLOW: ~400 cycles)
+	uint neighborIdx3 = neighborIdx * 3;
+	result.Position = float3(
+		InPredictedPositions[neighborIdx3],
+		InPredictedPositions[neighborIdx3 + 1],
+		InPredictedPositions[neighborIdx3 + 2]);
+
+	float neighborDensity;
+	UnpackDensityLambda(InPackedDensityLambda[neighborIdx], neighborDensity, result.Lambda);
+	result.Flags = InFlags[neighborIdx];
+
+	return result;
 }
 
 //=============================================================================
