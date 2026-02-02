@@ -82,6 +82,24 @@ struct KAWAIIFLUIDRUNTIME_API FFluidAnisotropyParams
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Anisotropy|Temporal",
 		meta = (EditCondition = "bEnabled && bEnableTemporalSmoothing", ClampMin = "0", ClampMax = "1", UIMin = "0", UIMax = "1"))
 	float TemporalSmoothFactor = 0.8f;
+
+	/**
+	 * Preserve ellipsoid volume (Scale1 * Scale2 * Scale3 = 1.0).
+	 * When enabled, uses log-space processing to maintain unit volume (Yu & Turk style).
+	 * When disabled, uses raw eigenvalues from covariance matrix (NVIDIA FleX style).
+	 * FleX style may produce larger ellipsoids but matches the original FleX reference more closely.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Anisotropy|Advanced", meta = (EditCondition = "bEnabled"))
+	bool bPreserveVolume = true;
+
+	/**
+	 * Ellipsoid render scale for FleX style (only active when Preserve Volume is disabled).
+	 * Controls overall ellipsoid size: 1.0 = default, 0.5 = half size, 2.0 = double size.
+	 * Use this to match visual appearance with your particle radius.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering|Anisotropy|Advanced",
+		meta = (EditCondition = "bEnabled && !bPreserveVolume", ClampMin = "0.1", ClampMax = "4.0", UIMin = "0.1", UIMax = "4.0"))
+	float FlexRenderScale = 1.0f;
 };
 
 // FAnisotropyComputeParams is defined in GPU/FluidAnisotropyComputeShader.h

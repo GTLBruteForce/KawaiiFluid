@@ -117,6 +117,15 @@ struct KAWAIIFLUIDRUNTIME_API FAnisotropyComputeParams
 	bool bEnableTemporalSmoothing = true;
 	float TemporalSmoothFactor = 0.8f;  // 0.0 = no smoothing, 1.0 = previous frame only
 	bool bHasPreviousFrame = false;
+
+	// Volume Preservation (Yu & Turk vs FleX style)
+	// true = log-space volume preservation (Scale1*Scale2*Scale3 = 1.0)
+	// false = raw eigenvalues (FleX reference style, larger ellipsoids)
+	bool bPreserveVolume = true;
+
+	// FleX style render scale (only used when bPreserveVolume = false)
+	// Controls overall ellipsoid size in FleX mode
+	float FlexRenderScale = 1.0f;
 };
 
 // Constants (must match FluidSpatialHash.ush and FluidAnisotropyCompute.usf)
@@ -217,6 +226,14 @@ public:
 		SHADER_PARAMETER(int32, CapsuleCount)
 		SHADER_PARAMETER(int32, BoxCount)
 		SHADER_PARAMETER(float, ColliderSearchRadius)
+
+		// Volume Preservation mode
+		// 1 = Yu & Turk style (log-space, volume = 1.0)
+		// 0 = FleX style (raw eigenvalues, no volume constraint)
+		SHADER_PARAMETER(int32, bPreserveVolume)
+
+		// FleX style render scale (only used when bPreserveVolume = 0)
+		SHADER_PARAMETER(float, FlexRenderScale)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 64;

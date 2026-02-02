@@ -112,6 +112,15 @@ int bEnableTemporalSmoothing;
 float TemporalSmoothFactor;
 int bHasPreviousFrame;
 
+// Volume Preservation mode
+// 1 = Yu & Turk style (log-space, volume = 1.0)
+// 0 = FleX style (raw eigenvalues, no volume constraint)
+int bPreserveVolume;
+
+// FleX style render scale (only used when bPreserveVolume = 0)
+// Controls overall ellipsoid size in FleX mode
+float FlexRenderScale;
+
 //-----------------------------------------------------------------------------
 // BoneDelta Attachment for NEAR_BOUNDARY particles (must match C++ FGPUBoneDeltaAttachment)
 // 64 bytes - matches GPUBoundaryAttachment.h and FluidBoneDeltaAttachment.ush
@@ -620,7 +629,7 @@ void SymmetricEigen3x3(
 
 //-----------------------------------------------------------------------------
 // Velocity-Based Anisotropy (with explicit velocity parameter)
-// Volume-preserving using log-space processing
+// Supports both volume-preserving (Yu & Turk) and FleX style
 //-----------------------------------------------------------------------------
 void CalculateVelocityBasedWithVelocity(
 	float3 Velocity,
@@ -640,36 +649,52 @@ void CalculateVelocityBasedWithVelocity(
 		Axis1 = Velocity / Speed;
 		BuildOrthonormalBasis(Axis1, Axis2, Axis3);
 
-		// Calculate stretch in log space for volume preservation
-		// Stretch along velocity: LogScale1 = log(1 + Speed * Stretch)
-		// Perpendicular compression: LogScale2 = LogScale3 = -LogScale1 / 2 (volume = 1.0)
 		float Stretch = VelocityStretchFactor * AnisotropyScale;
 		float RawScale1 = 1.0f + Speed * Stretch;
 
-		// Convert to log space
-		float LogScale1 = log(max(RawScale1, 0.001f));
-		// Volume preservation: LogScale1 + 2*LogScale2 = 0 => LogScale2 = -LogScale1/2
-		float LogScale2 = -LogScale1 * 0.5f;
-		float LogScale3 = LogScale2;
+		if (bPreserveVolume)
+		{
+			// =========================================================================
+			// Volume-preserving using log-space processing
+			// Stretch along velocity: LogScale1 = log(1 + Speed * Stretch)
+			// Perpendicular compression: LogScale2 = LogScale3 = -LogScale1 / 2 (volume = 1.0)
+			// =========================================================================
 
-		// Re-center logs to maintain volume = 1.0
-		float LogSum = LogScale1 + LogScale2 + LogScale3;
-		float LogAvg = LogSum / 3.0f;
-		LogScale1 -= LogAvg;
-		LogScale2 -= LogAvg;
-		LogScale3 -= LogAvg;
+			// Convert to log space
+			float LogScale1 = log(max(RawScale1, 0.001f));
+			// Volume preservation: LogScale1 + 2*LogScale2 = 0 => LogScale2 = -LogScale1/2
+			float LogScale2 = -LogScale1 * 0.5f;
+			float LogScale3 = LogScale2;
 
-		// Final clamp in log space (only once, after all operations)
-		float LogMin = log(max(AnisotropyMin, 0.001f));
-		float LogMax = log(max(AnisotropyMax, 0.001f));
-		LogScale1 = clamp(LogScale1, LogMin, LogMax);
-		LogScale2 = clamp(LogScale2, LogMin, LogMax);
-		LogScale3 = clamp(LogScale3, LogMin, LogMax);
+			// Re-center logs to maintain volume = 1.0
+			float LogSum = LogScale1 + LogScale2 + LogScale3;
+			float LogAvg = LogSum / 3.0f;
+			LogScale1 -= LogAvg;
+			LogScale2 -= LogAvg;
+			LogScale3 -= LogAvg;
 
-		// Convert back to linear space
-		Scale1 = exp(LogScale1);
-		Scale2 = exp(LogScale2);
-		Scale3 = exp(LogScale3);
+			// Final clamp in log space (only once, after all operations)
+			float LogMin = log(max(AnisotropyMin, 0.001f));
+			float LogMax = log(max(AnisotropyMax, 0.001f));
+			LogScale1 = clamp(LogScale1, LogMin, LogMax);
+			LogScale2 = clamp(LogScale2, LogMin, LogMax);
+			LogScale3 = clamp(LogScale3, LogMin, LogMax);
+
+			// Convert back to linear space
+			Scale1 = exp(LogScale1);
+			Scale2 = exp(LogScale2);
+			Scale3 = exp(LogScale3);
+		}
+		else
+		{
+			// =========================================================================
+			// FleX Style: No volume preservation
+			// Stretch along velocity direction, perpendicular axes scaled by FlexRenderScale
+			// =========================================================================
+			Scale1 = clamp(RawScale1 * FlexRenderScale, AnisotropyMin, AnisotropyMax);
+			Scale2 = FlexRenderScale;
+			Scale3 = FlexRenderScale;
+		}
 	}
 }
 
@@ -1016,72 +1041,123 @@ void CalculateDensityBased(
 	Sigma1 = max(Sigma1, MinSigma);
 	Sigma2 = max(Sigma2, MinSigma);
 
-	// =========================================================================
-	// Yu & Turk Volume-Preserving Scale Calculation
-	// Use geometric mean normalization: Scale1 * Scale2 * Scale3 = 1.0
-	// =========================================================================
-	float GeoMean = pow(Sigma0 * Sigma1 * Sigma2, 1.0f / 3.0f);
-
-	// Prevent division by zero
-	if (GeoMean < 0.0001f)
-	{
-		GeoMean = 1.0f;
-	}
-
-	// Normalized scales (volume = 1.0 guaranteed)
-	float EllipsoidScale1 = Sigma0 / GeoMean;
-	float EllipsoidScale2 = Sigma1 / GeoMean;
-	float EllipsoidScale3 = Sigma2 / GeoMean;
-
-	// =========================================================================
-	// Volume-Preserving Log-Space Processing
-	// All operations in log space preserve geometric mean (volume = 1.0)
-	// Key insight: log(a) + log(b) + log(c) = 0  <=>  a * b * c = 1.0
-	// =========================================================================
-
-	// Step 1: Convert to log space
-	float LogScale1 = log(max(EllipsoidScale1, 0.001f));
-	float LogScale2 = log(max(EllipsoidScale2, 0.001f));
-	float LogScale3 = log(max(EllipsoidScale3, 0.001f));
-
-	// Step 2: Apply AnisotropyScale (amplify/dampen ratios)
-	// - AnisotropyScale = 0: sphere (all logs become 0)
-	// - AnisotropyScale = 1: original ratios
-	// - AnisotropyScale > 1: more extreme anisotropy
-	LogScale1 *= AnisotropyScale;
-	LogScale2 *= AnisotropyScale;
-	LogScale3 *= AnisotropyScale;
-
-	// Step 3: Re-center logs to maintain volume = 1.0 (sum of logs = 0)
-	float LogSum = LogScale1 + LogScale2 + LogScale3;
-	float LogAvg = LogSum / 3.0f;
-	LogScale1 -= LogAvg;
-	LogScale2 -= LogAvg;
-	LogScale3 -= LogAvg;
-
-	// Step 4: Neighbor-count based blending
+	// Neighbor-count based blend factor (used in both modes)
 	// Surface particles (fewer neighbors) get partial anisotropy
 	// Internal particles (more neighbors) get full anisotropy
 	float BlendFactor = saturate(
 		(float)(NeighborCount - MIN_NEIGHBORS_FOR_ANISOTROPY) /
 		(float)(FULL_NEIGHBORS_FOR_ANISOTROPY - MIN_NEIGHBORS_FOR_ANISOTROPY)
 	);
-	// Lerp in log space: sphere has log scales of (0, 0, 0)
-	LogScale1 *= BlendFactor;
-	LogScale2 *= BlendFactor;
-	LogScale3 *= BlendFactor;
 
-	// Step 5: Final clamp in log space (only once, after all operations)
-	float LogMin = log(max(AnisotropyMin, 0.001f));
-	float LogMax = log(max(AnisotropyMax, 0.001f));
-	LogScale1 = clamp(LogScale1, LogMin, LogMax);
-	LogScale2 = clamp(LogScale2, LogMin, LogMax);
-	LogScale3 = clamp(LogScale3, LogMin, LogMax);
+	if (bPreserveVolume)
+	{
+		// =========================================================================
+		// Yu & Turk Volume-Preserving Scale Calculation
+		// Use geometric mean normalization: Scale1 * Scale2 * Scale3 = 1.0
+		// =========================================================================
+		float GeoMean = pow(Sigma0 * Sigma1 * Sigma2, 1.0f / 3.0f);
 
-	// Step 6: Convert back to linear space
-	Scale1 = exp(LogScale1);
-	Scale2 = exp(LogScale2);
-	Scale3 = exp(LogScale3);
+		// Prevent division by zero
+		if (GeoMean < 0.0001f)
+		{
+			GeoMean = 1.0f;
+		}
+
+		// Normalized scales (volume = 1.0 guaranteed)
+		float EllipsoidScale1 = Sigma0 / GeoMean;
+		float EllipsoidScale2 = Sigma1 / GeoMean;
+		float EllipsoidScale3 = Sigma2 / GeoMean;
+
+		// =========================================================================
+		// Volume-Preserving Log-Space Processing
+		// All operations in log space preserve geometric mean (volume = 1.0)
+		// Key insight: log(a) + log(b) + log(c) = 0  <=>  a * b * c = 1.0
+		// =========================================================================
+
+		// Step 1: Convert to log space
+		float LogScale1 = log(max(EllipsoidScale1, 0.001f));
+		float LogScale2 = log(max(EllipsoidScale2, 0.001f));
+		float LogScale3 = log(max(EllipsoidScale3, 0.001f));
+
+		// Step 2: Apply AnisotropyScale (amplify/dampen ratios)
+		// - AnisotropyScale = 0: sphere (all logs become 0)
+		// - AnisotropyScale = 1: original ratios
+		// - AnisotropyScale > 1: more extreme anisotropy
+		LogScale1 *= AnisotropyScale;
+		LogScale2 *= AnisotropyScale;
+		LogScale3 *= AnisotropyScale;
+
+		// Step 3: Re-center logs to maintain volume = 1.0 (sum of logs = 0)
+		float LogSum = LogScale1 + LogScale2 + LogScale3;
+		float LogAvg = LogSum / 3.0f;
+		LogScale1 -= LogAvg;
+		LogScale2 -= LogAvg;
+		LogScale3 -= LogAvg;
+
+		// Step 4: Neighbor-count based blending
+		// Lerp in log space: sphere has log scales of (0, 0, 0)
+		LogScale1 *= BlendFactor;
+		LogScale2 *= BlendFactor;
+		LogScale3 *= BlendFactor;
+
+		// Step 5: Final clamp in log space (only once, after all operations)
+		float LogMin = log(max(AnisotropyMin, 0.001f));
+		float LogMax = log(max(AnisotropyMax, 0.001f));
+		LogScale1 = clamp(LogScale1, LogMin, LogMax);
+		LogScale2 = clamp(LogScale2, LogMin, LogMax);
+		LogScale3 = clamp(LogScale3, LogMin, LogMax);
+
+		// Step 6: Convert back to linear space
+		Scale1 = exp(LogScale1);
+		Scale2 = exp(LogScale2);
+		Scale3 = exp(LogScale3);
+	}
+	else
+	{
+		// =========================================================================
+		// NVIDIA FleX Reference Style: No volume preservation
+		// Uses smoothingRadius / sigma formula with relative minimum clamping
+		// =========================================================================
+
+		// Step 1: Find maximum eigenvalue (standard deviation)
+		float MaxSigma = max(Sigma0, max(Sigma1, Sigma2));
+
+		// Step 2: Clamp minimum eigenvalue relative to maximum (prevents extremely flat ellipsoids)
+		// FleX uses AnisotropyMin as relative ratio, not absolute value
+		float MinSigmaThreshold = MaxSigma * AnisotropyMin;
+		float ClampedSigma0 = max(Sigma0, MinSigmaThreshold);
+		float ClampedSigma1 = max(Sigma1, MinSigmaThreshold);
+		float ClampedSigma2 = max(Sigma2, MinSigmaThreshold);
+
+		// Step 3: FleX scale formula - smoothingRadius / sigma
+		// Larger sigma = smaller scale (more stretched along that axis in covariance = thinner ellipsoid)
+		// Prevent division by zero
+		float Epsilon = 0.0001f;
+		Scale1 = SmoothingRadius / max(ClampedSigma0, Epsilon);
+		Scale2 = SmoothingRadius / max(ClampedSigma1, Epsilon);
+		Scale3 = SmoothingRadius / max(ClampedSigma2, Epsilon);
+
+		// Step 3.5: Apply FlexRenderScale (overall ellipsoid size control)
+		Scale1 *= FlexRenderScale;
+		Scale2 *= FlexRenderScale;
+		Scale3 *= FlexRenderScale;
+
+		// Step 4: Apply AnisotropyScale as intensity control
+		// Scale > 1: more anisotropic, Scale < 1: more spherical
+		Scale1 = lerp(1.0f, Scale1, AnisotropyScale);
+		Scale2 = lerp(1.0f, Scale2, AnisotropyScale);
+		Scale3 = lerp(1.0f, Scale3, AnisotropyScale);
+
+		// Step 5: Blend toward sphere based on neighbor count (low neighbors = more spherical)
+		Scale1 = lerp(1.0f, Scale1, BlendFactor);
+		Scale2 = lerp(1.0f, Scale2, BlendFactor);
+		Scale3 = lerp(1.0f, Scale3, BlendFactor);
+
+		// Step 6: Final clamp to valid range
+		Scale1 = clamp(Scale1, AnisotropyMin, AnisotropyMax);
+		Scale2 = clamp(Scale2, AnisotropyMin, AnisotropyMax);
+		Scale3 = clamp(Scale3, AnisotropyMin, AnisotropyMax);
+	}
 
 	// Eigenvectors as axes
 	Axis1 = normalize(EV0);

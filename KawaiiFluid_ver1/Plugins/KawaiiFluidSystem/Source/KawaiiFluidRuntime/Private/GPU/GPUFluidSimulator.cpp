@@ -1687,6 +1687,8 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 				AnisotropyParams.MinStretch = CachedAnisotropyParams.MinStretch;
 				AnisotropyParams.MaxStretch = CachedAnisotropyParams.MaxStretch;
 				AnisotropyParams.DensityWeight = CachedAnisotropyParams.DensityWeight;
+				AnisotropyParams.bPreserveVolume = CachedAnisotropyParams.bPreserveVolume;
+				AnisotropyParams.FlexRenderScale = CachedAnisotropyParams.FlexRenderScale;
 
 				// Use same radius as simulation (per Yu & Turk 2013, NVIDIA FleX)
 				AnisotropyParams.SmoothingRadius = Params.SmoothingRadius * 1.0f;
