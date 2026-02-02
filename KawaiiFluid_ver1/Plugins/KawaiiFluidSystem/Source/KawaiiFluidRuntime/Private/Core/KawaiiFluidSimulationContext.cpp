@@ -453,9 +453,7 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 		Preset->Compressibility, Preset->SmoothingRadius, Preset->ComplianceExponent);
 	GPUParams.ParticleRadius = Preset->ParticleRadius;
 	GPUParams.ViscosityCoefficient = Preset->Viscosity;
-	// Legacy force-based cohesion is disabled (shader uses forceCohesionStrength = 0.0f)
-	// FleX position-based cohesion uses CohesionStrengthNV instead (set below)
-	GPUParams.CohesionStrength = 0.0f;
+	// Cohesion (Akinci 2013 force-based) - set in Surface Tension section below
 	GPUParams.GlobalDamping = Preset->GetDamping();
 
 	// Stack Pressure (weight transfer from stacked attached particles)
@@ -570,24 +568,19 @@ FGPUFluidSimulationParams UKawaiiFluidSimulationContext::BuildGPUSimParams(
 	GPUParams.TensileN = Preset->ArtificialPressureExponent;
 	GPUParams.TensileDeltaQ = Preset->ArtificialPressureDeltaQ;
 
-	// Surface Tension Mode Selection
-	// When bUseAkinciSurfaceTension = true: Force-Based Akinci (Cohesion + K_ij correction)
-	// When bUseAkinciSurfaceTension = false: Position-Based (NVIDIA FleX style)
-	GPUParams.bUseAkinciSurfaceTension = Preset->bUseAkinciSurfaceTension ? 1 : 0;
-	GPUParams.bEnablePositionBasedSurfaceTension = Preset->bUseAkinciSurfaceTension ? 0 : 1;
-	GPUParams.SurfaceTensionStrength = Preset->SurfaceTension;  // From Physics|Material
+	// Surface Tension (Position-Based, always enabled)
+	GPUParams.bEnablePositionBasedSurfaceTension = 1;  // Always enabled
+	GPUParams.SurfaceTensionStrength = Preset->SurfaceTension;  // From Physics|Material (0~1)
 	GPUParams.SurfaceTensionActivationRatio = Preset->SurfaceTensionActivationRatio;
 	GPUParams.SurfaceTensionFalloffRatio = Preset->SurfaceTensionFalloffRatio;
 	GPUParams.SurfaceTensionSurfaceThreshold = Preset->SurfaceTensionSurfaceThreshold;
 	GPUParams.SurfaceTensionVelocityDamping = Preset->SurfaceTensionVelocityDamping;
 	GPUParams.SurfaceTensionTolerance = Preset->SurfaceTensionTolerance;
 
-	// Fluid Cohesion (NVIDIA FleX style) - stringy, honey-like effects
-	// Uses quadratic distance scaling for resistance to separation
-	GPUParams.CohesionStrengthNV = Preset->Cohesion;  // From Physics|Material
-	GPUParams.CohesionActivationRatio = Preset->CohesionActivationRatio;  // Smaller = stringier
-	GPUParams.CohesionFalloffRatio = Preset->CohesionFalloffRatio;  // Higher = longer strings
-	GPUParams.CohesionExponent = Preset->CohesionExponent;  // 2 = quadratic (stringy)
+	// Fluid Cohesion (Akinci 2013 force-based)
+	// Uses C(r) spline kernel with K_ij particle deficiency correction
+	// Applied in PredictPositions pass (Phase 2) via FluidForceAccumulation.ush
+	GPUParams.CohesionStrength = Preset->Cohesion;  // From Physics|Material (0~50)
 
 	// Surface Tension / Cohesion max correction
 	GPUParams.MaxSurfaceTensionCorrectionPerIteration = Preset->MaxSurfaceTensionCorrectionPerIteration;

@@ -27,11 +27,9 @@ float DeltaTime;
 float3 Gravity;
 float3 ExternalForce;
 
-// Surface Tension Mode Selection
-int bUseAkinciSurfaceTension;  // 0 = Position-Based (FleX), 1 = Force-Based (Akinci)
-
-// Cohesion Force parameters (used when bUseAkinciSurfaceTension = 1)
-float CohesionStrength;      // Surface tension strength (0 = disabled)
+// Cohesion Force parameters (Akinci 2013)
+// Uses C(r) spline kernel with K_ij correction in FluidForceAccumulation.ush
+float CohesionStrength;      // Cohesion strength (0~50, 0 = disabled)
 float SmoothingRadius;       // SPH kernel radius (cm)
 float RestDensity;           // Rest density (kg/m^3) for K_ij correction
 float MaxCohesionForce;      // Stability clamp
@@ -84,12 +82,9 @@ void PredictPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     // bUsePrevNeighborCache: first frame has no cache, multiply by 0 to skip
     float cacheValid = (float)bUsePrevNeighborCache * activeMask;
 
-    // Surface Tension Mode Selection:
-    // - bUseAkinciSurfaceTension = 0: Position-Based (handled in SolveDensityPressure)
-    // - bUseAkinciSurfaceTension = 1: Force-Based Akinci (handled here via cohesion force)
-    // When Akinci mode, use CohesionStrength for force-based cohesion
-    // When Position-Based mode, set to 0 (position-based handles it in SolveDensityPressure)
-    float forceCohesionStrength = (bUseAkinciSurfaceTension == 1) ? CohesionStrength : 0.0f;
+    // Cohesion Force (Akinci 2013)
+    // Always use CohesionStrength for force-based cohesion
+    // Surface Tension is handled separately in SolveDensityPressure (Position-Based)
 
     FForceAccumulationResult forceResult = CalculateForceAccumulation(
         idx,
@@ -97,8 +92,8 @@ void PredictPositionsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
         particle.Velocity,
         particle.Mass,
         particle.Density,
-        // Cohesion params - Active only in Akinci mode
-        forceCohesionStrength * cacheValid,
+        // Cohesion params (Akinci 2013)
+        CohesionStrength * cacheValid,
         MaxCohesionForce,
         RestDensity,
         // Viscosity params

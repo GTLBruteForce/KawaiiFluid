@@ -65,20 +65,26 @@ public:
 	float SurfaceTension = 0.3f;
 
 	/**
-	 * Fluid Cohesion (NVIDIA FleX style)
-	 * Pulls particles toward rest distance - creates stringy, viscous effects.
+	 * Fluid Cohesion (Akinci 2013 Surface Tension)
+	 * Inter-particle attraction force using C(r) spline kernel with K_ij correction.
+	 * Creates cohesive fluid behavior - particles attract each other.
 	 *
 	 * This is DIFFERENT from Surface Tension:
-	 * - Cohesion: Creates filaments and honey-like stringy streams
-	 * - Surface Tension: Creates spherical mercury-like droplets
+	 * - Cohesion: Force-based attraction between ALL particles (Akinci 2013)
+	 * - Surface Tension: Position-based constraint for SURFACE particles (droplet shape)
+	 *
+	 * Key properties:
+	 * - Attraction at r > h/2 (particles pulled together)
+	 * - Repulsion at r < h/2 (prevents clustering)
+	 * - K_ij correction amplifies force for surface particles
 	 *
 	 * Values:
 	 * 0 = no cohesion (particles separate freely)
-	 * 0.1~0.3 = light cohesion (subtle strands)
-	 * 0.5~0.7 = medium cohesion (visible stringy behavior)
-	 * 1.0 = maximum cohesion (very sticky, honey-like)
+	 * 0.5~1.0 = light cohesion (water-like)
+	 * 1.0~2.0 = medium cohesion (oil-like)
+	 * 2.0~3.0 = strong cohesion (honey-like)
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Material", meta = (ClampMin = "0.0", ClampMax = "3.0"))
 	float Cohesion = 0.0f;
 
 	/**
@@ -393,35 +399,18 @@ public:
 
 	//========================================
 	// Physics | Simulation | Surface Tension
-	// Two modes: Position-Based (FleX style) or Force-Based (Akinci 2013)
+	// Position-Based Surface Tension (NVIDIA FleX style)
+	// Creates rounded droplets by minimizing surface area
 	//========================================
 
 	/**
-	 * Use Akinci Surface Tension (Force-Based) instead of Position-Based.
-	 *
-	 * When DISABLED (default): Position-Based Surface Tension (NVIDIA FleX style)
-	 * - Position constraints pull particles toward activation distance
-	 * - Stable, predictable for game use
-	 * - Uses SurfaceTension value from Physics|Material
-	 *
-	 * When ENABLED: Akinci Surface Tension (Akinci et al. 2013)
-	 * - Force-based approach with C(r) spline kernel
-	 * - Cohesion force with K_ij particle deficiency correction
-	 * - More physically accurate attraction/repulsion behavior
-	 * - Uses SurfaceTension value from Physics|Material as gamma coefficient
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension")
-	bool bUseAkinciSurfaceTension = false;
-
-	/**
 	 * Surface Tension activation distance as ratio of SmoothingRadius
-	 * Also used as rest distance for Cohesion.
 	 * Surface tension is applied when particle distance exceeds this.
 	 * Lower values = tighter surface (more spherical droplets)
 	 * Typical: 0.3 ~ 0.5
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension",
-		meta = (ClampMin = "0.1", ClampMax = "0.9", EditCondition = "!bUseAkinciSurfaceTension"))
+		meta = (ClampMin = "0.1", ClampMax = "0.9"))
 	float SurfaceTensionActivationRatio = 0.4f;
 
 	/**
@@ -431,7 +420,7 @@ public:
 	 * Typical: 0.6 ~ 0.9
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension",
-		meta = (ClampMin = "0.2", ClampMax = "1.0", EditCondition = "!bUseAkinciSurfaceTension"))
+		meta = (ClampMin = "0.2", ClampMax = "1.0"))
 	float SurfaceTensionFalloffRatio = 0.7f;
 
 	/**
@@ -441,7 +430,7 @@ public:
 	 * 0 = uniform strength for all particles
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension",
-		meta = (ClampMin = "0", ClampMax = "30", EditCondition = "!bUseAkinciSurfaceTension"))
+		meta = (ClampMin = "0", ClampMax = "30"))
 	int32 SurfaceTensionSurfaceThreshold = 15;
 
 	/**
@@ -455,13 +444,13 @@ public:
 	float MaxSurfaceTensionCorrectionPerIteration = 5.0f;
 
 	/**
-	 * Surface Tension/Cohesion velocity damping (under-relaxation)
+	 * Surface Tension velocity damping (under-relaxation)
 	 * Controls position correction strength.
 	 * 0.0 = full correction (may oscillate), 1.0 = no correction (too stable)
 	 * 0.5~0.8 = good balance between responsiveness and stability
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension",
-		meta = (ClampMin = "0.0", ClampMax = "1.0", EditCondition = "!bUseAkinciSurfaceTension"))
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float SurfaceTensionVelocityDamping = 0.7f;
 
 	/**
@@ -472,50 +461,8 @@ public:
 	 * Typical: 0.5 ~ 2.0 cm (1~2% of SmoothingRadius)
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|SurfaceTension",
-		meta = (ClampMin = "0.0", ClampMax = "5.0", EditCondition = "!bUseAkinciSurfaceTension"))
+		meta = (ClampMin = "0.0", ClampMax = "5.0"))
 	float SurfaceTensionTolerance = 1.0f;
-
-	//========================================
-	// Physics | Simulation | Cohesion (NVIDIA FleX style)
-	// Position-based constraint for stringy, honey-like effects
-	//========================================
-
-	/**
-	 * Cohesion activation distance as ratio of SmoothingRadius
-	 * Cohesion starts pulling when distance exceeds this.
-	 * SMALLER than SurfaceTension = earlier pull = stringier effect
-	 *
-	 * Typical values:
-	 * 0.1~0.2 = very stringy (honey, slime)
-	 * 0.3~0.4 = moderate (syrup)
-	 * 0.5+ = similar to surface tension
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Cohesion",
-		meta = (ClampMin = "0.05", ClampMax = "0.9"))
-	float CohesionActivationRatio = 0.2f;
-
-	/**
-	 * [DEPRECATED - Not currently used]
-	 * Cohesion now increases all the way to SmoothingRadius for maximum stringy effect.
-	 * Kept for potential future use.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Cohesion",
-		meta = (ClampMin = "0.3", ClampMax = "1.0"))
-	float CohesionFalloffRatio = 0.8f;
-
-	/**
-	 * Cohesion force curve exponent
-	 * Controls how cohesion strength scales with distance.
-	 *
-	 * 1 = Linear (gentle, uniform pull)
-	 * 2 = Quadratic (stronger at larger distances = stringy)
-	 * 3 = Cubic (very strong resistance to separation)
-	 *
-	 * For honey-like stringy effects, use 2 or higher.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Simulation|Cohesion",
-		meta = (ClampMin = "1", ClampMax = "4"))
-	int32 CohesionExponent = 2;
 
 	//========================================
 	// Utility Functions

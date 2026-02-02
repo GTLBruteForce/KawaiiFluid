@@ -31,22 +31,17 @@ void FGPUFluidSimulator::AddPredictPositionsPass(
 	PassParameters->ExternalForce = ExternalForce;
 
 	//=========================================================================
-	// Surface Tension Mode Selection
-	// When Akinci mode, use SurfaceTensionStrength for force-based cohesion
-	// When Position-Based mode, cohesion is handled in SolveDensityPressure
+	// Cohesion Force Parameters (Akinci 2013)
+	// Uses C(r) spline kernel with K_ij particle deficiency correction
+	// CohesionStrength from Preset->Cohesion (0~50)
 	//=========================================================================
-	PassParameters->bUseAkinciSurfaceTension = Params.bUseAkinciSurfaceTension;
-
-	// Cohesion Force Parameters (active when bUseAkinciSurfaceTension = 1)
-	// In Akinci mode, use SurfaceTensionStrength as the cohesion gamma coefficient
-	PassParameters->CohesionStrength = Params.bUseAkinciSurfaceTension ? Params.SurfaceTensionStrength : 0.0f;
+	PassParameters->CohesionStrength = Params.CohesionStrength;
 	PassParameters->SmoothingRadius = Params.SmoothingRadius;
 	PassParameters->RestDensity = Params.RestDensity;
 
 	// MaxCohesionForce: stability clamp based on physical parameters
 	const float h_m = Params.SmoothingRadius * 0.01f;  // cm to m
-	const float effectiveCohesion = Params.bUseAkinciSurfaceTension ? Params.SurfaceTensionStrength : Params.CohesionStrength;
-	PassParameters->MaxCohesionForce = effectiveCohesion * Params.RestDensity * h_m * h_m * h_m * 1000.0f;
+	PassParameters->MaxCohesionForce = Params.CohesionStrength * Params.RestDensity * h_m * h_m * h_m * 1000.0f;
 
 	//=========================================================================
 	// Viscosity Parameters (moved from PostSimulation Phase 5 for optimization)
@@ -239,9 +234,8 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 	PassParameters->BoundaryAdhesionStrength = FMath::Clamp(Params.BoundaryAdhesionStrength, 0.0f, 1.0f);
 	PassParameters->SolverIterationCount = Params.SolverIterations;
 
-	// Position-Based Surface Tension (NVIDIA Flex style)
+	// Position-Based Surface Tension (always enabled)
 	// Creates rounded droplets by minimizing surface area
-	// When 0: Uses Akinci force-based (default), When 1: Uses Position-Based (experimental)
 	PassParameters->bEnablePositionBasedSurfaceTension = Params.bEnablePositionBasedSurfaceTension;
 	PassParameters->SurfaceTensionStrength = Params.SurfaceTensionStrength;
 	PassParameters->SurfaceTensionActivationDistance = Params.SmoothingRadius * Params.SurfaceTensionActivationRatio;
@@ -249,13 +243,6 @@ void FGPUFluidSimulator::AddSolveDensityPressurePass(
 	PassParameters->SurfaceTensionSurfaceThreshold = Params.SurfaceTensionSurfaceThreshold;
 	PassParameters->SurfaceTensionVelocityDamping = Params.SurfaceTensionVelocityDamping;
 	PassParameters->SurfaceTensionTolerance = Params.SurfaceTensionTolerance;
-
-	// Fluid Cohesion (NVIDIA FleX style) - stringy, honey-like effects
-	// Uses quadratic distance scaling for resistance to separation
-	PassParameters->CohesionStrength = Params.CohesionStrengthNV;
-	PassParameters->CohesionActivationDistance = Params.SmoothingRadius * Params.CohesionActivationRatio;
-	PassParameters->CohesionFalloffDistance = Params.SmoothingRadius * Params.CohesionFalloffRatio;
-	PassParameters->CohesionExponent = Params.CohesionExponent;
 
 	// Surface Tension max correction
 	PassParameters->MaxSurfaceTensionCorrection = Params.MaxSurfaceTensionCorrectionPerIteration;

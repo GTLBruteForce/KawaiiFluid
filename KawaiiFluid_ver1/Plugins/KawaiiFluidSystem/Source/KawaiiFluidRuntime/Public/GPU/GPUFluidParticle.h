@@ -166,23 +166,14 @@ struct FGPUFluidSimulationParams
 	float BoundaryAttachCooldown;           // seconds, cooldown after detach before re-attach
 	float BoundaryAttachConstraintBlend;    // 0~1, position constraint strength (1 = fully follow boundary)
 
-	// Surface Tension Mode Selection
-	// Two modes: Position-Based (FleX style) or Force-Based (Akinci 2013)
-	int32 bUseAkinciSurfaceTension;             // 0 = Position-Based (FleX), 1 = Force-Based (Akinci)
-	int32 bEnablePositionBasedSurfaceTension;   // Internal: 1 when NOT using Akinci mode
+	// Surface Tension (Position-Based, always enabled)
+	int32 bEnablePositionBasedSurfaceTension;   // Always 1 (Position-Based ST)
 	float SurfaceTensionStrength;               // 0~1, from Physics|Material SurfaceTension
 	float SurfaceTensionActivationRatio;        // 0~1, distance ratio where ST activates
 	float SurfaceTensionFalloffRatio;           // 0~1, distance ratio where ST starts fading
 	int32 SurfaceTensionSurfaceThreshold;       // Surface particles get stronger ST
 	float SurfaceTensionVelocityDamping;        // 0~1, reduces velocity from ST correction (0=full velocity, 1=no velocity)
 	float SurfaceTensionTolerance;              // cm, dead zone around activation distance (prevents oscillation)
-
-	// Fluid Cohesion (NVIDIA FleX style) - stringy, honey-like effects
-	// Uses quadratic distance scaling for resistance to separation
-	float CohesionStrengthNV;                   // From Physics|Material|Cohesion (0~1)
-	float CohesionActivationRatio;              // 0~1, distance ratio where cohesion starts (smaller = stringier)
-	float CohesionFalloffRatio;                 // 0~1, distance ratio where cohesion starts weakening
-	int32 CohesionExponent;                     // 1=linear, 2=quadratic (stringy), 3=cubic
 
 	// Surface Tension max correction
 	float MaxSurfaceTensionCorrectionPerIteration;  // cm, max position correction per iteration
@@ -243,20 +234,14 @@ struct FGPUFluidSimulationParams
 		, BoundaryAttachDetachSpeedThreshold(500.0f)
 		, BoundaryAttachCooldown(0.2f)
 		, BoundaryAttachConstraintBlend(0.8f)
-		// Surface Tension Mode Selection
-		, bUseAkinciSurfaceTension(0)            // 0 = Position-Based (default), 1 = Akinci Force-Based
-		, bEnablePositionBasedSurfaceTension(1)  // Internal: automatically set based on bUseAkinciSurfaceTension
+		// Surface Tension (Position-Based, always enabled)
+		, bEnablePositionBasedSurfaceTension(1)  // Always enabled
 		, SurfaceTensionStrength(0.3f)
 		, SurfaceTensionActivationRatio(0.4f)
 		, SurfaceTensionFalloffRatio(0.7f)
 		, SurfaceTensionSurfaceThreshold(15)
 		, SurfaceTensionVelocityDamping(0.7f)
 		, SurfaceTensionTolerance(1.0f)
-		// Fluid Cohesion (NVIDIA FleX style) - stringy effects
-		, CohesionStrengthNV(0.0f)  // From Physics|Material|Cohesion
-		, CohesionActivationRatio(0.2f)  // Smaller = stringier (starts pulling earlier)
-		, CohesionFalloffRatio(0.8f)  // Higher = longer strings before breaking
-		, CohesionExponent(2)  // Quadratic = stringy
 		// Surface Tension max correction
 		, MaxSurfaceTensionCorrectionPerIteration(5.0f)
 		// Bounds Collision Skip

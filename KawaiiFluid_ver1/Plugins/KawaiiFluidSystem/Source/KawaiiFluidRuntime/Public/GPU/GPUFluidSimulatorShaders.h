@@ -94,13 +94,9 @@ public:
 		SHADER_PARAMETER(FVector3f, Gravity)
 		SHADER_PARAMETER(FVector3f, ExternalForce)
 		
-		// Surface Tension Mode Selection
-		// 0 = Position-Based (FleX style, handled in SolveDensityPressure)
-		// 1 = Force-Based Akinci (Cohesion + K_ij correction, handled here)
-		SHADER_PARAMETER(int32, bUseAkinciSurfaceTension)
-
-		// Cohesion Force parameters (active when bUseAkinciSurfaceTension = 1)
-		// Uses Akinci 2013 cohesion spline C(r) with K_ij particle deficiency correction
+		// Cohesion Force parameters (Akinci 2013)
+		// Uses C(r) spline kernel with K_ij particle deficiency correction
+		// Applied when CohesionStrength > 0
 		SHADER_PARAMETER(float, CohesionStrength)
 		SHADER_PARAMETER(float, SmoothingRadius)
 		SHADER_PARAMETER(float, RestDensity)
@@ -321,7 +317,7 @@ public:
 		SHADER_PARAMETER(float, BoundaryMaxDetachSpeed)
 		SHADER_PARAMETER(float, BoundaryAdhesionStrength)
 		SHADER_PARAMETER(int32, SolverIterationCount)
-		// Surface Tension (NVIDIA FleX style - Position-Based)
+		// Surface Tension (Position-Based, always enabled)
 		// Creates rounded droplets by minimizing surface area
 		SHADER_PARAMETER(int32, bEnablePositionBasedSurfaceTension)  // Always 1 (position-based)
 		SHADER_PARAMETER(float, SurfaceTensionStrength)
@@ -330,12 +326,6 @@ public:
 		SHADER_PARAMETER(int32, SurfaceTensionSurfaceThreshold)
 		SHADER_PARAMETER(float, SurfaceTensionVelocityDamping)   // 0~1, under-relaxation for stability
 		SHADER_PARAMETER(float, SurfaceTensionTolerance)         // cm, dead zone around activation (prevents oscillation)
-		// Fluid Cohesion (NVIDIA FleX style) - stringy, honey-like effects
-		// Uses quadratic distance scaling for resistance to separation
-		SHADER_PARAMETER(float, CohesionStrength)                   // 0~1, from Physics|Material|Cohesion
-		SHADER_PARAMETER(float, CohesionActivationDistance)         // cm (h * ratio), smaller = stringier
-		SHADER_PARAMETER(float, CohesionFalloffDistance)            // cm (h * ratio), higher = longer strings
-		SHADER_PARAMETER(int32, CohesionExponent)                   // 1=linear, 2=quadratic (stringy), 3=cubic
 		// Surface Tension max correction
 		SHADER_PARAMETER(float, MaxSurfaceTensionCorrection)        // cm per iteration
 	END_SHADER_PARAMETER_STRUCT()

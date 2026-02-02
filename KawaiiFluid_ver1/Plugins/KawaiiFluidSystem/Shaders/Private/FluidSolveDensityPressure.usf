@@ -122,16 +122,6 @@ int SurfaceTensionSurfaceThreshold;       // Surface particles get stronger ST
 float SurfaceTensionVelocityDamping;      // 0~1, under-relaxation (0=full correction, 1=no correction)
 float SurfaceTensionTolerance;            // cm, dead zone around activation distance (prevents oscillation)
 
-// Fluid Cohesion (NVIDIA FleX style) - stringy, honey-like effects
-// Uses quadratic distance scaling for resistance to separation
-// Separate from TensileK (Artificial Pressure) which handles tensile instability
-//   0 = no cohesion (particles separate freely)
-//   0.5~1.0 = sticky, stringy (honey-like)
-float CohesionStrength;
-float CohesionActivationDistance;         // cm (h * ratio), smaller = stringier
-float CohesionFalloffDistance;            // cm (h * ratio), higher = longer strings
-int CohesionExponent;                     // 1=linear, 2=quadratic (stringy), 3=cubic
-
 // Surface Tension max correction
 float MaxSurfaceTensionCorrection;        // Max correction per iteration (cm)
 
@@ -349,26 +339,6 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float3 surfaceTensionCorrection = float3(0.0f, 0.0f, 0.0f);
 	uint surfaceTensionConstraintCount = 0;
 
-	//=========================================================================
-	// FleX-style Cohesion accumulator (NVIDIA FleX) - stringy, honey-like effects
-	// ★ Key insight: Pull towards REST-DISTANCE, not towards each other
-	//
-	// FleX documentation: "Cohesion acts between fluid particles to bring them
-	// towards the rest-distance" - this is crucial for stringy effects!
-	//
-	// - cohesionStartDist = rest-distance (target particle spacing)
-	// - dist < rest-distance: no cohesion (density constraint pushes apart)
-	// - dist > rest-distance: cohesion pulls back towards rest-distance
-	// - At rest-distance: particles maintain spacing → stable strings/filaments
-	//=========================================================================
-	float3 cohesionCorrection = float3(0.0f, 0.0f, 0.0f);
-	uint cohesionConstraintCount = 0;
-
-	// Rest-distance: target spacing between particles
-	// Cohesion pulls particles BACK to this distance (not towards each other!)
-	// Smaller value = tighter strings, Larger value = looser connections
-	float cohesionStartDist = CohesionActivationDistance;
-
 	// Pre-compute inverse RestDensity to convert divisions to multiplications
 	// Division is expensive on GPU (~20-30 cycles), multiplication is cheap (~4 cycles)
 	float invRestDensity = 1.0f / RestDensity;
@@ -503,40 +473,9 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 											float easedStrength = normalizedDist * normalizedDist;
 
 											float stCorrectionMag = distFromTolerance * stStrength * easedStrength;
-											surfaceTensionCorrection += pullDirection * stCorrectionMag;
+										surfaceTensionCorrection += pullDirection * stCorrectionMag;
 											surfaceTensionConstraintCount++;
 										}
-									}
-
-									//=============================================================
-									// Fluid Cohesion (NVIDIA FleX style) - Rest-Distance Based
-									// Key insight: Pull towards REST-DISTANCE, not towards each other
-									// - cohesionStartDist = rest-distance (target spacing)
-									// - Particles closer than rest-distance: no cohesion (density pushes apart)
-									// - Particles farther than rest-distance: cohesion pulls them back
-									// This maintains particle spacing → creates stable strings
-									//=============================================================
-									if (CohesionStrength > 0.0f && dist_cm > cohesionStartDist)
-									{
-										// Error from rest-distance (how far beyond target spacing)
-										float errorFromRest = dist_cm - cohesionStartDist;
-
-										// Normalize: 0 at rest-distance, 1 at SmoothingRadius boundary
-										float cohesionRange = SmoothingRadius - cohesionStartDist;
-										float normalizedCohesion = saturate(errorFromRest / max(cohesionRange, 0.001f));
-
-										// Apply exponent: stronger pull as particles drift further apart
-										float cohesionScale = (CohesionExponent == 2) ? (normalizedCohesion * normalizedCohesion) :
-										                      (CohesionExponent == 3) ? (normalizedCohesion * normalizedCohesion * normalizedCohesion) :
-										                      normalizedCohesion;
-
-										// ★ FleX-style: Pull by ERROR amount (towards rest-distance, not towards 0)
-										// At rest-distance: error=0, no pull
-										// At SmoothingRadius edge: error=cohesionRange, max pull
-										float cohesionMag = cohesionScale * CohesionStrength * errorFromRest;
-
-										cohesionCorrection += pullDirection * cohesionMag;
-										cohesionConstraintCount++;
 									}
 								}
 							}
@@ -630,7 +569,7 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 									float3 pullDirection = -r_cm / max(dist_cm, SMALL_NUMBER);
 
 									//=============================================================
-									// Surface Tension (NVIDIA FleX style)
+									// Surface Tension (Position-Based)
 									//=============================================================
 									if (bEnablePositionBasedSurfaceTension && SurfaceTensionStrength > 0.0f)
 									{
@@ -652,26 +591,6 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 											surfaceTensionCorrection += pullDirection * stCorrectionMag;
 											surfaceTensionConstraintCount++;
 										}
-									}
-
-									//=============================================================
-									// Fluid Cohesion (NVIDIA FleX style) - Rest-Distance Based
-									// Pull towards rest-distance, not towards each other
-									//=============================================================
-									if (CohesionStrength > 0.0f && dist_cm > cohesionStartDist)
-									{
-										// Error from rest-distance
-										float errorFromRest2 = dist_cm - cohesionStartDist;
-										float cohesionRange2 = SmoothingRadius - cohesionStartDist;
-										float normalizedCohesion2 = saturate(errorFromRest2 / max(cohesionRange2, 0.001f));
-										float cohesionScale2 = (CohesionExponent == 2) ? (normalizedCohesion2 * normalizedCohesion2) :
-										                       (CohesionExponent == 3) ? (normalizedCohesion2 * normalizedCohesion2 * normalizedCohesion2) :
-										                       normalizedCohesion2;
-										// ★ FleX-style: Pull by error amount
-										float cohesionMag2 = cohesionScale2 * CohesionStrength * errorFromRest2;
-
-										cohesionCorrection += pullDirection * cohesionMag2;
-										cohesionConstraintCount++;
 									}
 								}
 							}
@@ -755,7 +674,7 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 					float3 pullDirection = -r_cm / max(dist_cm, SMALL_NUMBER);
 
 					//=============================================================
-					// Surface Tension (NVIDIA FleX style)
+					// Surface Tension (Position-Based)
 					//=============================================================
 					if (bEnablePositionBasedSurfaceTension && SurfaceTensionStrength > 0.0f)
 					{
@@ -777,26 +696,6 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							surfaceTensionCorrection += pullDirection * stCorrectionMag;
 							surfaceTensionConstraintCount++;
 						}
-					}
-
-					//=============================================================
-					// Fluid Cohesion (NVIDIA FleX style) - Rest-Distance Based
-					// Pull towards rest-distance, not towards each other
-					//=============================================================
-					if (CohesionStrength > 0.0f && dist_cm > cohesionStartDist)
-					{
-						// Error from rest-distance
-						float errorFromRest3 = dist_cm - cohesionStartDist;
-						float cohesionRange3 = SmoothingRadius - cohesionStartDist;
-						float normalizedCohesion3 = saturate(errorFromRest3 / max(cohesionRange3, 0.001f));
-						float cohesionScale3 = (CohesionExponent == 2) ? (normalizedCohesion3 * normalizedCohesion3) :
-						                       (CohesionExponent == 3) ? (normalizedCohesion3 * normalizedCohesion3 * normalizedCohesion3) :
-						                       normalizedCohesion3;
-						// ★ FleX-style: Pull by error amount
-						float cohesionMag3 = cohesionScale3 * CohesionStrength * errorFromRest3;
-
-						cohesionCorrection += pullDirection * cohesionMag3;
-						cohesionConstraintCount++;
 					}
 				}
 			}
@@ -1064,31 +963,6 @@ void SolveDensityPressureCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 			// Also update velocity to match position change (for viscosity compatibility)
 			vel += posCorrection * invDeltaTime;
 		}
-	}
-
-	//=========================================
-	// Apply Fluid Cohesion (NVIDIA FleX style)
-	// Position-based constraint pulling particles toward rest distance
-	// Creates stringy, honey-like viscous effects
-	// Skip for NEAR_BOUNDARY particles (they follow bone position)
-	//=========================================
-	if (cohesionConstraintCount > 0 && !bIsNearBoundary)
-	{
-		float3 avgCohesionCorrection = cohesionCorrection / (float)cohesionConstraintCount;
-
-		// Clamp for stability
-		float cohCorrLen = length(avgCohesionCorrection);
-		if (cohCorrLen > MaxSurfaceTensionCorrection && cohCorrLen > SMALL_NUMBER)
-		{
-			avgCohesionCorrection = avgCohesionCorrection * (MaxSurfaceTensionCorrection / cohCorrLen);
-		}
-
-		// Apply with damping for stability
-		float relaxation = 1.0f - SurfaceTensionVelocityDamping;
-		float3 posCorrection = avgCohesionCorrection * relaxation;
-		pos += posCorrection;
-		// Also update velocity to match position change (for viscosity compatibility)
-		vel += posCorrection * invDeltaTime;
 	}
 
 	// Write back to SOA buffers
