@@ -1279,3 +1279,76 @@ struct FGPUBoundaryAdhesionParams
 
 	FGPUBoundaryAdhesionParams() = default;
 };
+
+//=============================================================================
+// Compact Particle Stats (for optimized GPU→CPU Readback)
+// Reduces readback size from 64 bytes to 32 bytes per particle (50% reduction)
+// Used in EndFrame when detailed GPU stats are not needed
+//=============================================================================
+
+/**
+ * Compact Particle Stats Structure (32 bytes)
+ * Contains only essential fields for despawn tracking and basic rendering
+ * Must match HLSL struct in FluidStatsCompact.usf
+ *
+ * Memory Layout (32 bytes):
+ *   Position    (12 bytes) - float3
+ *   ParticleID  (4 bytes)  - int32
+ *   SourceID    (4 bytes)  - int32
+ *   NeighborCount (4 bytes) - uint32
+ *   Padding     (8 bytes)  - for 16-byte alignment
+ */
+struct FCompactParticleStats
+{
+	FVector3f Position;       // 12 bytes - Current position
+	int32 ParticleID;         // 4 bytes  - Unique particle ID (total: 16)
+	int32 SourceID;           // 4 bytes  - Source Component ID
+	uint32 NeighborCount;     // 4 bytes  - Neighbor count for surface detection
+	float Padding1;           // 4 bytes  - Alignment padding
+	float Padding2;           // 4 bytes  - Alignment padding (total: 32)
+
+	FCompactParticleStats()
+		: Position(FVector3f::ZeroVector)
+		, ParticleID(0)
+		, SourceID(-1)
+		, NeighborCount(0)
+		, Padding1(0.0f)
+		, Padding2(0.0f)
+	{
+	}
+};
+static_assert(sizeof(FCompactParticleStats) == 32, "FCompactParticleStats must be 32 bytes");
+
+/**
+ * Extended Compact Particle Stats Structure (48 bytes)
+ * Includes Velocity for ISM rendering and Shadow system
+ * Must match HLSL struct in FluidStatsCompact.usf
+ *
+ * Memory Layout (48 bytes):
+ *   Position      (12 bytes) - float3
+ *   ParticleID    (4 bytes)  - int32 (total: 16)
+ *   Velocity      (12 bytes) - float3
+ *   SourceID      (4 bytes)  - int32 (total: 32)
+ *   NeighborCount (4 bytes)  - uint32
+ *   Padding       (12 bytes) - for 16-byte alignment (total: 48)
+ */
+struct FCompactParticleStatsEx
+{
+	FVector3f Position;       // 12 bytes - Current position
+	int32 ParticleID;         // 4 bytes  - Unique particle ID (total: 16)
+	FVector3f Velocity;       // 12 bytes - Current velocity
+	int32 SourceID;           // 4 bytes  - Source Component ID (total: 32)
+	uint32 NeighborCount;     // 4 bytes  - Neighbor count
+	FVector3f Padding;        // 12 bytes - Alignment padding (total: 48)
+
+	FCompactParticleStatsEx()
+		: Position(FVector3f::ZeroVector)
+		, ParticleID(0)
+		, Velocity(FVector3f::ZeroVector)
+		, SourceID(-1)
+		, NeighborCount(0)
+		, Padding(FVector3f::ZeroVector)
+	{
+	}
+};
+static_assert(sizeof(FCompactParticleStatsEx) == 48, "FCompactParticleStatsEx must be 48 bytes");

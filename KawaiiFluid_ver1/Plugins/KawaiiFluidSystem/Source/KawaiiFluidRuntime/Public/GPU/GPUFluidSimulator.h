@@ -1378,6 +1378,12 @@ private:
 	/** Particle count for each stats readback buffer */
 	int32 StatsReadbackParticleCounts[NUM_STATS_READBACK_BUFFERS] = { 0 };
 
+	/** Compact stats readback mode tracking (true = compact 32-byte, false = full 64-byte) */
+	bool bStatsReadbackCompactMode[NUM_STATS_READBACK_BUFFERS] = { false };
+
+	/** Persistent compact stats buffer for GPU extraction */
+	TRefCountPtr<FRDGPooledBuffer> PersistentCompactStatsBuffer;
+
 	/** Enable flag for anisotropy readback (requires bShadowReadbackEnabled) */
 	std::atomic<bool> bAnisotropyReadbackEnabled{false};
 
@@ -1500,8 +1506,8 @@ void ReleaseAnisotropyReadbackObjects();
 	/** Release stats readback objects */
 	void ReleaseStatsReadbackObjects();
 
-	/** Enqueue stats readback (full particle data for ID-based operations) */
-	void EnqueueStatsReadback(FRHICommandListImmediate& RHICmdList, FRHIBuffer* SourceBuffer, int32 ParticleCount);
+	/** Enqueue stats readback (full 64-byte or compact 32-byte particle data for ID-based operations) */
+	void EnqueueStatsReadback(FRHICommandListImmediate& RHICmdList, FRHIBuffer* SourceBuffer, int32 ParticleCount, bool bCompactMode = false);
 
 	/** Process stats readback (check for completion, populate cached lightweight data) */
 	void ProcessStatsReadback(FRHICommandListImmediate& RHICmdList);

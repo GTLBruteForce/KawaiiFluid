@@ -3,6 +3,7 @@
 #include "GPU/GPUFluidSimulator.h"
 #include "GPU/GPUFluidSimulatorShaders.h"
 #include "GPU/FluidAnisotropyComputeShader.h"
+#include "GPU/FluidStatsCompactShader.h"
 #include "GPU/Managers/GPUZOrderSortManager.h"
 #include "GPU/Managers/GPUBoundarySkinningManager.h"
 #include "GPU/GPUBoundaryAttachment.h"  // For FGPUBoneDeltaAttachment
@@ -1013,29 +1014,37 @@ void FGPUFluidSimulator::EndFrame()
 			SCOPED_DRAW_EVENT(RHICmdList, GPUFluid_EndFrame);
 
 			// Cleanup despawn tracking when particles become 0
-			// This allows reusing the same IDs immediately after a full clear
-			if (Self->CurrentParticleCount == 0 && Self->SpawnManager.IsValid())
 			{
-				Self->SpawnManager->CleanupCompletedRequests(TArray<int32>());
-			}
+				SCOPED_DRAW_EVENT(RHICmdList, EndFrame_DespawnCleanup);
+				if (Self->CurrentParticleCount == 0 && Self->SpawnManager.IsValid())
+				{
+					Self->SpawnManager->CleanupCompletedRequests(TArray<int32>());
+				}
 
-			// Reset NextParticleID when particle count is 0 (prevents overflow)
-			if (Self->CurrentParticleCount == 0 && Self->SpawnManager.IsValid())
-			{
-				Self->SpawnManager->TryResetParticleID(Self->CurrentParticleCount);
+				// Reset NextParticleID when particle count is 0 (prevents overflow)
+				if (Self->CurrentParticleCount == 0 && Self->SpawnManager.IsValid())
+				{
+					Self->SpawnManager->TryResetParticleID(Self->CurrentParticleCount);
+				}
 			}
 
 			// Enqueue source counter readback
-			if (Self->SpawnManager.IsValid() && Self->SpawnManager->GetSourceCounterBuffer().IsValid())
 			{
-				Self->SpawnManager->EnqueueSourceCounterReadback(RHICmdList);
+				SCOPED_DRAW_EVENT(RHICmdList, EndFrame_SourceCounterReadback);
+				if (Self->SpawnManager.IsValid() && Self->SpawnManager->GetSourceCounterBuffer().IsValid())
+				{
+					Self->SpawnManager->EnqueueSourceCounterReadback(RHICmdList);
+				}
 			}
 
 			// Only enqueue readbacks if we have particles
 			if (Self->CurrentParticleCount > 0 && Self->PersistentParticleBuffer.IsValid())
 			{
-				// Stats Readback after ParticleID sorting (RemoveOldestParticles O(1) optimization)
+				// Stats Readback after ParticleID sorting
+				// Use compact readback (32 bytes) when detailed stats are not needed
+				// This reduces GPU→CPU transfer from 6.4MB to 3.2MB for 100K particles
 				{
+					SCOPED_DRAW_EVENT(RHICmdList, EndFrame_ParticleIDSortAndReadback);
 					FRDGBuilder GraphBuilder(RHICmdList);
 
 					// Register PersistentParticleBuffer in RDG
@@ -1045,41 +1054,95 @@ void FGPUFluidSimulator::EndFrame()
 					FRDGBufferRef SortedBuffer = Self->ExecuteParticleIDSortPipeline(
 						GraphBuilder, ParticleBuffer, Self->CurrentParticleCount);
 
-					// Add readback pass (uses AddReadbackBufferPass - automatic buffer dependency handling)
 					const int32 ParticleCount = Self->CurrentParticleCount;
-					AddReadbackBufferPass(GraphBuilder,
-						RDG_EVENT_NAME("GPUFluid::ParticleIDSortedReadback"),
-						SortedBuffer,
-						[Self, SortedBuffer, ParticleCount](FRHICommandListImmediate& InRHICmdList)
+					const bool bNeedDetailedStats = GetFluidStatsCollector().IsDetailedGPUEnabled();
+					const bool bNeedVelocity = Self->bFullReadbackEnabled.load() || Self->bShadowReadbackEnabled.load();
+
+					if (bNeedDetailedStats || bNeedVelocity)
+					{
+						// Full 64-byte readback when:
+						// - Detailed stats enabled (need Density, Mass, Flags)
+						// - ISM rendering enabled (need Velocity)
+						// - Shadow readback enabled (need Velocity)
+						AddReadbackBufferPass(GraphBuilder,
+							RDG_EVENT_NAME("GPUFluid::ParticleIDSortedReadback(Full)"),
+							SortedBuffer,
+							[Self, SortedBuffer, ParticleCount](FRHICommandListImmediate& InRHICmdList)
+							{
+								Self->EnqueueStatsReadback(InRHICmdList, SortedBuffer->GetRHI(), ParticleCount, /*bCompactMode=*/false);
+							});
+					}
+					else
+					{
+						// Compact 32-byte readback (50% bandwidth reduction)
+						// Used when only Position, ParticleID, SourceID, NeighborCount needed
+						// Create compact stats buffer
+						FRDGBufferDesc CompactBufferDesc = FRDGBufferDesc::CreateStructuredDesc(
+							sizeof(FCompactParticleStats), ParticleCount);
+						FRDGBufferRef CompactBuffer = GraphBuilder.CreateBuffer(CompactBufferDesc, TEXT("CompactStatsBuffer"));
+
+						// Run compact extraction shader
 						{
-							Self->EnqueueStatsReadback(InRHICmdList, SortedBuffer->GetRHI(), ParticleCount);
-						});
+							FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+							TShaderMapRef<FCompactStatsCS> ComputeShader(GlobalShaderMap);
+
+							FCompactStatsCS::FParameters* PassParameters =
+								GraphBuilder.AllocParameters<FCompactStatsCS::FParameters>();
+
+							PassParameters->InParticles = GraphBuilder.CreateSRV(SortedBuffer);
+							PassParameters->OutCompactStats = GraphBuilder.CreateUAV(CompactBuffer);
+							PassParameters->ParticleCount = ParticleCount;
+
+							const int32 ThreadGroupSize = FCompactStatsCS::ThreadGroupSize;
+							const int32 NumGroups = FMath::DivideAndRoundUp(ParticleCount, ThreadGroupSize);
+
+							FComputeShaderUtils::AddPass(
+								GraphBuilder,
+								RDG_EVENT_NAME("GPUFluid::CompactStats(%d)", ParticleCount),
+								ComputeShader,
+								PassParameters,
+								FIntVector(NumGroups, 1, 1));
+						}
+
+						// Readback compact buffer
+						AddReadbackBufferPass(GraphBuilder,
+							RDG_EVENT_NAME("GPUFluid::ParticleIDSortedReadback(Compact)"),
+							CompactBuffer,
+							[Self, CompactBuffer, ParticleCount](FRHICommandListImmediate& InRHICmdList)
+							{
+								Self->EnqueueStatsReadback(InRHICmdList, CompactBuffer->GetRHI(), ParticleCount, /*bCompactMode=*/true);
+							});
+					}
 
 					GraphBuilder.Execute();
 				}
 
-				// Collision feedback readback
-				if (Self->CollisionManager.IsValid() && Self->CollisionManager->GetFeedbackManager())
+				// Collision Feedback Readback (simple direct copy)
 				{
-					Self->CollisionManager->GetFeedbackManager()->EnqueueReadbackCopy(RHICmdList);
+					SCOPED_DRAW_EVENT(RHICmdList, EndFrame_CollisionFeedbackReadback);
+					if (Self->CollisionManager.IsValid() && Self->CollisionManager->GetFeedbackManager())
+					{
+						Self->CollisionManager->GetFeedbackManager()->EnqueueReadbackCopy(RHICmdList);
+					}
 				}
 
-				// Anisotropy readback (Shadow data is now extracted in ProcessStatsReadback)
-				if (Self->bShadowReadbackEnabled.load() && Self->bAnisotropyReadbackEnabled.load())
+				// Anisotropy readback
 				{
-					Self->EnqueueAnisotropyReadback(RHICmdList, Self->CurrentParticleCount);
+					SCOPED_DRAW_EVENT(RHICmdList, EndFrame_AnisotropyReadback);
+					if (Self->bShadowReadbackEnabled.load() && Self->bAnisotropyReadbackEnabled.load())
+					{
+						Self->EnqueueAnisotropyReadback(RHICmdList, Self->CurrentParticleCount);
+					}
 				}
 			}
 
 			Self->bHasValidGPUResults.store(true);
 
-			// =====================================================
-			// Swap Neighbor Cache Buffers for Cohesion Double Buffering
-			// MUST be called after RDG execution completes (buffers are extracted)
-			// This moves current frame's neighbor cache to PrevNeighborCache
-			// so PredictPositions (Phase 2) can use it next frame for Cohesion Force
-			// =====================================================
-			Self->SwapNeighborCacheBuffers();
+			// Swap Neighbor Cache Buffers
+			{
+				SCOPED_DRAW_EVENT(RHICmdList, EndFrame_SwapNeighborCache);
+				Self->SwapNeighborCacheBuffers();
+			}
 		}
 	);
 
@@ -3707,25 +3770,27 @@ void FGPUFluidSimulator::ReleaseStatsReadbackObjects()
 		}
 		StatsReadbackFrameNumbers[i] = 0;
 		StatsReadbackParticleCounts[i] = 0;
+		bStatsReadbackCompactMode[i] = false;
 	}
 	StatsReadbackWriteIndex = 0;
 }
 
-void FGPUFluidSimulator::EnqueueStatsReadback(FRHICommandListImmediate& RHICmdList, FRHIBuffer* SourceBuffer, int32 ParticleCount)
+void FGPUFluidSimulator::EnqueueStatsReadback(FRHICommandListImmediate& RHICmdList, FRHIBuffer* SourceBuffer, int32 ParticleCount, bool bCompactMode)
 {
 	if (ParticleCount <= 0 || SourceBuffer == nullptr)
 	{
 		return;
 	}
 
-	// Validate source buffer size
+	// Validate source buffer size based on mode
 	const uint32 SourceBufferSize = SourceBuffer->GetSize();
-	const uint32 RequiredSize = ParticleCount * sizeof(FGPUFluidParticle);
+	const uint32 ElementSize = bCompactMode ? sizeof(FCompactParticleStats) : sizeof(FGPUFluidParticle);
+	const uint32 RequiredSize = ParticleCount * ElementSize;
 	if (RequiredSize > SourceBufferSize)
 	{
 		UE_LOG(LogGPUFluidSimulator, Warning,
-			TEXT("EnqueueStatsReadback: CopySize (%u) exceeds SourceBuffer size (%u). ParticleCount=%d, Skipping."),
-			RequiredSize, SourceBufferSize, ParticleCount);
+			TEXT("EnqueueStatsReadback: CopySize (%u) exceeds SourceBuffer size (%u). ParticleCount=%d, Compact=%d, Skipping."),
+			RequiredSize, SourceBufferSize, ParticleCount, bCompactMode ? 1 : 0);
 		return;
 	}
 
@@ -3739,13 +3804,14 @@ void FGPUFluidSimulator::EnqueueStatsReadback(FRHICommandListImmediate& RHICmdLi
 	const int32 WriteIdx = StatsReadbackWriteIndex;
 	StatsReadbackWriteIndex = (StatsReadbackWriteIndex + 1) % NUM_STATS_READBACK_BUFFERS;
 
-	// Enqueue async copy (full particle data)
-	const uint32 CopySize = ParticleCount * sizeof(FGPUFluidParticle);
+	// Enqueue async copy (compact 32 bytes or full 64 bytes per particle)
+	const uint32 CopySize = ParticleCount * ElementSize;
 	RHICmdList.Transition(FRHITransitionInfo(SourceBuffer, ERHIAccess::UAVCompute, ERHIAccess::CopySrc));
 	StatsReadbacks[WriteIdx]->EnqueueCopy(RHICmdList, SourceBuffer, CopySize);
 	RHICmdList.Transition(FRHITransitionInfo(SourceBuffer, ERHIAccess::CopySrc, ERHIAccess::UAVCompute));
 	StatsReadbackFrameNumbers[WriteIdx] = GFrameCounterRenderThread;
 	StatsReadbackParticleCounts[WriteIdx] = ParticleCount;
+	bStatsReadbackCompactMode[WriteIdx] = bCompactMode;
 }
 
 void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdList)
@@ -3784,11 +3850,15 @@ void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdLi
 		return;
 	}
 
-	// Lock and copy full particle data
-	const int32 BufferSize = ParticleCount * sizeof(FGPUFluidParticle);
-	const FGPUFluidParticle* ParticleData = (const FGPUFluidParticle*)StatsReadbacks[ReadIdx]->Lock(BufferSize);
+	// Check if this readback is compact mode (32 bytes) or full mode (64 bytes)
+	const bool bIsCompactMode = bStatsReadbackCompactMode[ReadIdx];
 
-	if (ParticleData && ParticleCount > 0)
+	// Lock buffer with appropriate size
+	const int32 ElementSize = bIsCompactMode ? sizeof(FCompactParticleStats) : sizeof(FGPUFluidParticle);
+	const int32 BufferSize = ParticleCount * ElementSize;
+	const void* RawData = StatsReadbacks[ReadIdx]->Lock(BufferSize);
+
+	if (RawData && ParticleCount > 0)
 	{
 		// Parallel cache build: local map per chunk → merge
 		// Also extract shadow data (Position, Velocity, NeighborCount) in the same pass
@@ -3808,12 +3878,12 @@ void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdLi
 
 		// Pre-allocate data arrays (will be filled in parallel)
 		// Position/SourceID are ALWAYS copied (needed for lightweight despawn API)
-		// Velocity only when ISM rendering enabled
+		// Velocity only when ISM rendering enabled AND not in compact mode
 		// NeighborCount only when shadow readback enabled
-		// Density/VelocityMagnitude/Mass/Flags only when detailed GPU stats enabled
+		// Density/VelocityMagnitude/Mass/Flags only when detailed GPU stats enabled (requires full mode)
 		const bool bNeedShadowData = bShadowReadbackEnabled.load();
-		const bool bNeedVelocity = bFullReadbackEnabled.load() || bNeedShadowData;  // ISM or Shadow needs velocity
-		const bool bNeedDetailedStats = GetFluidStatsCollector().IsDetailedGPUEnabled();
+		const bool bNeedVelocity = (bFullReadbackEnabled.load() || bNeedShadowData) && !bIsCompactMode;  // Velocity not available in compact mode
+		const bool bNeedDetailedStats = GetFluidStatsCollector().IsDetailedGPUEnabled() && !bIsCompactMode;  // Detailed stats require full mode
 		TArray<FVector3f> NewPositions;
 		TArray<int32> NewSourceIDs;
 		TArray<FVector3f> NewVelocities;
@@ -3830,7 +3900,7 @@ void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdLi
 		}
 		if (bNeedShadowData)
 		{
-			NewNeighborCounts.SetNumUninitialized(ParticleCount);
+			NewNeighborCounts.SetNumUninitialized(ParticleCount);  // Available in both compact and full mode
 		}
 		if (bNeedDetailedStats)
 		{
@@ -3841,54 +3911,93 @@ void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdLi
 			NewFlags.SetNumUninitialized(ParticleCount);
 		}
 
-		ParallelFor(NumChunks, [&](int32 ChunkIndex)
+		if (bIsCompactMode)
 		{
-			const int32 StartIdx = ChunkIndex * ChunkSize;
-			const int32 EndIdx = FMath::Min(StartIdx + ChunkSize, ParticleCount);
-			if (StartIdx >= EndIdx) return;  // Safety check
+			// Compact mode: 32-byte FCompactParticleStats (Position, ParticleID, SourceID, NeighborCount)
+			const FCompactParticleStats* CompactData = static_cast<const FCompactParticleStats*>(RawData);
 
-			auto& LocalSourceArrays = ChunkSourceArrays[ChunkIndex];
-			auto& LocalAllIDs = ChunkAllIDs[ChunkIndex];
-			LocalAllIDs.Reserve(EndIdx - StartIdx);
-
-			for (int32 i = StartIdx; i < EndIdx; ++i)
+			ParallelFor(NumChunks, [&](int32 ChunkIndex)
 			{
-				const FGPUFluidParticle& P = ParticleData[i];
-				LocalAllIDs.Add(P.ParticleID);
+				const int32 StartIdx = ChunkIndex * ChunkSize;
+				const int32 EndIdx = FMath::Min(StartIdx + ChunkSize, ParticleCount);
+				if (StartIdx >= EndIdx) return;
 
-				// Direct array indexing instead of TMap hash lookup
-				if (P.SourceID >= 0 && P.SourceID < MaxSources)
+				auto& LocalSourceArrays = ChunkSourceArrays[ChunkIndex];
+				auto& LocalAllIDs = ChunkAllIDs[ChunkIndex];
+				LocalAllIDs.Reserve(EndIdx - StartIdx);
+
+				for (int32 i = StartIdx; i < EndIdx; ++i)
 				{
-					LocalSourceArrays[P.SourceID].Add(P.ParticleID);
+					const FCompactParticleStats& P = CompactData[i];
+					LocalAllIDs.Add(P.ParticleID);
+
+					if (P.SourceID >= 0 && P.SourceID < MaxSources)
+					{
+						LocalSourceArrays[P.SourceID].Add(P.ParticleID);
+					}
+
+					NewPositions[i] = P.Position;
+					NewSourceIDs[i] = P.SourceID;
+
+					// NeighborCount available in compact mode
+					if (bNeedShadowData)
+					{
+						NewNeighborCounts[i] = P.NeighborCount;
+					}
+
+					// Velocity and detailed stats NOT available in compact mode
 				}
+			}, EParallelForFlags::Unbalanced);
+		}
+		else
+		{
+			// Full mode: 64-byte FGPUFluidParticle (all fields)
+			const FGPUFluidParticle* ParticleData = static_cast<const FGPUFluidParticle*>(RawData);
 
-				// Position and SourceID always copied (needed for lightweight despawn API)
-				NewPositions[i] = P.Position;
-				NewSourceIDs[i] = P.SourceID;
+			ParallelFor(NumChunks, [&](int32 ChunkIndex)
+			{
+				const int32 StartIdx = ChunkIndex * ChunkSize;
+				const int32 EndIdx = FMath::Min(StartIdx + ChunkSize, ParticleCount);
+				if (StartIdx >= EndIdx) return;
 
-				// Velocity only when ISM rendering enabled
-				if (bNeedVelocity)
+				auto& LocalSourceArrays = ChunkSourceArrays[ChunkIndex];
+				auto& LocalAllIDs = ChunkAllIDs[ChunkIndex];
+				LocalAllIDs.Reserve(EndIdx - StartIdx);
+
+				for (int32 i = StartIdx; i < EndIdx; ++i)
 				{
-					NewVelocities[i] = P.Velocity;
-				}
+					const FGPUFluidParticle& P = ParticleData[i];
+					LocalAllIDs.Add(P.ParticleID);
 
-				// NeighborCount when shadow readback enabled
-				if (bNeedShadowData)
-				{
-					NewNeighborCounts[i] = P.NeighborCount;
-				}
+					if (P.SourceID >= 0 && P.SourceID < MaxSources)
+					{
+						LocalSourceArrays[P.SourceID].Add(P.ParticleID);
+					}
 
-				// Detailed GPU stats: all particle data for stats calculation
-				if (bNeedDetailedStats)
-				{
-					NewDensities[i] = P.Density;
-					NewVelocityMagnitudes[i] = P.Velocity.Length();
-					NewMasses[i] = P.Mass;
-					NewNeighborCounts[i] = P.NeighborCount;
-					NewFlags[i] = P.Flags;
+					NewPositions[i] = P.Position;
+					NewSourceIDs[i] = P.SourceID;
+
+					if (bNeedVelocity)
+					{
+						NewVelocities[i] = P.Velocity;
+					}
+
+					if (bNeedShadowData)
+					{
+						NewNeighborCounts[i] = P.NeighborCount;
+					}
+
+					if (bNeedDetailedStats)
+					{
+						NewDensities[i] = P.Density;
+						NewVelocityMagnitudes[i] = P.Velocity.Length();
+						NewMasses[i] = P.Mass;
+						NewNeighborCounts[i] = P.NeighborCount;
+						NewFlags[i] = P.Flags;
+					}
 				}
-			}
-		}, EParallelForFlags::Unbalanced);
+			}, EParallelForFlags::Unbalanced);
+		}
 
 		// Merge (single thread) - array-based, no hash operations, MoveTemp for zero-copy
 		TArray<TArray<int32>> NewSourceIDArrays;
