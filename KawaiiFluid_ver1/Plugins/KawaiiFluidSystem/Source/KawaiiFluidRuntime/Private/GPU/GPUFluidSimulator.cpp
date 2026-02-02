@@ -2833,8 +2833,8 @@ void FGPUFluidSimulator::CreateImmediatePersistentBuffer()
 			// Execute immediately
 			GraphBuilder.Execute();
 			
-			UE_LOG(LogGPUFluidSimulator, Log,
-				TEXT("CreateImmediatePersistentBuffer: Created buffer with %d particles"), Self->CurrentParticleCount);
+			// UE_LOG(LogGPUFluidSimulator, Log,
+			// 	TEXT("CreateImmediatePersistentBuffer: Created buffer with %d particles"), Self->CurrentParticleCount);
 		}
 	);
 
@@ -2888,8 +2888,8 @@ void FGPUFluidSimulator::CreateImmediatePersistentBufferFromCopy(const TArray<FG
 			// Execute immediately
 			GraphBuilder.Execute();
 			
-			UE_LOG(LogGPUFluidSimulator, Log,
-				TEXT("CreateImmediatePersistentBufferFromCopy: Created buffer with %d particles"), ParticleCount);
+			// UE_LOG(LogGPUFluidSimulator, Log,
+			// 	TEXT("CreateImmediatePersistentBufferFromCopy: Created buffer with %d particles"), ParticleCount);
 		}
 	);
 
