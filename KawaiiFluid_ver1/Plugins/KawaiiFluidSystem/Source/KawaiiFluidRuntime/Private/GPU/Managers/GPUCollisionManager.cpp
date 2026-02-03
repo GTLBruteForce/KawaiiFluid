@@ -276,138 +276,39 @@ void FGPUCollisionManager::AddPrimitiveCollisionPass(
 		BoneTransformsSRV = GraphBuilder.CreateSRV(BoneTransformsBuffer);
 	}
 
-	// Create collision feedback buffers (for particle -> player interaction)
-	FRDGBufferRef FeedbackBuffer = nullptr;
-	FRDGBufferRef CounterBuffer = nullptr;
+	// Create Unified Collision Feedback Buffer
+	// Single ByteAddressBuffer containing all feedback types with embedded counters
+	// Layout: [Header:16B][BoneFeedback][SMFeedback][FISMFeedback]
 	const bool bFeedbackEnabled = FeedbackManager.IsValid() && FeedbackManager->IsEnabled();
-
-	// Create feedback buffer (persistent across frames for extraction)
-	if (bFeedbackEnabled)
-	{
-		// Create or reuse feedback buffer
-		TRefCountPtr<FRDGPooledBuffer>& CollisionFeedbackBuffer = FeedbackManager->GetFeedbackBuffer();
-		if (CollisionFeedbackBuffer.IsValid())
-		{
-			FeedbackBuffer = GraphBuilder.RegisterExternalBuffer(CollisionFeedbackBuffer, TEXT("GPUCollisionFeedback"));
-		}
-		else
-		{
-			FRDGBufferDesc FeedbackDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUCollisionFeedback), FGPUCollisionFeedbackManager::MAX_COLLISION_FEEDBACK);
-			FeedbackBuffer = GraphBuilder.CreateBuffer(FeedbackDesc, TEXT("GPUCollisionFeedback"));
-		}
-
-		// Create counter buffer (reset each frame)
-		TRefCountPtr<FRDGPooledBuffer>& CollisionCounterBuffer = FeedbackManager->GetCounterBuffer();
-		if (CollisionCounterBuffer.IsValid())
-		{
-			CounterBuffer = GraphBuilder.RegisterExternalBuffer(CollisionCounterBuffer, TEXT("GPUCollisionCounter"));
-		}
-		else
-		{
-			FRDGBufferDesc CounterDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1);
-			CounterBuffer = GraphBuilder.CreateBuffer(CounterDesc, TEXT("GPUCollisionCounter"));
-		}
-
-		// Clear counter at start of frame
-		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(CounterBuffer), 0);
-	}
-	else
-	{
-		// Create dummy buffers when feedback is disabled
-		FRDGBufferDesc DummyFeedbackDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUCollisionFeedback), 1);
-		FeedbackBuffer = GraphBuilder.CreateBuffer(DummyFeedbackDesc, TEXT("GPUCollisionFeedbackDummy"));
-
-		FRDGBufferDesc DummyCounterDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1);
-		CounterBuffer = GraphBuilder.CreateBuffer(DummyCounterDesc, TEXT("GPUCollisionCounterDummy"));
-	}
-
-	// Create StaticMesh collision feedback buffers (BoneIndex < 0, for buoyancy center)
-	FRDGBufferRef StaticMeshFeedbackBuffer = nullptr;
-	FRDGBufferRef StaticMeshCounterBuffer = nullptr;
+	FRDGBufferRef UnifiedFeedbackBuffer = nullptr;
 
 	if (bFeedbackEnabled)
 	{
-		// Create or reuse StaticMesh feedback buffer
-		TRefCountPtr<FRDGPooledBuffer>& SMFeedbackPooled = FeedbackManager->GetStaticMeshFeedbackBuffer();
-		if (SMFeedbackPooled.IsValid())
+		// Create or reuse unified feedback buffer as ByteAddressBuffer
+		TRefCountPtr<FRDGPooledBuffer>& UnifiedPooled = FeedbackManager->GetUnifiedFeedbackBuffer();
+		if (UnifiedPooled.IsValid())
 		{
-			StaticMeshFeedbackBuffer = GraphBuilder.RegisterExternalBuffer(SMFeedbackPooled, TEXT("StaticMeshCollisionFeedback"));
+			UnifiedFeedbackBuffer = GraphBuilder.RegisterExternalBuffer(UnifiedPooled, TEXT("UnifiedCollisionFeedback"));
 		}
 		else
 		{
-			FRDGBufferDesc SMFeedbackDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUCollisionFeedback), FGPUCollisionFeedbackManager::MAX_STATICMESH_COLLISION_FEEDBACK);
-			StaticMeshFeedbackBuffer = GraphBuilder.CreateBuffer(SMFeedbackDesc, TEXT("StaticMeshCollisionFeedback"));
+			// Create ByteAddressBuffer with total unified size
+			FRDGBufferDesc UnifiedDesc = FRDGBufferDesc::CreateByteAddressDesc(FGPUCollisionFeedbackManager::UNIFIED_BUFFER_SIZE);
+			UnifiedFeedbackBuffer = GraphBuilder.CreateBuffer(UnifiedDesc, TEXT("UnifiedCollisionFeedback"));
 		}
 
-		// Create or reuse StaticMesh counter buffer
-		TRefCountPtr<FRDGPooledBuffer>& SMCounterPooled = FeedbackManager->GetStaticMeshCounterBuffer();
-		if (SMCounterPooled.IsValid())
-		{
-			StaticMeshCounterBuffer = GraphBuilder.RegisterExternalBuffer(SMCounterPooled, TEXT("StaticMeshCollisionCounter"));
-		}
-		else
-		{
-			FRDGBufferDesc SMCounterDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1);
-			StaticMeshCounterBuffer = GraphBuilder.CreateBuffer(SMCounterDesc, TEXT("StaticMeshCollisionCounter"));
-		}
-
-		// Clear StaticMesh counter at start of frame
-		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(StaticMeshCounterBuffer), 0);
+		// Clear header (first 16 bytes = 4 counters) at start of frame
+		// Note: Only clearing header, not entire buffer (performance optimization)
+		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(UnifiedFeedbackBuffer), 0);
 	}
 	else
 	{
-		// Create dummy StaticMesh buffers when feedback is disabled
-		FRDGBufferDesc DummySMFeedbackDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUCollisionFeedback), 1);
-		StaticMeshFeedbackBuffer = GraphBuilder.CreateBuffer(DummySMFeedbackDesc, TEXT("StaticMeshCollisionFeedbackDummy"));
-
-		FRDGBufferDesc DummySMCounterDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1);
-		StaticMeshCounterBuffer = GraphBuilder.CreateBuffer(DummySMCounterDesc, TEXT("StaticMeshCollisionCounterDummy"));
+		// Create minimal dummy buffer when feedback is disabled
+		FRDGBufferDesc DummyDesc = FRDGBufferDesc::CreateByteAddressDesc(16);  // Minimal header size
+		UnifiedFeedbackBuffer = GraphBuilder.CreateBuffer(DummyDesc, TEXT("UnifiedCollisionFeedbackDummy"));
 	}
 
-	// Create FluidInteraction StaticMesh collision feedback buffers (BoneIndex < 0, bHasFluidInteraction = 1)
-	FRDGBufferRef FluidInteractionSMFeedbackBuffer = nullptr;
-	FRDGBufferRef FluidInteractionSMCounterBuffer = nullptr;
-
-	if (bFeedbackEnabled)
-	{
-		// Create or reuse FluidInteractionSM feedback buffer
-		TRefCountPtr<FRDGPooledBuffer>& FISMFeedbackPooled = FeedbackManager->GetFluidInteractionSMFeedbackBuffer();
-		if (FISMFeedbackPooled.IsValid())
-		{
-			FluidInteractionSMFeedbackBuffer = GraphBuilder.RegisterExternalBuffer(FISMFeedbackPooled, TEXT("FluidInteractionSMCollisionFeedback"));
-		}
-		else
-		{
-			FRDGBufferDesc FISMFeedbackDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUCollisionFeedback), FGPUCollisionFeedbackManager::MAX_FLUIDINTERACTION_SM_FEEDBACK);
-			FluidInteractionSMFeedbackBuffer = GraphBuilder.CreateBuffer(FISMFeedbackDesc, TEXT("FluidInteractionSMCollisionFeedback"));
-		}
-
-		// Create or reuse FluidInteractionSM counter buffer
-		TRefCountPtr<FRDGPooledBuffer>& FISMCounterPooled = FeedbackManager->GetFluidInteractionSMCounterBuffer();
-		if (FISMCounterPooled.IsValid())
-		{
-			FluidInteractionSMCounterBuffer = GraphBuilder.RegisterExternalBuffer(FISMCounterPooled, TEXT("FluidInteractionSMCollisionCounter"));
-		}
-		else
-		{
-			FRDGBufferDesc FISMCounterDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1);
-			FluidInteractionSMCounterBuffer = GraphBuilder.CreateBuffer(FISMCounterDesc, TEXT("FluidInteractionSMCollisionCounter"));
-		}
-
-		// Clear FluidInteractionSM counter at start of frame
-		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(FluidInteractionSMCounterBuffer), 0);
-	}
-	else
-	{
-		// Create dummy FluidInteractionSM buffers when feedback is disabled
-		FRDGBufferDesc DummyFISMFeedbackDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUCollisionFeedback), 1);
-		FluidInteractionSMFeedbackBuffer = GraphBuilder.CreateBuffer(DummyFISMFeedbackDesc, TEXT("FluidInteractionSMCollisionFeedbackDummy"));
-
-		FRDGBufferDesc DummyFISMCounterDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1);
-		FluidInteractionSMCounterBuffer = GraphBuilder.CreateBuffer(DummyFISMCounterDesc, TEXT("FluidInteractionSMCollisionCounterDummy"));
-	}
-
-	// Create collider contact count buffer
+	// Create collider contact count buffer (unchanged, separate from unified buffer)
 	FRDGBufferRef ContactCountBuffer = nullptr;
 	if (FeedbackManager.IsValid())
 	{
@@ -431,7 +332,7 @@ void FGPUCollisionManager::AddPrimitiveCollisionPass(
 	// Clear contact counts at start of frame
 	AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(ContactCountBuffer), 0);
 
-	// Dispatch primitive collision shader directly (with feedback buffers)
+	// Dispatch primitive collision shader directly (with unified feedback buffer)
 	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 	TShaderMapRef<FPrimitiveCollisionCS> ComputeShader(GlobalShaderMap);
 
@@ -465,23 +366,11 @@ void FGPUCollisionManager::AddPrimitiveCollisionPass(
 	PassParameters->BoneTransforms = BoneTransformsSRV;
 	PassParameters->BoneCount = CachedBoneTransforms.Num();
 
-	// Collision feedback parameters (BoneIndex >= 0, for character bones)
-	PassParameters->CollisionFeedback = GraphBuilder.CreateUAV(FeedbackBuffer);
-	PassParameters->CollisionCounter = GraphBuilder.CreateUAV(CounterBuffer);
-	PassParameters->MaxCollisionFeedback = FGPUCollisionFeedbackManager::MAX_COLLISION_FEEDBACK;
+	// Unified feedback buffer (ByteAddressBuffer with embedded counters)
+	PassParameters->UnifiedFeedbackBuffer = GraphBuilder.CreateUAV(UnifiedFeedbackBuffer);
 	PassParameters->bEnableCollisionFeedback = bFeedbackEnabled ? 1 : 0;
 
-	// StaticMesh collision feedback parameters (WorldCollision, BoneIndex < 0, bHasFluidInteraction = 0)
-	PassParameters->StaticMeshCollisionFeedback = GraphBuilder.CreateUAV(StaticMeshFeedbackBuffer);
-	PassParameters->StaticMeshCollisionCounter = GraphBuilder.CreateUAV(StaticMeshCounterBuffer);
-	PassParameters->MaxStaticMeshCollisionFeedback = FGPUCollisionFeedbackManager::MAX_STATICMESH_COLLISION_FEEDBACK;
-
-	// FluidInteraction StaticMesh collision feedback parameters (BoneIndex < 0, bHasFluidInteraction = 1)
-	PassParameters->FluidInteractionSMCollisionFeedback = GraphBuilder.CreateUAV(FluidInteractionSMFeedbackBuffer);
-	PassParameters->FluidInteractionSMCollisionCounter = GraphBuilder.CreateUAV(FluidInteractionSMCounterBuffer);
-	PassParameters->MaxFluidInteractionSMCollisionFeedback = FGPUCollisionFeedbackManager::MAX_FLUIDINTERACTION_SM_FEEDBACK;
-
-	// Collider contact count parameters
+	// Collider contact count parameters (unchanged)
 	PassParameters->ColliderContactCounts = GraphBuilder.CreateUAV(ContactCountBuffer);
 	PassParameters->MaxColliderCount = FGPUCollisionFeedbackManager::MAX_COLLIDER_COUNT;
 
@@ -497,45 +386,12 @@ void FGPUCollisionManager::AddPrimitiveCollisionPass(
 		PassParameters,
 		FIntVector(NumGroups, 1, 1));
 
-	// Extract feedback buffers for next frame (only if feedback is enabled)
+	// Single unified buffer extraction (replaces 6 separate extractions)
 	if (bFeedbackEnabled && FeedbackManager.IsValid())
 	{
-		// Extract bone collider feedback buffers
 		GraphBuilder.QueueBufferExtraction(
-			FeedbackBuffer,
-			&FeedbackManager->GetFeedbackBuffer(),
-			ERHIAccess::UAVCompute
-		);
-
-		GraphBuilder.QueueBufferExtraction(
-			CounterBuffer,
-			&FeedbackManager->GetCounterBuffer(),
-			ERHIAccess::UAVCompute
-		);
-
-		// Extract StaticMesh collider feedback buffers
-		GraphBuilder.QueueBufferExtraction(
-			StaticMeshFeedbackBuffer,
-			&FeedbackManager->GetStaticMeshFeedbackBuffer(),
-			ERHIAccess::UAVCompute
-		);
-
-		GraphBuilder.QueueBufferExtraction(
-			StaticMeshCounterBuffer,
-			&FeedbackManager->GetStaticMeshCounterBuffer(),
-			ERHIAccess::UAVCompute
-		);
-
-		// Extract FluidInteraction StaticMesh collider feedback buffers
-		GraphBuilder.QueueBufferExtraction(
-			FluidInteractionSMFeedbackBuffer,
-			&FeedbackManager->GetFluidInteractionSMFeedbackBuffer(),
-			ERHIAccess::UAVCompute
-		);
-
-		GraphBuilder.QueueBufferExtraction(
-			FluidInteractionSMCounterBuffer,
-			&FeedbackManager->GetFluidInteractionSMCounterBuffer(),
+			UnifiedFeedbackBuffer,
+			&FeedbackManager->GetUnifiedFeedbackBuffer(),
 			ERHIAccess::UAVCompute
 		);
 	}

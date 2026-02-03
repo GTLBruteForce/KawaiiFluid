@@ -52,18 +52,9 @@ void FGPUCollisionFeedbackManager::Release()
 {
 	ReleaseReadbackObjects();
 
-	// Release bone collider buffers
-	CollisionFeedbackBuffer.SafeRelease();
-	CollisionCounterBuffer.SafeRelease();
+	// Release unified feedback buffer
+	UnifiedFeedbackBuffer.SafeRelease();
 	ColliderContactCountBuffer.SafeRelease();
-
-	// Release StaticMesh collider buffers (WorldCollision)
-	StaticMeshFeedbackBuffer.SafeRelease();
-	StaticMeshCounterBuffer.SafeRelease();
-
-	// Release FluidInteraction StaticMesh collider buffers
-	FluidInteractionSMFeedbackBuffer.SafeRelease();
-	FluidInteractionSMCounterBuffer.SafeRelease();
 
 	// Clear bone collider ready arrays
 	ReadyFeedback.Empty();
@@ -94,94 +85,45 @@ void FGPUCollisionFeedbackManager::Release()
 
 void FGPUCollisionFeedbackManager::AllocateReadbackObjects(FRHICommandListImmediate& RHICmdList)
 {
+	// Unified buffer - allocate single readback per frame instead of 7
 	for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
 	{
-		// Bone collider readbacks
-		if (FeedbackReadbacks[i] == nullptr)
+		// Unified feedback readback (replaces 6 separate readbacks: FeedbackReadbacks, CounterReadbacks,
+		// StaticMeshFeedbackReadbacks, StaticMeshCounterReadbacks, FluidInteractionSMFeedbackReadbacks,
+		// FluidInteractionSMCounterReadbacks)
+		if (UnifiedFeedbackReadbacks[i] == nullptr)
 		{
-			FeedbackReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("CollisionFeedbackReadback_%d"), i));
+			UnifiedFeedbackReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("UnifiedFeedbackReadback_%d"), i));
 		}
 
-		if (CounterReadbacks[i] == nullptr)
-		{
-			CounterReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("CollisionCounterReadback_%d"), i));
-		}
-
+		// Contact count readback (unchanged)
 		if (ContactCountReadbacks[i] == nullptr)
 		{
 			ContactCountReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("ContactCountReadback_%d"), i));
 		}
-
-		// StaticMesh collider readbacks (WorldCollision)
-		if (StaticMeshFeedbackReadbacks[i] == nullptr)
-		{
-			StaticMeshFeedbackReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("StaticMeshFeedbackReadback_%d"), i));
-		}
-
-		if (StaticMeshCounterReadbacks[i] == nullptr)
-		{
-			StaticMeshCounterReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("StaticMeshCounterReadback_%d"), i));
-		}
-
-		// FluidInteraction StaticMesh readbacks
-		if (FluidInteractionSMFeedbackReadbacks[i] == nullptr)
-		{
-			FluidInteractionSMFeedbackReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("FluidInteractionSMFeedbackReadback_%d"), i));
-		}
-
-		if (FluidInteractionSMCounterReadbacks[i] == nullptr)
-		{
-			FluidInteractionSMCounterReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("FluidInteractionSMCounterReadback_%d"), i));
-		}
 	}
 
-	UE_LOG(LogGPUCollisionFeedback, Log, TEXT("Readback objects allocated (BoneFeedback=%d, StaticMeshFeedback=%d, FluidInteractionSMFeedback=%d, NumBuffers=%d, MaxColliders=%d)"),
-		MAX_COLLISION_FEEDBACK, MAX_STATICMESH_COLLISION_FEEDBACK, MAX_FLUIDINTERACTION_SM_FEEDBACK, NUM_FEEDBACK_BUFFERS, MAX_COLLIDER_COUNT);
+	UE_LOG(LogGPUCollisionFeedback, Log, TEXT("Unified readback objects allocated (BufferSize=%d bytes, NumBuffers=%d, MaxColliders=%d)"),
+		UNIFIED_BUFFER_SIZE, NUM_FEEDBACK_BUFFERS, MAX_COLLIDER_COUNT);
 }
 
 void FGPUCollisionFeedbackManager::ReleaseReadbackObjects()
 {
+	// Release unified readbacks (replaces 7 separate releases per buffer)
 	for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
 	{
-		// Release bone collider readbacks
-		if (FeedbackReadbacks[i] != nullptr)
+		// Release unified feedback readback
+		if (UnifiedFeedbackReadbacks[i] != nullptr)
 		{
-			delete FeedbackReadbacks[i];
-			FeedbackReadbacks[i] = nullptr;
+			delete UnifiedFeedbackReadbacks[i];
+			UnifiedFeedbackReadbacks[i] = nullptr;
 		}
-		if (CounterReadbacks[i] != nullptr)
-		{
-			delete CounterReadbacks[i];
-			CounterReadbacks[i] = nullptr;
-		}
+
+		// Release contact count readback
 		if (ContactCountReadbacks[i] != nullptr)
 		{
 			delete ContactCountReadbacks[i];
 			ContactCountReadbacks[i] = nullptr;
-		}
-
-		// Release StaticMesh collider readbacks (WorldCollision)
-		if (StaticMeshFeedbackReadbacks[i] != nullptr)
-		{
-			delete StaticMeshFeedbackReadbacks[i];
-			StaticMeshFeedbackReadbacks[i] = nullptr;
-		}
-		if (StaticMeshCounterReadbacks[i] != nullptr)
-		{
-			delete StaticMeshCounterReadbacks[i];
-			StaticMeshCounterReadbacks[i] = nullptr;
-		}
-
-		// Release FluidInteraction StaticMesh readbacks
-		if (FluidInteractionSMFeedbackReadbacks[i] != nullptr)
-		{
-			delete FluidInteractionSMFeedbackReadbacks[i];
-			FluidInteractionSMFeedbackReadbacks[i] = nullptr;
-		}
-		if (FluidInteractionSMCounterReadbacks[i] != nullptr)
-		{
-			delete FluidInteractionSMCounterReadbacks[i];
-			FluidInteractionSMCounterReadbacks[i] = nullptr;
 		}
 	}
 }
@@ -198,7 +140,7 @@ void FGPUCollisionFeedbackManager::ProcessFeedbackReadback(FRHICommandListImmedi
 	}
 
 	// Ensure readback objects are allocated
-	if (FeedbackReadbacks[0] == nullptr)
+	if (UnifiedFeedbackReadbacks[0] == nullptr)
 	{
 		return;
 	}
@@ -209,219 +151,125 @@ void FGPUCollisionFeedbackManager::ProcessFeedbackReadback(FRHICommandListImmedi
 		return;
 	}
 
-	// =====================================================
-	// Process Bone Collider Feedback (BoneIndex >= 0)
-	// Search for ready bone readback independently
-	// =====================================================
+	// Process Unified Feedback Buffer
+	// Single readback containing all feedback types with embedded counters
+	// Layout: [Header:16B][BoneFeedback][SMFeedback][FISMFeedback]
+	int32 ReadIdx = -1;
+	for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
 	{
-		int32 BoneReadIdx = -1;
-		for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
+		if (UnifiedFeedbackReadbacks[i] && UnifiedFeedbackReadbacks[i]->IsReady())
 		{
-			if (CounterReadbacks[i] && CounterReadbacks[i]->IsReady())
-			{
-				BoneReadIdx = i;
-				break;
-			}
-		}
-
-		if (BoneReadIdx >= 0)
-		{
-			// Read counter first
-			uint32 FeedbackCount = 0;
-			{
-				const uint32* CounterData = (const uint32*)CounterReadbacks[BoneReadIdx]->Lock(sizeof(uint32));
-				if (CounterData)
-				{
-					FeedbackCount = *CounterData;
-				}
-				CounterReadbacks[BoneReadIdx]->Unlock();
-			}
-
-			// Clamp to max
-			FeedbackCount = FMath::Min(FeedbackCount, (uint32)MAX_COLLISION_FEEDBACK);
-
-			// Read feedback data if any and if ready
-			if (FeedbackCount > 0 && FeedbackReadbacks[BoneReadIdx]->IsReady())
-			{
-				FScopeLock Lock(&FeedbackLock);
-
-				const uint32 CopySize = FeedbackCount * sizeof(FGPUCollisionFeedback);
-				const FGPUCollisionFeedback* FeedbackData = (const FGPUCollisionFeedback*)FeedbackReadbacks[BoneReadIdx]->Lock(CopySize);
-
-				if (FeedbackData)
-				{
-					ReadyFeedback.SetNum(FeedbackCount);
-					FMemory::Memcpy(ReadyFeedback.GetData(), FeedbackData, CopySize);
-					ReadyFeedbackCount = FeedbackCount;
-
-					// Debug: BoneIndex 샘플 확인 (매 60프레임)
-					static int32 BoneDebugCounter = 0;
-					if (++BoneDebugCounter % 60 == 0 && FeedbackCount > 0)
-					{
-						FString BoneIdxSamples;
-						int32 SampleCount = FMath::Min((uint32)5, FeedbackCount);
-						for (int32 s = 0; s < SampleCount; ++s)
-						{
-							BoneIdxSamples += FString::Printf(TEXT("[%d:OwnerID=%d] "), FeedbackData[s].BoneIndex, FeedbackData[s].ColliderOwnerID);
-						}
-						UE_LOG(LogTemp, Warning, TEXT("[BoneBuffer] Count=%d, Samples=%s"), FeedbackCount, *BoneIdxSamples);
-					}
-				}
-
-				FeedbackReadbacks[BoneReadIdx]->Unlock();
-
-				UE_LOG(LogGPUCollisionFeedback, Verbose, TEXT("Read %d bone feedback entries from readback %d"), FeedbackCount, BoneReadIdx);
-			}
-			else if (FeedbackCount == 0)
-			{
-				FScopeLock Lock(&FeedbackLock);
-				ReadyFeedbackCount = 0;
-			}
+			ReadIdx = i;
+			break;
 		}
 	}
 
-	// =====================================================
-	// Process StaticMesh Collider Feedback (BoneIndex < 0)
-	// Search for ready StaticMesh readback INDEPENDENTLY
-	// =====================================================
+	if (ReadIdx < 0)
 	{
-		int32 SMReadIdx = -1;
-		for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
+		return;
+	}
+
+	// Lock entire unified buffer once
+	const uint8* BufferData = (const uint8*)UnifiedFeedbackReadbacks[ReadIdx]->Lock(UNIFIED_BUFFER_SIZE);
+	if (!BufferData)
+	{
+		UnifiedFeedbackReadbacks[ReadIdx]->Unlock();
+		return;
+	}
+
+	// Read header (4 counters at offset 0)
+	const uint32* Header = (const uint32*)BufferData;
+	uint32 BoneCount = FMath::Min(Header[0], (uint32)MAX_COLLISION_FEEDBACK);
+	uint32 SMCount = FMath::Min(Header[1], (uint32)MAX_STATICMESH_COLLISION_FEEDBACK);
+	uint32 FISMCount = FMath::Min(Header[2], (uint32)MAX_FLUIDINTERACTION_SM_FEEDBACK);
+
+	// Debug logging (every 60 frames)
+	static int32 DebugCounter = 0;
+	const bool bLogThisFrame = (++DebugCounter % 60 == 0);
+
+	FScopeLock Lock(&FeedbackLock);
+
+	// =====================================================
+	// Process Bone Feedback (offset: BONE_FEEDBACK_OFFSET)
+	// =====================================================
+	if (BoneCount > 0)
+	{
+		const FGPUCollisionFeedback* BoneFeedback = (const FGPUCollisionFeedback*)(BufferData + BONE_FEEDBACK_OFFSET);
+		ReadyFeedback.SetNum(BoneCount);
+		FMemory::Memcpy(ReadyFeedback.GetData(), BoneFeedback, BoneCount * sizeof(FGPUCollisionFeedback));
+		ReadyFeedbackCount = BoneCount;
+
+		if (bLogThisFrame)
 		{
-			if (StaticMeshCounterReadbacks[i] && StaticMeshCounterReadbacks[i]->IsReady())
+			FString BoneIdxSamples;
+			int32 SampleCount = FMath::Min(BoneCount, 5u);
+			for (int32 s = 0; s < SampleCount; ++s)
 			{
-				SMReadIdx = i;
-				break;
+				BoneIdxSamples += FString::Printf(TEXT("[%d:OwnerID=%d] "), BoneFeedback[s].BoneIndex, BoneFeedback[s].ColliderOwnerID);
 			}
+			UE_LOG(LogTemp, Warning, TEXT("[UnifiedBuffer-Bone] Count=%d, Samples=%s"), BoneCount, *BoneIdxSamples);
 		}
-
-		if (SMReadIdx >= 0)
-		{
-			// Read counter first
-			uint32 StaticMeshFeedbackCount = 0;
-			{
-				const uint32* CounterData = (const uint32*)StaticMeshCounterReadbacks[SMReadIdx]->Lock(sizeof(uint32));
-				if (CounterData)
-				{
-					StaticMeshFeedbackCount = *CounterData;
-				}
-				StaticMeshCounterReadbacks[SMReadIdx]->Unlock();
-			}
-
-			// Clamp to max
-			StaticMeshFeedbackCount = FMath::Min(StaticMeshFeedbackCount, (uint32)MAX_STATICMESH_COLLISION_FEEDBACK);
-
-			// Read feedback data if any and if ready
-			if (StaticMeshFeedbackCount > 0 && StaticMeshFeedbackReadbacks[SMReadIdx] && StaticMeshFeedbackReadbacks[SMReadIdx]->IsReady())
-			{
-				FScopeLock Lock(&FeedbackLock);
-
-				const uint32 CopySize = StaticMeshFeedbackCount * sizeof(FGPUCollisionFeedback);
-				const FGPUCollisionFeedback* FeedbackData = (const FGPUCollisionFeedback*)StaticMeshFeedbackReadbacks[SMReadIdx]->Lock(CopySize);
-
-				if (FeedbackData)
-				{
-					ReadyStaticMeshFeedback.SetNum(StaticMeshFeedbackCount);
-					FMemory::Memcpy(ReadyStaticMeshFeedback.GetData(), FeedbackData, CopySize);
-					ReadyStaticMeshFeedbackCount = StaticMeshFeedbackCount;
-
-					// Debug: StaticMesh BoneIndex 샘플 확인 (매 60프레임)
-					static int32 SMDebugCounter = 0;
-					if (++SMDebugCounter % 60 == 0 && StaticMeshFeedbackCount > 0)
-					{
-						FString BoneIdxSamples;
-						int32 SampleCount = FMath::Min((uint32)5, StaticMeshFeedbackCount);
-						for (int32 s = 0; s < SampleCount; ++s)
-						{
-							BoneIdxSamples += FString::Printf(TEXT("[%d:OwnerID=%d] "), FeedbackData[s].BoneIndex, FeedbackData[s].ColliderOwnerID);
-						}
-						UE_LOG(LogTemp, Warning, TEXT("[SMBuffer] Count=%d, Samples=%s"), StaticMeshFeedbackCount, *BoneIdxSamples);
-					}
-				}
-
-				StaticMeshFeedbackReadbacks[SMReadIdx]->Unlock();
-
-				UE_LOG(LogGPUCollisionFeedback, Verbose, TEXT("Read %d StaticMesh feedback entries from readback %d"), StaticMeshFeedbackCount, SMReadIdx);
-			}
-			else if (StaticMeshFeedbackCount == 0)
-			{
-				FScopeLock Lock(&FeedbackLock);
-				ReadyStaticMeshFeedbackCount = 0;
-			}
-		}
+	}
+	else
+	{
+		ReadyFeedbackCount = 0;
 	}
 
 	// =====================================================
-	// Process FluidInteraction StaticMesh Feedback
-	// (BoneIndex < 0, bHasFluidInteraction = 1)
-	// Search for ready FluidInteractionSM readback INDEPENDENTLY
+	// Process StaticMesh Feedback (offset: SM_FEEDBACK_OFFSET)
 	// =====================================================
+	if (SMCount > 0)
 	{
-		int32 FISMReadIdx = -1;
-		for (int32 i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
+		const FGPUCollisionFeedback* SMFeedback = (const FGPUCollisionFeedback*)(BufferData + SM_FEEDBACK_OFFSET);
+		ReadyStaticMeshFeedback.SetNum(SMCount);
+		FMemory::Memcpy(ReadyStaticMeshFeedback.GetData(), SMFeedback, SMCount * sizeof(FGPUCollisionFeedback));
+		ReadyStaticMeshFeedbackCount = SMCount;
+
+		if (bLogThisFrame)
 		{
-			if (FluidInteractionSMCounterReadbacks[i] && FluidInteractionSMCounterReadbacks[i]->IsReady())
+			FString SMIdxSamples;
+			int32 SampleCount = FMath::Min(SMCount, 5u);
+			for (int32 s = 0; s < SampleCount; ++s)
 			{
-				FISMReadIdx = i;
-				break;
+				SMIdxSamples += FString::Printf(TEXT("[%d:OwnerID=%d] "), SMFeedback[s].BoneIndex, SMFeedback[s].ColliderOwnerID);
 			}
-		}
-
-		if (FISMReadIdx >= 0)
-		{
-			// Read counter first
-			uint32 FluidInteractionSMFeedbackCount = 0;
-			{
-				const uint32* CounterData = (const uint32*)FluidInteractionSMCounterReadbacks[FISMReadIdx]->Lock(sizeof(uint32));
-				if (CounterData)
-				{
-					FluidInteractionSMFeedbackCount = *CounterData;
-				}
-				FluidInteractionSMCounterReadbacks[FISMReadIdx]->Unlock();
-			}
-
-			// Clamp to max
-			FluidInteractionSMFeedbackCount = FMath::Min(FluidInteractionSMFeedbackCount, (uint32)MAX_FLUIDINTERACTION_SM_FEEDBACK);
-
-			// Read feedback data if any and if ready
-			if (FluidInteractionSMFeedbackCount > 0 && FluidInteractionSMFeedbackReadbacks[FISMReadIdx] && FluidInteractionSMFeedbackReadbacks[FISMReadIdx]->IsReady())
-			{
-				FScopeLock Lock(&FeedbackLock);
-
-				const uint32 CopySize = FluidInteractionSMFeedbackCount * sizeof(FGPUCollisionFeedback);
-				const FGPUCollisionFeedback* FeedbackData = (const FGPUCollisionFeedback*)FluidInteractionSMFeedbackReadbacks[FISMReadIdx]->Lock(CopySize);
-
-				if (FeedbackData)
-				{
-					ReadyFluidInteractionSMFeedback.SetNum(FluidInteractionSMFeedbackCount);
-					FMemory::Memcpy(ReadyFluidInteractionSMFeedback.GetData(), FeedbackData, CopySize);
-					ReadyFluidInteractionSMFeedbackCount = FluidInteractionSMFeedbackCount;
-
-					// Debug: FluidInteractionSM BoneIndex sample check (every 60 frames)
-					static int32 FISMDebugCounter = 0;
-					if (++FISMDebugCounter % 60 == 0 && FluidInteractionSMFeedbackCount > 0)
-					{
-						FString BoneIdxSamples;
-						int32 SampleCount = FMath::Min((uint32)5, FluidInteractionSMFeedbackCount);
-						for (int32 s = 0; s < SampleCount; ++s)
-						{
-							BoneIdxSamples += FString::Printf(TEXT("[%d:OwnerID=%d] "), FeedbackData[s].BoneIndex, FeedbackData[s].ColliderOwnerID);
-						}
-						UE_LOG(LogTemp, Warning, TEXT("[FluidInteractionSMBuffer] Count=%d, Samples=%s"), FluidInteractionSMFeedbackCount, *BoneIdxSamples);
-					}
-				}
-
-				FluidInteractionSMFeedbackReadbacks[FISMReadIdx]->Unlock();
-
-				UE_LOG(LogGPUCollisionFeedback, Verbose, TEXT("Read %d FluidInteractionSM feedback entries from readback %d"), FluidInteractionSMFeedbackCount, FISMReadIdx);
-			}
-			else if (FluidInteractionSMFeedbackCount == 0)
-			{
-				FScopeLock Lock(&FeedbackLock);
-				ReadyFluidInteractionSMFeedbackCount = 0;
-			}
+			UE_LOG(LogTemp, Warning, TEXT("[UnifiedBuffer-SM] Count=%d, Samples=%s"), SMCount, *SMIdxSamples);
 		}
 	}
+	else
+	{
+		ReadyStaticMeshFeedbackCount = 0;
+	}
+
+	// =====================================================
+	// Process FluidInteraction Feedback (offset: FISM_FEEDBACK_OFFSET)
+	// =====================================================
+	if (FISMCount > 0)
+	{
+		const FGPUCollisionFeedback* FISMFeedback = (const FGPUCollisionFeedback*)(BufferData + FISM_FEEDBACK_OFFSET);
+		ReadyFluidInteractionSMFeedback.SetNum(FISMCount);
+		FMemory::Memcpy(ReadyFluidInteractionSMFeedback.GetData(), FISMFeedback, FISMCount * sizeof(FGPUCollisionFeedback));
+		ReadyFluidInteractionSMFeedbackCount = FISMCount;
+
+		if (bLogThisFrame)
+		{
+			FString FISMIdxSamples;
+			int32 SampleCount = FMath::Min(FISMCount, 5u);
+			for (int32 s = 0; s < SampleCount; ++s)
+			{
+				FISMIdxSamples += FString::Printf(TEXT("[%d:OwnerID=%d] "), FISMFeedback[s].BoneIndex, FISMFeedback[s].ColliderOwnerID);
+			}
+			UE_LOG(LogTemp, Warning, TEXT("[UnifiedBuffer-FISM] Count=%d, Samples=%s"), FISMCount, *FISMIdxSamples);
+		}
+	}
+	else
+	{
+		ReadyFluidInteractionSMFeedbackCount = 0;
+	}
+
+	UnifiedFeedbackReadbacks[ReadIdx]->Unlock();
+
+	UE_LOG(LogGPUCollisionFeedback, Verbose, TEXT("Unified readback %d: Bone=%d, SM=%d, FISM=%d"), ReadIdx, BoneCount, SMCount, FISMCount);
 }
 
 void FGPUCollisionFeedbackManager::ProcessContactCountReadback(FRHICommandListImmediate& RHICmdList)
@@ -494,7 +342,7 @@ void FGPUCollisionFeedbackManager::EnqueueReadbackCopy(FRHICommandListImmediate&
 	const bool bLogThisFrame = (EnqueueDebugFrame++ % 60 == 0);
 
 	// Ensure readback objects are allocated
-	if (FeedbackReadbacks[0] == nullptr)
+	if (UnifiedFeedbackReadbacks[0] == nullptr)
 	{
 		AllocateReadbackObjects(RHICmdList);
 	}
@@ -502,53 +350,38 @@ void FGPUCollisionFeedbackManager::EnqueueReadbackCopy(FRHICommandListImmediate&
 	const int32 WriteIdx = CurrentWriteIndex;
 
 	// =====================================================
-	// Collision Feedback Readback
+	// Single EnqueueCopy + 2 Transitions (was 6 EnqueueCopy + 12 Transitions)
+	// Performance: 83% API call reduction
 	// =====================================================
-	if (bFeedbackEnabled && CollisionFeedbackBuffer.IsValid() && CollisionCounterBuffer.IsValid())
+	if (bFeedbackEnabled && UnifiedFeedbackBuffer.IsValid())
 	{
-		// Transition buffers for copy
+		// Single transition: UAVCompute → CopySrc
 		RHICmdList.Transition(FRHITransitionInfo(
-			CollisionFeedbackBuffer->GetRHI(),
+			UnifiedFeedbackBuffer->GetRHI(),
 			ERHIAccess::UAVCompute,
 			ERHIAccess::CopySrc));
 
-		RHICmdList.Transition(FRHITransitionInfo(
-			CollisionCounterBuffer->GetRHI(),
-			ERHIAccess::UAVCompute,
-			ERHIAccess::CopySrc));
-
-		// EnqueueCopy - async copy to readback buffer (non-blocking!)
-		FeedbackReadbacks[WriteIdx]->EnqueueCopy(
+		// Single EnqueueCopy for entire unified buffer
+		UnifiedFeedbackReadbacks[WriteIdx]->EnqueueCopy(
 			RHICmdList,
-			CollisionFeedbackBuffer->GetRHI(),
-			MAX_COLLISION_FEEDBACK * sizeof(FGPUCollisionFeedback)
+			UnifiedFeedbackBuffer->GetRHI(),
+			UNIFIED_BUFFER_SIZE
 		);
 
-		CounterReadbacks[WriteIdx]->EnqueueCopy(
-			RHICmdList,
-			CollisionCounterBuffer->GetRHI(),
-			sizeof(uint32)
-		);
-
-		// Transition back for next frame
+		// Single transition back: CopySrc → UAVCompute
 		RHICmdList.Transition(FRHITransitionInfo(
-			CollisionFeedbackBuffer->GetRHI(),
-			ERHIAccess::CopySrc,
-			ERHIAccess::UAVCompute));
-
-		RHICmdList.Transition(FRHITransitionInfo(
-			CollisionCounterBuffer->GetRHI(),
+			UnifiedFeedbackBuffer->GetRHI(),
 			ERHIAccess::CopySrc,
 			ERHIAccess::UAVCompute));
 
 		if (bLogThisFrame)
 		{
-			UE_LOG(LogGPUCollisionFeedback, Log, TEXT("EnqueueCopy feedback to readback %d"), WriteIdx);
+			UE_LOG(LogGPUCollisionFeedback, Log, TEXT("EnqueueCopy unified feedback (%d bytes) to readback %d"), UNIFIED_BUFFER_SIZE, WriteIdx);
 		}
 	}
 
 	// =====================================================
-	// Contact Count Readback
+	// Contact Count Readback (unchanged)
 	// =====================================================
 	if (ColliderContactCountBuffer.IsValid())
 	{
@@ -574,99 +407,6 @@ void FGPUCollisionFeedbackManager::EnqueueReadbackCopy(FRHICommandListImmediate&
 		if (bLogThisFrame)
 		{
 			UE_LOG(LogGPUCollisionFeedback, Log, TEXT("EnqueueCopy contact counts to readback %d"), WriteIdx);
-		}
-	}
-
-	// =====================================================
-	// StaticMesh Collision Feedback Readback (BoneIndex < 0)
-	// =====================================================
-	if (bFeedbackEnabled && StaticMeshFeedbackBuffer.IsValid() && StaticMeshCounterBuffer.IsValid())
-	{
-		// Transition buffers for copy
-		RHICmdList.Transition(FRHITransitionInfo(
-			StaticMeshFeedbackBuffer->GetRHI(),
-			ERHIAccess::UAVCompute,
-			ERHIAccess::CopySrc));
-
-		RHICmdList.Transition(FRHITransitionInfo(
-			StaticMeshCounterBuffer->GetRHI(),
-			ERHIAccess::UAVCompute,
-			ERHIAccess::CopySrc));
-
-		// EnqueueCopy - async copy to readback buffer (non-blocking!)
-		StaticMeshFeedbackReadbacks[WriteIdx]->EnqueueCopy(
-			RHICmdList,
-			StaticMeshFeedbackBuffer->GetRHI(),
-			MAX_STATICMESH_COLLISION_FEEDBACK * sizeof(FGPUCollisionFeedback)
-		);
-
-		StaticMeshCounterReadbacks[WriteIdx]->EnqueueCopy(
-			RHICmdList,
-			StaticMeshCounterBuffer->GetRHI(),
-			sizeof(uint32)
-		);
-
-		// Transition back for next frame
-		RHICmdList.Transition(FRHITransitionInfo(
-			StaticMeshFeedbackBuffer->GetRHI(),
-			ERHIAccess::CopySrc,
-			ERHIAccess::UAVCompute));
-
-		RHICmdList.Transition(FRHITransitionInfo(
-			StaticMeshCounterBuffer->GetRHI(),
-			ERHIAccess::CopySrc,
-			ERHIAccess::UAVCompute));
-
-		if (bLogThisFrame)
-		{
-			UE_LOG(LogGPUCollisionFeedback, Log, TEXT("EnqueueCopy StaticMesh feedback to readback %d"), WriteIdx);
-		}
-	}
-
-	// =====================================================
-	// FluidInteraction StaticMesh Feedback Readback
-	// (BoneIndex < 0, bHasFluidInteraction = 1)
-	// =====================================================
-	if (bFeedbackEnabled && FluidInteractionSMFeedbackBuffer.IsValid() && FluidInteractionSMCounterBuffer.IsValid())
-	{
-		// Transition buffers for copy
-		RHICmdList.Transition(FRHITransitionInfo(
-			FluidInteractionSMFeedbackBuffer->GetRHI(),
-			ERHIAccess::UAVCompute,
-			ERHIAccess::CopySrc));
-
-		RHICmdList.Transition(FRHITransitionInfo(
-			FluidInteractionSMCounterBuffer->GetRHI(),
-			ERHIAccess::UAVCompute,
-			ERHIAccess::CopySrc));
-
-		// EnqueueCopy - async copy to readback buffer (non-blocking!)
-		FluidInteractionSMFeedbackReadbacks[WriteIdx]->EnqueueCopy(
-			RHICmdList,
-			FluidInteractionSMFeedbackBuffer->GetRHI(),
-			MAX_FLUIDINTERACTION_SM_FEEDBACK * sizeof(FGPUCollisionFeedback)
-		);
-
-		FluidInteractionSMCounterReadbacks[WriteIdx]->EnqueueCopy(
-			RHICmdList,
-			FluidInteractionSMCounterBuffer->GetRHI(),
-			sizeof(uint32)
-		);
-
-		// Transition back for next frame
-		RHICmdList.Transition(FRHITransitionInfo(
-			FluidInteractionSMFeedbackBuffer->GetRHI(),
-			ERHIAccess::CopySrc,
-			ERHIAccess::UAVCompute));
-
-		RHICmdList.Transition(FRHITransitionInfo(
-			FluidInteractionSMCounterBuffer->GetRHI(),
-			ERHIAccess::CopySrc,
-			ERHIAccess::UAVCompute));
-
-		if (bLogThisFrame)
-		{
-			UE_LOG(LogGPUCollisionFeedback, Log, TEXT("EnqueueCopy FluidInteractionSM feedback to readback %d"), WriteIdx);
 		}
 	}
 

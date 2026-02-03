@@ -625,23 +625,12 @@ public:
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUBoneTransform>, BoneTransforms)
 		SHADER_PARAMETER(int32, BoneCount)
 
-		// Collision Feedback (for particle -> player interaction, BoneIndex >= 0)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUCollisionFeedback>, CollisionFeedback)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, CollisionCounter)
-		SHADER_PARAMETER(int32, MaxCollisionFeedback)
+		// Unified Collision Feedback Buffer (ByteAddressBuffer with embedded counters)
+		// Layout: [Header:16B][BoneFeedback][SMFeedback][FISMFeedback]
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWByteAddressBuffer, UnifiedFeedbackBuffer)
 		SHADER_PARAMETER(int32, bEnableCollisionFeedback)
 
-		// StaticMesh Collision Feedback (WorldCollision, BoneIndex < 0, bHasFluidInteraction = 0)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUCollisionFeedback>, StaticMeshCollisionFeedback)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, StaticMeshCollisionCounter)
-		SHADER_PARAMETER(int32, MaxStaticMeshCollisionFeedback)
-
-		// FluidInteraction StaticMesh Collision Feedback (BoneIndex < 0, bHasFluidInteraction = 1)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FGPUCollisionFeedback>, FluidInteractionSMCollisionFeedback)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, FluidInteractionSMCollisionCounter)
-		SHADER_PARAMETER(int32, MaxFluidInteractionSMCollisionFeedback)
-
-		// Collider Contact Counts (for simple collision counting)
+		// Collider Contact Counts (for simple collision counting, unchanged)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ColliderContactCounts)
 		SHADER_PARAMETER(int32, MaxColliderCount)
 	END_SHADER_PARAMETER_STRUCT()

@@ -44,46 +44,36 @@ int BoneCount;
 float CollisionThreshold;
 
 //=============================================================================
-// Collision Feedback Buffer (for Particle -> Player Interaction)
+// Unified Collision Feedback Buffer
+// All feedback types merged into single buffer with embedded counters
+// Layout: [Header:16B][BoneFeedback][SMFeedback][FISMFeedback]
 //=============================================================================
 
-// Feedback buffer for CPU readback (BoneIndex >= 0, character bones)
-RWStructuredBuffer<FGPUCollisionFeedback> CollisionFeedback;
-
-// Atomic counter for feedback entries
-RWStructuredBuffer<uint> CollisionCounter;
-
-// Maximum number of feedback entries (prevents buffer overflow)
-int MaxCollisionFeedback;
+// Unified feedback buffer (byte-addressable for header access)
+RWByteAddressBuffer UnifiedFeedbackBuffer;
 
 // Enable/disable feedback recording (0 = disabled, 1 = enabled)
 int bEnableCollisionFeedback;
 
-//=============================================================================
-// StaticMesh Collision Feedback Buffer (WorldCollision, BoneIndex < 0, bHasFluidInteraction = 0)
-//=============================================================================
+// Buffer layout constants (must match C++ GPUCollisionFeedbackManager constants)
+// Header: [BoneCount:4][SMCount:4][FISMCount:4][Reserved:4]
+#define UNIFIED_HEADER_SIZE 16
+#define FEEDBACK_STRUCT_SIZE 96  // sizeof(FGPUCollisionFeedback) = 96 bytes
 
-// StaticMesh feedback buffer for CPU readback (WorldCollision without FluidInteraction)
-RWStructuredBuffer<FGPUCollisionFeedback> StaticMeshCollisionFeedback;
+// Max entries per section
+#define MAX_BONE_FEEDBACK 4096
+#define MAX_SM_FEEDBACK 1024
+#define MAX_FISM_FEEDBACK 1024
 
-// Atomic counter for StaticMesh feedback entries
-RWStructuredBuffer<uint> StaticMeshCollisionCounter;
+// Section offsets (in bytes)
+#define BONE_FEEDBACK_OFFSET UNIFIED_HEADER_SIZE
+#define SM_FEEDBACK_OFFSET (BONE_FEEDBACK_OFFSET + MAX_BONE_FEEDBACK * FEEDBACK_STRUCT_SIZE)
+#define FISM_FEEDBACK_OFFSET (SM_FEEDBACK_OFFSET + MAX_SM_FEEDBACK * FEEDBACK_STRUCT_SIZE)
 
-// Maximum number of StaticMesh feedback entries
-int MaxStaticMeshCollisionFeedback;
-
-//=============================================================================
-// FluidInteraction StaticMesh Feedback Buffer (BoneIndex < 0, bHasFluidInteraction = 1)
-//=============================================================================
-
-// FluidInteraction StaticMesh feedback buffer for CPU readback (buoyancy center calculation)
-RWStructuredBuffer<FGPUCollisionFeedback> FluidInteractionSMCollisionFeedback;
-
-// Atomic counter for FluidInteraction StaticMesh feedback entries
-RWStructuredBuffer<uint> FluidInteractionSMCollisionCounter;
-
-// Maximum number of FluidInteraction StaticMesh feedback entries
-int MaxFluidInteractionSMCollisionFeedback;
+// Counter offsets in header (in bytes)
+#define BONE_COUNTER_OFFSET 0
+#define SM_COUNTER_OFFSET 4
+#define FISM_COUNTER_OFFSET 8
 
 //=============================================================================
 // Collider Contact Count Buffer (for simple collision count)
@@ -96,17 +86,86 @@ RWStructuredBuffer<uint> ColliderContactCounts;
 int MaxColliderCount;
 
 //=============================================================================
+// Helper Function: Write Feedback Struct to ByteAddressBuffer
+//=============================================================================
+
+/**
+ * Writes FGPUCollisionFeedback struct to unified buffer at given byte offset
+ * FGPUCollisionFeedback layout (96 bytes):
+ *   Row 1: ParticleIndex(4) + ColliderIndex(4) + ColliderType(4) + Density(4)
+ *   Row 2: ImpactNormal(12) + Penetration(4)
+ *   Row 3: ParticleVelocity(12) + ColliderOwnerID(4)
+ *   Row 4: ParticleSourceID(4) + ParticleActorID(4) + BoneIndex(4) + Padding1(4)
+ *   Row 5: ImpactOffset(12) + Padding2(4)
+ *   Row 6: ParticlePosition(12) + Padding3(4)
+ */
+void WriteFeedbackToBuffer(uint byteOffset, int particleIdx, int colliderIdx, int colliderType,
+                           float density, float3 normal, float penetration, float3 velocity,
+                           int colliderOwnerID, int particleSourceID, int boneIndex,
+                           float3 impactOffset, float3 particlePosition)
+{
+	// Row 1: ParticleIndex, ColliderIndex, ColliderType, Density
+	UnifiedFeedbackBuffer.Store4(byteOffset, uint4(
+		asuint(particleIdx),
+		asuint(colliderIdx),
+		asuint(colliderType),
+		asuint(density)
+	));
+
+	// Row 2: ImpactNormal.xyz, Penetration
+	UnifiedFeedbackBuffer.Store4(byteOffset + 16, uint4(
+		asuint(normal.x),
+		asuint(normal.y),
+		asuint(normal.z),
+		asuint(penetration)
+	));
+
+	// Row 3: ParticleVelocity.xyz, ColliderOwnerID
+	UnifiedFeedbackBuffer.Store4(byteOffset + 32, uint4(
+		asuint(velocity.x),
+		asuint(velocity.y),
+		asuint(velocity.z),
+		asuint(colliderOwnerID)
+	));
+
+	// Row 4: ParticleSourceID, ParticleActorID(0), BoneIndex, Padding1(0)
+	UnifiedFeedbackBuffer.Store4(byteOffset + 48, uint4(
+		asuint(particleSourceID),
+		0,  // ParticleActorID
+		asuint(boneIndex),
+		0   // Padding1
+	));
+
+	// Row 5: ImpactOffset.xyz, Padding2(0)
+	UnifiedFeedbackBuffer.Store4(byteOffset + 64, uint4(
+		asuint(impactOffset.x),
+		asuint(impactOffset.y),
+		asuint(impactOffset.z),
+		0   // Padding2
+	));
+
+	// Row 6: ParticlePosition.xyz, Padding3(0)
+	UnifiedFeedbackBuffer.Store4(byteOffset + 80, uint4(
+		asuint(particlePosition.x),
+		asuint(particlePosition.y),
+		asuint(particlePosition.z),
+		0   // Padding3
+	));
+}
+
+//=============================================================================
 // Helper Function: Record Collision Feedback
 //=============================================================================
 
 /**
  * Records collision feedback for CPU readback (particle -> player interaction)
- * Uses atomic counter to safely write to shared buffer
+ * Uses atomic counter in unified buffer header to safely write to shared buffer
  *
- * 3-Way Buffer Routing:
- * - boneIndex >= 0 -> CollisionFeedback (SkeletalMesh bones)
- * - boneIndex < 0, bHasFluidInteraction = 0 -> StaticMeshCollisionFeedback (WorldCollision)
- * - boneIndex < 0, bHasFluidInteraction = 1 -> FluidInteractionSMCollisionFeedback (FluidInteraction StaticMesh)
+ * Unified Buffer Layout:
+ * - Header[0]: BoneCount, Header[4]: SMCount, Header[8]: FISMCount
+ * - boneIndex >= 0 -> BoneFeedback section
+ * - boneIndex < 0, bHasFluidInteraction = 0 -> SMFeedback section
+ * - boneIndex < 0, bHasFluidInteraction = 1 -> FISMFeedback section
  *
  * @param particleIdx - Index of the colliding particle
  * @param colliderIdx - Index of the collider (unique across all types)
@@ -140,61 +199,54 @@ void RecordCollisionFeedback(int particleIdx, int colliderIdx, int colliderType,
 		return;
 	}
 
-	// Build feedback struct (common for all buffers)
-	FGPUCollisionFeedback feedback;
-	feedback.ParticleIndex = particleIdx;
-	feedback.ColliderIndex = colliderIdx;
-	feedback.ColliderType = colliderType;
-	feedback.Density = density;
-	feedback.ImpactNormal = normal;
-	feedback.Penetration = penetration;
-	feedback.ParticleVelocity = velocity;
-	feedback.ColliderOwnerID = colliderOwnerID;
-	feedback.ParticleSourceID = particleSourceID;
-	feedback.ParticleActorID = 0;  // Reserved for future use
-	feedback.BoneIndex = boneIndex;
-	feedback.Padding1 = 0;
+	// Compute impact offset in bone local space
+	float3 impactOffset = float3(0, 0, 0);
 	if (boneIndex >= 0 && boneIndex < BoneCount)
 	{
-		feedback.ImpactOffset = WorldToBoneLocal(impactWorld, BoneTransforms[boneIndex]);
+		impactOffset = WorldToBoneLocal(impactWorld, BoneTransforms[boneIndex]);
 	}
-	else
-	{
-		feedback.ImpactOffset = float3(0, 0, 0);
-	}
-	feedback.Padding2 = 0;
-	feedback.ParticlePosition = particlePosition;
-	feedback.Padding3 = 0;
 
-	// 3-Way Branch: Route to appropriate buffer based on boneIndex and bHasFluidInteraction
+	// Route to appropriate section of unified buffer
 	uint feedbackIdx;
+	uint byteOffset;
+
 	if (boneIndex >= 0)
 	{
-		// SkeletalMesh bone colliders -> CollisionFeedback buffer
-		InterlockedAdd(CollisionCounter[0], 1, feedbackIdx);
-		if ((int)feedbackIdx < MaxCollisionFeedback)
+		// SkeletalMesh bone colliders -> BoneFeedback section
+		UnifiedFeedbackBuffer.InterlockedAdd(BONE_COUNTER_OFFSET, 1, feedbackIdx);
+		if ((int)feedbackIdx < MAX_BONE_FEEDBACK)
 		{
-			CollisionFeedback[feedbackIdx] = feedback;
+			byteOffset = BONE_FEEDBACK_OFFSET + feedbackIdx * FEEDBACK_STRUCT_SIZE;
+			WriteFeedbackToBuffer(byteOffset, particleIdx, colliderIdx, colliderType,
+			                      density, normal, penetration, velocity,
+			                      colliderOwnerID, particleSourceID, boneIndex,
+			                      impactOffset, particlePosition);
 		}
 	}
 	else if (bHasFluidInteraction != 0)
 	{
-		// FluidInteraction StaticMesh (boneIndex < 0, bHasFluidInteraction = 1)
-		// -> FluidInteractionSMCollisionFeedback buffer (for buoyancy center calculation)
-		InterlockedAdd(FluidInteractionSMCollisionCounter[0], 1, feedbackIdx);
-		if ((int)feedbackIdx < MaxFluidInteractionSMCollisionFeedback)
+		// FluidInteraction StaticMesh -> FISMFeedback section
+		UnifiedFeedbackBuffer.InterlockedAdd(FISM_COUNTER_OFFSET, 1, feedbackIdx);
+		if ((int)feedbackIdx < MAX_FISM_FEEDBACK)
 		{
-			FluidInteractionSMCollisionFeedback[feedbackIdx] = feedback;
+			byteOffset = FISM_FEEDBACK_OFFSET + feedbackIdx * FEEDBACK_STRUCT_SIZE;
+			WriteFeedbackToBuffer(byteOffset, particleIdx, colliderIdx, colliderType,
+			                      density, normal, penetration, velocity,
+			                      colliderOwnerID, particleSourceID, boneIndex,
+			                      impactOffset, particlePosition);
 		}
 	}
 	else
 	{
-		// WorldCollision StaticMesh (boneIndex < 0, bHasFluidInteraction = 0)
-		// -> StaticMeshCollisionFeedback buffer
-		InterlockedAdd(StaticMeshCollisionCounter[0], 1, feedbackIdx);
-		if ((int)feedbackIdx < MaxStaticMeshCollisionFeedback)
+		// WorldCollision StaticMesh -> SMFeedback section
+		UnifiedFeedbackBuffer.InterlockedAdd(SM_COUNTER_OFFSET, 1, feedbackIdx);
+		if ((int)feedbackIdx < MAX_SM_FEEDBACK)
 		{
-			StaticMeshCollisionFeedback[feedbackIdx] = feedback;
+			byteOffset = SM_FEEDBACK_OFFSET + feedbackIdx * FEEDBACK_STRUCT_SIZE;
+			WriteFeedbackToBuffer(byteOffset, particleIdx, colliderIdx, colliderType,
+			                      density, normal, penetration, velocity,
+			                      colliderOwnerID, particleSourceID, boneIndex,
+			                      impactOffset, particlePosition);
 		}
 	}
 }

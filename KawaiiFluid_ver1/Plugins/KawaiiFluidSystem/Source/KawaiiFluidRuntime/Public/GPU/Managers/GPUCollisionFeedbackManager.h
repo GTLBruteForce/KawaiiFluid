@@ -23,6 +23,14 @@ class FRDGBuilder;
  * - Collision feedback entries (position, velocity, force for each collision)
  * - Per-collider contact counts (simple collision detection)
  * - Async readback with no FlushRenderingCommands
+ *
+ * Unified Buffer Layout:
+ * - All feedback types merged into single buffer with embedded counters
+ * - Buffer layout:
+ *   [Header: 16 bytes] BoneCount, SMCount, FISMCount, Reserved
+ *   [BoneFeedback: 4096 entries] offset 16
+ *   [StaticMeshFeedback: 1024 entries] offset 393,232
+ *   [FluidInteractionFeedback: 1024 entries] offset 491,536
  */
 class KAWAIIFLUIDRUNTIME_API FGPUCollisionFeedbackManager
 {
@@ -45,6 +53,25 @@ public:
 
 	static constexpr int32 NUM_FEEDBACK_BUFFERS = 3;
 	static constexpr int32 MAX_COLLIDER_COUNT = 256;
+
+	//=========================================================================
+	// Unified Buffer Layout Constants
+	//=========================================================================
+
+	/** Header size: 4 uint32 counters (BoneCount, SMCount, FISMCount, Reserved) */
+	static constexpr int32 UNIFIED_HEADER_SIZE = 16;
+
+	/** Offset to bone feedback section (after header) */
+	static constexpr int32 BONE_FEEDBACK_OFFSET = UNIFIED_HEADER_SIZE;
+
+	/** Offset to StaticMesh feedback section */
+	static constexpr int32 SM_FEEDBACK_OFFSET = BONE_FEEDBACK_OFFSET + MAX_COLLISION_FEEDBACK * 96;  // 96 = sizeof(FGPUCollisionFeedback)
+
+	/** Offset to FluidInteraction feedback section */
+	static constexpr int32 FISM_FEEDBACK_OFFSET = SM_FEEDBACK_OFFSET + MAX_STATICMESH_COLLISION_FEEDBACK * 96;
+
+	/** Total unified buffer size in bytes */
+	static constexpr int32 UNIFIED_BUFFER_SIZE = FISM_FEEDBACK_OFFSET + MAX_FLUIDINTERACTION_SM_FEEDBACK * 96;
 
 	//=========================================================================
 	// Lifecycle
@@ -79,26 +106,28 @@ public:
 	/** Release readback objects */
 	void ReleaseReadbackObjects();
 
-	/** Get or create feedback buffer for RDG pass (bone colliders) */
-	TRefCountPtr<FRDGPooledBuffer>& GetFeedbackBuffer() { return CollisionFeedbackBuffer; }
-
-	/** Get or create counter buffer for RDG pass (bone colliders) */
-	TRefCountPtr<FRDGPooledBuffer>& GetCounterBuffer() { return CollisionCounterBuffer; }
+	/** Get or create unified feedback buffer for RDG pass (all feedback types merged) */
+	TRefCountPtr<FRDGPooledBuffer>& GetUnifiedFeedbackBuffer() { return UnifiedFeedbackBuffer; }
 
 	/** Get or create contact count buffer for RDG pass */
 	TRefCountPtr<FRDGPooledBuffer>& GetContactCountBuffer() { return ColliderContactCountBuffer; }
 
-	/** Get or create StaticMesh feedback buffer for RDG pass (WorldCollision, no FluidInteraction) */
-	TRefCountPtr<FRDGPooledBuffer>& GetStaticMeshFeedbackBuffer() { return StaticMeshFeedbackBuffer; }
+	//=========================================================================
+	// Legacy API (deprecated, kept for compatibility - will be removed)
+	//=========================================================================
 
-	/** Get or create StaticMesh counter buffer for RDG pass (WorldCollision, no FluidInteraction) */
-	TRefCountPtr<FRDGPooledBuffer>& GetStaticMeshCounterBuffer() { return StaticMeshCounterBuffer; }
-
-	/** Get or create FluidInteraction StaticMesh feedback buffer for RDG pass */
-	TRefCountPtr<FRDGPooledBuffer>& GetFluidInteractionSMFeedbackBuffer() { return FluidInteractionSMFeedbackBuffer; }
-
-	/** Get or create FluidInteraction StaticMesh counter buffer for RDG pass */
-	TRefCountPtr<FRDGPooledBuffer>& GetFluidInteractionSMCounterBuffer() { return FluidInteractionSMCounterBuffer; }
+	/** @deprecated Use GetUnifiedFeedbackBuffer() instead */
+	TRefCountPtr<FRDGPooledBuffer>& GetFeedbackBuffer() { return UnifiedFeedbackBuffer; }
+	/** @deprecated Counters are now embedded in unified buffer */
+	TRefCountPtr<FRDGPooledBuffer>& GetCounterBuffer() { static TRefCountPtr<FRDGPooledBuffer> Dummy; return Dummy; }
+	/** @deprecated Use GetUnifiedFeedbackBuffer() instead */
+	TRefCountPtr<FRDGPooledBuffer>& GetStaticMeshFeedbackBuffer() { return UnifiedFeedbackBuffer; }
+	/** @deprecated Counters are now embedded in unified buffer */
+	TRefCountPtr<FRDGPooledBuffer>& GetStaticMeshCounterBuffer() { static TRefCountPtr<FRDGPooledBuffer> Dummy; return Dummy; }
+	/** @deprecated Use GetUnifiedFeedbackBuffer() instead */
+	TRefCountPtr<FRDGPooledBuffer>& GetFluidInteractionSMFeedbackBuffer() { return UnifiedFeedbackBuffer; }
+	/** @deprecated Counters are now embedded in unified buffer */
+	TRefCountPtr<FRDGPooledBuffer>& GetFluidInteractionSMCounterBuffer() { static TRefCountPtr<FRDGPooledBuffer> Dummy; return Dummy; }
 
 	//=========================================================================
 	// Readback Processing (called from render thread after simulation)
@@ -192,35 +221,22 @@ private:
 	// GPU Buffers (managed via RDG extraction)
 	//=========================================================================
 
-	// Bone collider feedback (BoneIndex >= 0)
-	TRefCountPtr<FRDGPooledBuffer> CollisionFeedbackBuffer;
-	TRefCountPtr<FRDGPooledBuffer> CollisionCounterBuffer;
+	// Unified feedback buffer containing all feedback types with embedded counters
+	// Layout: [Header:16B][BoneFeedback][SMFeedback][FISMFeedback]
+	TRefCountPtr<FRDGPooledBuffer> UnifiedFeedbackBuffer;
+
+	// Contact count buffer (separate, needed even when feedback disabled)
 	TRefCountPtr<FRDGPooledBuffer> ColliderContactCountBuffer;
-
-	// StaticMesh collider feedback (BoneIndex < 0, bHasFluidInteraction = 0, WorldCollision)
-	TRefCountPtr<FRDGPooledBuffer> StaticMeshFeedbackBuffer;
-	TRefCountPtr<FRDGPooledBuffer> StaticMeshCounterBuffer;
-
-	// FluidInteraction StaticMesh feedback (BoneIndex < 0, bHasFluidInteraction = 1)
-	TRefCountPtr<FRDGPooledBuffer> FluidInteractionSMFeedbackBuffer;
-	TRefCountPtr<FRDGPooledBuffer> FluidInteractionSMCounterBuffer;
 
 	//=========================================================================
 	// Async Readback Objects (triple buffered)
 	//=========================================================================
 
-	// Bone collider readbacks
-	FRHIGPUBufferReadback* FeedbackReadbacks[NUM_FEEDBACK_BUFFERS] = {nullptr};
-	FRHIGPUBufferReadback* CounterReadbacks[NUM_FEEDBACK_BUFFERS] = {nullptr};
+	// Unified feedback readback (replaces 6 separate readbacks)
+	FRHIGPUBufferReadback* UnifiedFeedbackReadbacks[NUM_FEEDBACK_BUFFERS] = {nullptr};
+
+	// Contact count readback (unchanged)
 	FRHIGPUBufferReadback* ContactCountReadbacks[NUM_FEEDBACK_BUFFERS] = {nullptr};
-
-	// StaticMesh collider readbacks (WorldCollision, no FluidInteraction)
-	FRHIGPUBufferReadback* StaticMeshFeedbackReadbacks[NUM_FEEDBACK_BUFFERS] = {nullptr};
-	FRHIGPUBufferReadback* StaticMeshCounterReadbacks[NUM_FEEDBACK_BUFFERS] = {nullptr};
-
-	// FluidInteraction StaticMesh readbacks
-	FRHIGPUBufferReadback* FluidInteractionSMFeedbackReadbacks[NUM_FEEDBACK_BUFFERS] = {nullptr};
-	FRHIGPUBufferReadback* FluidInteractionSMCounterReadbacks[NUM_FEEDBACK_BUFFERS] = {nullptr};
 
 	//=========================================================================
 	// Ready Data (thread-safe access via lock)
