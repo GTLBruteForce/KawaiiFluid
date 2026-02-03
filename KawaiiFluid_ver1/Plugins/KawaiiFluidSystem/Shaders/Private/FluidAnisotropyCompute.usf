@@ -1480,7 +1480,8 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// If neighbor count >= 1, pull toward SmoothedCenter by diameter (ParticleRadius * 2)
 	// NEAR_BOUNDARY particles don't need offset as they're already attached to collider
 	// =========================================================================
-	if (!bUsedSurfaceNormal && NeighborCount >= 1)
+	// TODO: Temporarily disabled
+	if (false && !bUsedSurfaceNormal && NeighborCount >= 1)
 	{
 		float3 CenterPos = float3(InPositions[idx3], InPositions[idx3 + 1], InPositions[idx3 + 2]);
 		float3 toNeighbors = SmoothedCenter - CenterPos;
