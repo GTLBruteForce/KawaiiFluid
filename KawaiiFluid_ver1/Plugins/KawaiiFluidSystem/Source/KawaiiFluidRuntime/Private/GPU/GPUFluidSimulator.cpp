@@ -4078,43 +4078,8 @@ void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdLi
 			}
 		}
 
-		// Hold lock briefly and swap
-		{
-			SCOPED_DRAW_EVENT(RHICmdList, Lock);
-			FScopeLock Lock(&BufferLock);
-			CachedSourceIDToParticleIDs = MoveTemp(NewSourceIDArrays);
-			CachedAllParticleIDs = MoveTemp(NewAllParticleIDs);
-			CachedParticlePositions = MoveTemp(NewPositions);    // Always available for despawn API
-			CachedParticleSourceIDs = MoveTemp(NewSourceIDs);    // Always available for despawn API
-			CachedParticleFlags = MoveTemp(NewFlags);            // Always available for debug visualization
-
-			// Velocity for ISM rendering (lightweight API)
-			if (bNeedVelocity)
-			{
-				CachedParticleVelocities = MoveTemp(NewVelocities);
-			}
-
-			bHasValidGPUResults.store(true);
-
-			// NeighborCount only when shadow readback enabled
-			if (bNeedShadowData)
-			{
-				ReadyShadowPositions = CachedParticlePositions;  // Share with despawn data
-				ReadyShadowVelocities = CachedParticleVelocities;  // Share with ISM data
-				ReadyShadowNeighborCounts = MoveTemp(NewNeighborCounts);
-				ReadyShadowPositionsFrame.store(StatsReadbackFrameNumbers[ReadIdx]);
-			}
-		}
-
-		// Grab DespawnByIDLock outside BufferLock (prevent lock nesting)
-		// Cannot reuse built array in CleanupCompletedRequests (MoveTemped)
-		// Can just reference CachedAllParticleIDs - safe here since only render thread modifies
-		if (SpawnManager.IsValid())
-		{
-			SpawnManager->CleanupCompletedRequests(CachedAllParticleIDs);
-		}
-
 		// Calculate all stats from GPU readback data (only when detailed stats enabled)
+		// IMPORTANT: Must be done BEFORE MoveTemp to avoid accessing moved arrays
 		if (bNeedDetailedStats && ParticleCount > 0)
 		{
 			// Count attached particles
@@ -4199,6 +4164,42 @@ void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdLi
 				NewMasses.GetData(),
 				ParticleCount,
 				RestDensity);
+		}
+
+		// Hold lock briefly and swap
+		{
+			SCOPED_DRAW_EVENT(RHICmdList, Lock);
+			FScopeLock Lock(&BufferLock);
+			CachedSourceIDToParticleIDs = MoveTemp(NewSourceIDArrays);
+			CachedAllParticleIDs = MoveTemp(NewAllParticleIDs);
+			CachedParticlePositions = MoveTemp(NewPositions);    // Always available for despawn API
+			CachedParticleSourceIDs = MoveTemp(NewSourceIDs);    // Always available for despawn API
+			CachedParticleFlags = MoveTemp(NewFlags);            // Always available for debug visualization
+
+			// Velocity for ISM rendering (lightweight API)
+			if (bNeedVelocity)
+			{
+				CachedParticleVelocities = MoveTemp(NewVelocities);
+			}
+
+			bHasValidGPUResults.store(true);
+
+			// NeighborCount only when shadow readback enabled
+			if (bNeedShadowData)
+			{
+				ReadyShadowPositions = CachedParticlePositions;  // Share with despawn data
+				ReadyShadowVelocities = CachedParticleVelocities;  // Share with ISM data
+				ReadyShadowNeighborCounts = MoveTemp(NewNeighborCounts);
+				ReadyShadowPositionsFrame.store(StatsReadbackFrameNumbers[ReadIdx]);
+			}
+		}
+
+		// Grab DespawnByIDLock outside BufferLock (prevent lock nesting)
+		// Cannot reuse built array in CleanupCompletedRequests (MoveTemped)
+		// Can just reference CachedAllParticleIDs - safe here since only render thread modifies
+		if (SpawnManager.IsValid())
+		{
+			SpawnManager->CleanupCompletedRequests(CachedAllParticleIDs);
 		}
 	}
 
