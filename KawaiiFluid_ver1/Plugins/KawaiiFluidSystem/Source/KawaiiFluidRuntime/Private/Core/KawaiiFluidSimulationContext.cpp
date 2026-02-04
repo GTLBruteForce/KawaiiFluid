@@ -720,15 +720,82 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 	// Hybrid Tiled Z-Order mode for unlimited simulation range
 	// When enabled, particles can exist anywhere in the world (no bounds clipping)
 	bool bUseHybridTiledZOrder = false;
+	bool bUseUnlimitedSize = false;
 	if (UKawaiiFluidVolumeComponent* Volume = TargetVolumeComponent.Get())
 	{
 		bUseHybridTiledZOrder = Volume->bUseHybridTiledZOrder;
+		bUseUnlimitedSize = Volume->bUseUnlimitedSize;
 	}
 	GPUSimulator->SetHybridTiledZOrderEnabled(bUseHybridTiledZOrder);
 
-	// GPU World Collision Query Bounds (Simulation Volume + Particle Radius padding)
+	// GPU World Collision Query Bounds
+	// In Unlimited Size mode: Use particle bounds (readback) + character bounds (InteractionComponents)
+	// In Normal mode: Use simulation volume bounds + particle radius padding
 	FBox GPUWorldQueryBounds{FVector(WorldBoundsMin), FVector(WorldBoundsMax)};
 	GPUWorldQueryBounds = GPUWorldQueryBounds.ExpandBy(Preset->ParticleRadius);
+
+	if (bUseUnlimitedSize)
+	{
+		// Enable particle bounds readback for next frame (if not already enabled)
+		if (!GPUSimulator->IsParticleBoundsReadbackEnabled())
+		{
+			GPUSimulator->SetParticleBoundsReadbackEnabled(true);
+		}
+
+		// Option D: Character-centered bounds (immediate, no latency)
+		FBox CharacterBounds(EForceInit::ForceInit);
+		constexpr float CharacterInteractionRadius = 300.0f;  // 3m radius around each character
+		
+		for (const TObjectPtr<UKawaiiFluidInteractionComponent>& Interaction : Params.InteractionComponents)
+		{
+			if (Interaction)
+			{
+				if (AActor* Owner = Interaction->GetOwner())
+				{
+					FBox ActorBounds = Owner->GetComponentsBoundingBox();
+					if (ActorBounds.IsValid)
+					{
+						ActorBounds = ActorBounds.ExpandBy(CharacterInteractionRadius);
+						CharacterBounds += ActorBounds;
+					}
+				}
+			}
+		}
+
+		// Option A: Particle bounds from GPU readback (2-3 frame latency)
+		FBox ParticleBounds(EForceInit::ForceInit);
+		if (GPUSimulator->HasReadyParticleBounds())
+		{
+			ParticleBounds = GPUSimulator->GetCachedParticleBounds();
+			
+			// Velocity-based margin for latency compensation
+			// Assume max particle velocity ~500 cm/s, 3 frame latency, ~60 FPS
+			constexpr float MaxVelocity = 500.0f;
+			constexpr float LatencyFrames = 3.0f;
+			constexpr float FrameTime = 1.0f / 60.0f;
+			const float LatencyMargin = MaxVelocity * LatencyFrames * FrameTime;
+			ParticleBounds = ParticleBounds.ExpandBy(LatencyMargin);
+		}
+
+		// Combine: Character bounds + Particle bounds
+		FBox CombinedBounds(EForceInit::ForceInit);
+		if (CharacterBounds.IsValid)
+		{
+			CombinedBounds += CharacterBounds;
+		}
+		if (ParticleBounds.IsValid)
+		{
+			CombinedBounds += ParticleBounds;
+		}
+
+		// Fallback: If neither available, use default volume bounds
+		if (CombinedBounds.IsValid)
+		{
+			// Add particle radius margin for collision detection
+			GPUWorldQueryBounds = CombinedBounds.ExpandBy(Preset->ParticleRadius);
+		}
+		// else: Keep original volume-based bounds as fallback
+	}
 
 	// =====================================================
 	// GPU-Only Mode: No CPU Particles array dependency
@@ -883,7 +950,8 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 			}
 
 			// 2. Generate static boundary particles from collision primitives (Akinci 2012)
-			// Handles both dirty flag and runtime toggle of bEnableStaticBoundaryParticles
+			// Uses per-primitive caching: only generates particles for NEW primitives
+			// GPU upload is skipped if no changes detected (caching optimization)
 			{
 				TRACE_CPUPROFILER_EVENT_SCOPE(SimGPU_Upload_StaticBoundary);
 				const bool bHasStaticBoundary = GPUSimulator->HasStaticBoundaryParticles();
@@ -891,14 +959,19 @@ void UKawaiiFluidSimulationContext::SimulateGPU(
 
 				if (Params.bEnableStaticBoundaryParticles)
 				{
-					// Generate if dirty or if we should have particles but don't
-					if (bStaticBoundaryParticlesDirty || !bHasStaticBoundary)
+					// Invalidate cache if dirty flag is set (World changed)
+					if (bStaticBoundaryParticlesDirty)
 					{
-						// Set particle spacing before generation
-						GPUSimulator->SetStaticBoundaryParticleSpacing(Params.StaticBoundaryParticleSpacing);
-						GPUSimulator->GenerateStaticBoundaryParticles(Preset->SmoothingRadius, Preset->Density);
+						GPUSimulator->InvalidateStaticBoundaryCache();
 						bStaticBoundaryParticlesDirty = false;
 					}
+
+					// Always call GenerateStaticBoundaryParticles - it handles caching internally:
+					// - Reuses cached particles for known primitives (no CPU work)
+					// - Only generates particles for new primitives
+					// - Skips GPU upload if active primitive set unchanged
+					GPUSimulator->SetStaticBoundaryParticleSpacing(Params.StaticBoundaryParticleSpacing);
+					GPUSimulator->GenerateStaticBoundaryParticles(Preset->SmoothingRadius, Preset->Density);
 				}
 				else
 				{
@@ -1426,13 +1499,20 @@ void UKawaiiFluidSimulationContext::AppendGPUWorldCollisionPrimitives(
 		CachedGPUWorldCollisionBounds = QueryBounds;
 		CachedGPUWorldCollisionWorld = Params.World;
 		bGPUWorldCollisionCacheDirty = false;
-		bStaticBoundaryParticlesDirty = true;  // Regenerate static boundary particles
 
-		// Mark landscape heightmap dirty if world changed
+		// Static boundary particle cache invalidation policy:
+		// - World changed: Full cache invalidation required (primitives may have moved/changed)
+		// - Bounds expanded: NO invalidation needed - existing cached particles remain valid
+		//   (StaticBoundaryManager uses per-primitive caching, so only NEW primitives
+		//    discovered in the expanded region will trigger generation)
+		// This optimization prevents 1+ second stalls every frame in Unlimited mode
 		if (bWorldChanged)
 		{
+			bStaticBoundaryParticlesDirty = true;
 			bLandscapeHeightmapDirty = true;
 		}
+		// Note: bBoundsChanged alone no longer triggers bStaticBoundaryParticlesDirty
+		// StaticBoundaryManager handles caching internally
 
 		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(KawaiiFluidGPUWorldCollision), false);
 		QueryParams.bTraceComplex = false;

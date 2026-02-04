@@ -188,6 +188,9 @@ void FGPUFluidSimulator::Release()
 	// Release Debug Index Readback objects
 	ReleaseDebugIndexReadbackObjects();
 
+	// Release Particle Bounds Readback objects
+	ReleaseParticleBoundsReadbackObjects();
+
 	bIsInitialized = false;
 	MaxParticleCount = 0;
 	CurrentParticleCount = 0;
@@ -873,6 +876,13 @@ void FGPUFluidSimulator::BeginFrame()
 			{
 				SCOPED_DRAW_EVENT(RHICmdList, GPUFluid_BeginFrame_DebugIndex);
 				Self->ProcessDebugIndexReadback();
+			}
+
+			// Particle bounds readback (for Unlimited Simulation Range world collision)
+			if (Self->bParticleBoundsReadbackEnabled.load())
+			{
+				SCOPED_DRAW_EVENT(RHICmdList, GPUFluid_BeginFrame_ParticleBounds);
+				Self->ProcessParticleBoundsReadback();
 			}
 
 			if (Self->SpawnManager.IsValid())
@@ -2443,8 +2453,9 @@ void FGPUFluidSimulator::GenerateStaticBoundaryParticles(float SmoothingRadius, 
 		return;
 	}
 
-	// Generate boundary particles from cached collision primitives
-	StaticBoundaryManager->GenerateBoundaryParticles(
+	// Generate boundary particles from cached collision primitives (with caching)
+	// Returns true if boundary particles changed (requires GPU upload)
+	const bool bBoundaryParticlesChanged = StaticBoundaryManager->GenerateBoundaryParticles(
 		CollisionManager->GetCachedSpheres(),
 		CollisionManager->GetCachedCapsules(),
 		CollisionManager->GetCachedBoxes(),
@@ -2454,22 +2465,26 @@ void FGPUFluidSimulator::GenerateStaticBoundaryParticles(float SmoothingRadius, 
 		RestDensity);
 
 	// Upload static boundary particles to BoundarySkinningManager (Persistent GPU buffer)
-	// Static boundary particles are uploaded once and cached on GPU
-	if (BoundarySkinningManager.IsValid() && StaticBoundaryManager->HasBoundaryParticles())
+	// Only upload when boundary particles changed (caching optimization)
+	if (bBoundaryParticlesChanged && BoundarySkinningManager.IsValid())
 	{
-		const TArray<FGPUBoundaryParticle>& StaticParticles = StaticBoundaryManager->GetBoundaryParticles();
+		if (StaticBoundaryManager->HasBoundaryParticles())
+		{
+			const TArray<FGPUBoundaryParticle>& StaticParticles = StaticBoundaryManager->GetBoundaryParticles();
 
-		// Upload to persistent GPU buffer (not CPU cache)
-		BoundarySkinningManager->UploadStaticBoundaryParticles(StaticParticles);
-		BoundarySkinningManager->SetStaticBoundaryEnabled(true);
+			// Upload to persistent GPU buffer (not CPU cache)
+			BoundarySkinningManager->UploadStaticBoundaryParticles(StaticParticles);
+			BoundarySkinningManager->SetStaticBoundaryEnabled(true);
 
-		UE_LOG(LogGPUFluidSimulator, Log, TEXT("Static boundary particles queued for GPU upload: %d particles"), StaticParticles.Num());
+			UE_LOG(LogGPUFluidSimulator, Log, TEXT("Static boundary particles uploaded to GPU: %d particles"), StaticParticles.Num());
+		}
+		else
+		{
+			// No static boundary particles - disable static boundary processing
+			BoundarySkinningManager->SetStaticBoundaryEnabled(false);
+		}
 	}
-	else if (BoundarySkinningManager.IsValid())
-	{
-		// No static boundary particles - disable static boundary processing
-		BoundarySkinningManager->SetStaticBoundaryEnabled(false);
-	}
+	// If not changed, GPU already has the correct data - skip upload
 }
 
 void FGPUFluidSimulator::ClearStaticBoundaryParticles()
@@ -4476,4 +4491,134 @@ bool FGPUFluidSimulator::GetZOrderArrayIndices(TArray<int32>& OutIndices) const
 	// Copy cached indices
 	OutIndices = CachedZOrderArrayIndices;
 	return true;
+}
+//=============================================================================
+// Particle Bounds Readback Implementation (Async GPU→CPU for World Collision)
+// Reads particle AABB from GPU (computed in ExtractRenderDataWithBounds)
+// Used to expand world collision query bounds in Unlimited Simulation Range mode
+//=============================================================================
+
+void FGPUFluidSimulator::AllocateParticleBoundsReadbackObjects(FRHICommandListImmediate& RHICmdList)
+{
+	for (int32 i = 0; i < NUM_PARTICLE_BOUNDS_READBACK_BUFFERS; ++i)
+	{
+		if (ParticleBoundsReadbacks[i] == nullptr)
+		{
+			ParticleBoundsReadbacks[i] = new FRHIGPUBufferReadback(*FString::Printf(TEXT("ParticleBoundsReadback_%d"), i));
+		}
+		ParticleBoundsReadbackFrameNumbers[i] = 0;
+	}
+
+	UE_LOG(LogGPUFluidSimulator, Log, TEXT("Particle bounds readback objects allocated (NumBuffers=%d)"), NUM_PARTICLE_BOUNDS_READBACK_BUFFERS);
+}
+
+void FGPUFluidSimulator::ReleaseParticleBoundsReadbackObjects()
+{
+	for (int32 i = 0; i < NUM_PARTICLE_BOUNDS_READBACK_BUFFERS; ++i)
+	{
+		if (ParticleBoundsReadbacks[i] != nullptr)
+		{
+			delete ParticleBoundsReadbacks[i];
+			ParticleBoundsReadbacks[i] = nullptr;
+		}
+		ParticleBoundsReadbackFrameNumbers[i] = 0;
+	}
+	ParticleBoundsReadbackWriteIndex = 0;
+	CachedParticleBounds = FBox(EForceInit::ForceInit);
+	ReadyParticleBoundsFrame.store(0);
+}
+
+void FGPUFluidSimulator::EnqueueParticleBoundsReadback(FRHICommandListImmediate& RHICmdList, FRHIBuffer* SourceBuffer)
+{
+	if (SourceBuffer == nullptr)
+	{
+		return;
+	}
+
+	// Bounds buffer contains 2 × FVector3f (Min, Max) = 24 bytes
+	const uint32 BoundsBufferSize = 2 * sizeof(FVector3f);
+	const uint32 SourceBufferSize = SourceBuffer->GetSize();
+	if (SourceBufferSize < BoundsBufferSize)
+	{
+		UE_LOG(LogGPUFluidSimulator, Warning,
+			TEXT("EnqueueParticleBoundsReadback: SourceBuffer size (%u) less than required (%u). Skipping."),
+			SourceBufferSize, BoundsBufferSize);
+		return;
+	}
+
+	// Allocate readback objects if needed
+	if (ParticleBoundsReadbacks[0] == nullptr)
+	{
+		AllocateParticleBoundsReadbackObjects(RHICmdList);
+	}
+
+	// Get current write index and advance for next frame
+	const int32 WriteIdx = ParticleBoundsReadbackWriteIndex;
+	ParticleBoundsReadbackWriteIndex = (ParticleBoundsReadbackWriteIndex + 1) % NUM_PARTICLE_BOUNDS_READBACK_BUFFERS;
+
+	// Enqueue async copy (2 × FVector3f = 24 bytes)
+	RHICmdList.Transition(FRHITransitionInfo(SourceBuffer, ERHIAccess::UAVCompute, ERHIAccess::CopySrc));
+	ParticleBoundsReadbacks[WriteIdx]->EnqueueCopy(RHICmdList, SourceBuffer, BoundsBufferSize);
+	RHICmdList.Transition(FRHITransitionInfo(SourceBuffer, ERHIAccess::CopySrc, ERHIAccess::UAVCompute));
+	ParticleBoundsReadbackFrameNumbers[WriteIdx] = GFrameCounterRenderThread;
+}
+
+void FGPUFluidSimulator::ProcessParticleBoundsReadback()
+{
+	if (ParticleBoundsReadbacks[0] == nullptr)
+	{
+		return;
+	}
+
+	// Search for oldest ready buffer
+	int32 ReadIdx = -1;
+	uint64 OldestFrame = UINT64_MAX;
+
+	for (int32 i = 0; i < NUM_PARTICLE_BOUNDS_READBACK_BUFFERS; ++i)
+	{
+		if (ParticleBoundsReadbacks[i] != nullptr &&
+			ParticleBoundsReadbackFrameNumbers[i] > 0 &&
+			ParticleBoundsReadbacks[i]->IsReady())
+		{
+			if (ParticleBoundsReadbackFrameNumbers[i] < OldestFrame)
+			{
+				OldestFrame = ParticleBoundsReadbackFrameNumbers[i];
+				ReadIdx = i;
+			}
+		}
+	}
+
+	if (ReadIdx < 0)
+	{
+		return;  // No ready buffers
+	}
+
+	// Lock buffer (2 × FVector3f = 24 bytes)
+	const int32 BufferSize = 2 * sizeof(FVector3f);
+	const FVector3f* BoundsData = (const FVector3f*)ParticleBoundsReadbacks[ReadIdx]->Lock(BufferSize);
+
+	if (BoundsData == nullptr)
+	{
+		UE_LOG(LogGPUFluidSimulator, Warning, TEXT("Particle Bounds Readback: Failed to lock buffer"));
+		return;
+	}
+
+	// Extract min/max from readback data
+	const FVector3f BoundsMin = BoundsData[0];
+	const FVector3f BoundsMax = BoundsData[1];
+
+	ParticleBoundsReadbacks[ReadIdx]->Unlock();
+
+	// Validate bounds (check for infinity or NaN from empty particle set)
+	if (FMath::IsFinite(BoundsMin.X) && FMath::IsFinite(BoundsMin.Y) && FMath::IsFinite(BoundsMin.Z) &&
+		FMath::IsFinite(BoundsMax.X) && FMath::IsFinite(BoundsMax.Y) && FMath::IsFinite(BoundsMax.Z) &&
+		BoundsMax.X >= BoundsMin.X && BoundsMax.Y >= BoundsMin.Y && BoundsMax.Z >= BoundsMin.Z)
+	{
+		// Update cached bounds
+		CachedParticleBounds = FBox(FVector(BoundsMin), FVector(BoundsMax));
+		ReadyParticleBoundsFrame.store(OldestFrame);
+	}
+
+	// Clear processed buffer's frame number to prevent re-processing
+	ParticleBoundsReadbackFrameNumbers[ReadIdx] = 0;
 }

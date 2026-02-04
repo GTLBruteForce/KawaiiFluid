@@ -1,5 +1,10 @@
 ﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 // FGPUStaticBoundaryManager Implementation
+// 
+// Performance Optimization (v2):
+// - Primitive ID-based caching to avoid regenerating unchanged boundary particles
+// - Only new primitives trigger generation; existing primitives reuse cached data
+// - GPU upload only when active primitive set changes
 
 #include "GPU/Managers/GPUStaticBoundaryManager.h"
 
@@ -42,16 +47,84 @@ void FGPUStaticBoundaryManager::Release()
 	}
 
 	BoundaryParticles.Empty();
+	PrimitiveCache.Empty();
+	ActivePrimitiveKeys.Empty();
+	PreviousActivePrimitiveKeys.Empty();
 	bIsInitialized = false;
 
 	UE_LOG(LogGPUStaticBoundary, Log, TEXT("FGPUStaticBoundaryManager released"));
 }
 
 //=============================================================================
-// Boundary Particle Generation
+// Primitive Key Generation
 //=============================================================================
 
-void FGPUStaticBoundaryManager::GenerateBoundaryParticles(
+uint64 FGPUStaticBoundaryManager::MakePrimitiveKey(EPrimitiveType Type, int32 OwnerID, uint32 GeometryHash)
+{
+	// Key format: (Type:8 | OwnerID:32 | GeometryHash:24) = 64-bit
+	uint64 Key = 0;
+	Key |= (static_cast<uint64>(Type) & 0xFF) << 56;          // 8 bits for type
+	Key |= (static_cast<uint64>(OwnerID) & 0xFFFFFFFF) << 24; // 32 bits for OwnerID
+	Key |= (static_cast<uint64>(GeometryHash) & 0xFFFFFF);    // 24 bits for geometry hash
+	return Key;
+}
+
+uint32 FGPUStaticBoundaryManager::ComputeGeometryHash(const FGPUCollisionSphere& Sphere)
+{
+	// Hash: Center position + Radius
+	uint32 Hash = GetTypeHash(Sphere.Center.X);
+	Hash = HashCombine(Hash, GetTypeHash(Sphere.Center.Y));
+	Hash = HashCombine(Hash, GetTypeHash(Sphere.Center.Z));
+	Hash = HashCombine(Hash, GetTypeHash(Sphere.Radius));
+	return Hash & 0xFFFFFF;  // Truncate to 24 bits
+}
+
+uint32 FGPUStaticBoundaryManager::ComputeGeometryHash(const FGPUCollisionCapsule& Capsule)
+{
+	// Hash: Start + End + Radius
+	uint32 Hash = GetTypeHash(Capsule.Start.X);
+	Hash = HashCombine(Hash, GetTypeHash(Capsule.Start.Y));
+	Hash = HashCombine(Hash, GetTypeHash(Capsule.Start.Z));
+	Hash = HashCombine(Hash, GetTypeHash(Capsule.End.X));
+	Hash = HashCombine(Hash, GetTypeHash(Capsule.End.Y));
+	Hash = HashCombine(Hash, GetTypeHash(Capsule.End.Z));
+	Hash = HashCombine(Hash, GetTypeHash(Capsule.Radius));
+	return Hash & 0xFFFFFF;
+}
+
+uint32 FGPUStaticBoundaryManager::ComputeGeometryHash(const FGPUCollisionBox& Box)
+{
+	// Hash: Center + Extent + Rotation
+	uint32 Hash = GetTypeHash(Box.Center.X);
+	Hash = HashCombine(Hash, GetTypeHash(Box.Center.Y));
+	Hash = HashCombine(Hash, GetTypeHash(Box.Center.Z));
+	Hash = HashCombine(Hash, GetTypeHash(Box.Extent.X));
+	Hash = HashCombine(Hash, GetTypeHash(Box.Extent.Y));
+	Hash = HashCombine(Hash, GetTypeHash(Box.Extent.Z));
+	Hash = HashCombine(Hash, GetTypeHash(Box.Rotation.X));
+	Hash = HashCombine(Hash, GetTypeHash(Box.Rotation.Y));
+	Hash = HashCombine(Hash, GetTypeHash(Box.Rotation.Z));
+	Hash = HashCombine(Hash, GetTypeHash(Box.Rotation.W));
+	return Hash & 0xFFFFFF;
+}
+
+uint32 FGPUStaticBoundaryManager::ComputeGeometryHash(const FGPUCollisionConvex& Convex)
+{
+	// Hash: Center + BoundingRadius + PlaneStartIndex + PlaneCount
+	uint32 Hash = GetTypeHash(Convex.Center.X);
+	Hash = HashCombine(Hash, GetTypeHash(Convex.Center.Y));
+	Hash = HashCombine(Hash, GetTypeHash(Convex.Center.Z));
+	Hash = HashCombine(Hash, GetTypeHash(Convex.BoundingRadius));
+	Hash = HashCombine(Hash, GetTypeHash(Convex.PlaneStartIndex));
+	Hash = HashCombine(Hash, GetTypeHash(Convex.PlaneCount));
+	return Hash & 0xFFFFFF;
+}
+
+//=============================================================================
+// Boundary Particle Generation (with Primitive-based Caching)
+//=============================================================================
+
+bool FGPUStaticBoundaryManager::GenerateBoundaryParticles(
 	const TArray<FGPUCollisionSphere>& Spheres,
 	const TArray<FGPUCollisionCapsule>& Capsules,
 	const TArray<FGPUCollisionBox>& Boxes,
@@ -62,110 +135,202 @@ void FGPUStaticBoundaryManager::GenerateBoundaryParticles(
 {
 	if (!bIsInitialized || !bIsEnabled)
 	{
-		return;
+		return false;
 	}
 
-	// Check if parameters changed
-	const bool bParamsChanged = !FMath::IsNearlyEqual(CachedSmoothingRadius, SmoothingRadius) ||
-		!FMath::IsNearlyEqual(CachedRestDensity, RestDensity);
+	// Check if generation parameters changed (requires cache invalidation)
+	const bool bParamsChanged = 
+		!FMath::IsNearlyEqual(CachedSmoothingRadius, SmoothingRadius) ||
+		!FMath::IsNearlyEqual(CachedRestDensity, RestDensity) ||
+		!FMath::IsNearlyEqual(CachedParticleSpacing, ParticleSpacing);
 
-	if (bParamsChanged || bCacheDirty)
+	if (bParamsChanged || bCacheInvalidated)
 	{
+		// Parameters changed - invalidate entire cache
+		PrimitiveCache.Empty();
 		CachedSmoothingRadius = SmoothingRadius;
 		CachedRestDensity = RestDensity;
-		bCacheDirty = false;
+		CachedParticleSpacing = ParticleSpacing;
+		bCacheInvalidated = false;
+		
+		UE_LOG(LogGPUStaticBoundary, Log, TEXT("Cache invalidated due to parameter change (Spacing=%.1f, Density=%.1f)"), 
+			ParticleSpacing, RestDensity);
 	}
 
-	// Clear previous particles
-	BoundaryParticles.Reset();
-
-	// Calculate spacing and Psi
-	// ParticleSpacing is now in cm (same as FluidInteractionComponent)
+	// Calculate Psi once
 	const float Spacing = ParticleSpacing;
 	const float Psi = CalculatePsi(Spacing, RestDensity);
 
-	// Reserve estimated capacity
-	const int32 EstimatedCount =
-		Spheres.Num() * 100 +      // ~100 particles per sphere (estimate)
-		Capsules.Num() * 150 +     // ~150 particles per capsule
-		Boxes.Num() * 200 +        // ~200 particles per box
-		Convexes.Num() * 150;      // ~150 particles per convex
-	BoundaryParticles.Reserve(EstimatedCount);
+	// Track active primitives for this frame
+	PreviousActivePrimitiveKeys = MoveTemp(ActivePrimitiveKeys);
+	ActivePrimitiveKeys.Reset();
 
-	// Generate boundary particles for each collider type (only static colliders, BoneIndex < 0)
+	int32 NewPrimitivesGenerated = 0;
+	int32 CachedPrimitivesReused = 0;
 
-	// Spheres
+	// Process Spheres
 	for (const FGPUCollisionSphere& Sphere : Spheres)
 	{
-		if (Sphere.BoneIndex < 0)  // Only static colliders
+		if (Sphere.BoneIndex >= 0)  // Skip skinned colliders
 		{
-			GenerateSphereBoundaryParticles(
-				Sphere.Center,
-				Sphere.Radius,
-				Spacing,
-				Psi,
-				Sphere.OwnerID);
+			continue;
+		}
+
+		const uint64 Key = MakePrimitiveKey(EPrimitiveType::Sphere, Sphere.OwnerID, ComputeGeometryHash(Sphere));
+		ActivePrimitiveKeys.Add(Key);
+
+		if (!PrimitiveCache.Contains(Key))
+		{
+			// New primitive - generate boundary particles
+			TArray<FGPUBoundaryParticle>& CachedParticles = PrimitiveCache.Add(Key);
+			GenerateSphereBoundaryParticles(Sphere.Center, Sphere.Radius, Spacing, Psi, Sphere.OwnerID, CachedParticles);
+			NewPrimitivesGenerated++;
+		}
+		else
+		{
+			CachedPrimitivesReused++;
 		}
 	}
 
-	// Capsules
+	// Process Capsules
 	for (const FGPUCollisionCapsule& Capsule : Capsules)
 	{
-		if (Capsule.BoneIndex < 0)  // Only static colliders
+		if (Capsule.BoneIndex >= 0)
 		{
-			GenerateCapsuleBoundaryParticles(
-				Capsule.Start,
-				Capsule.End,
-				Capsule.Radius,
-				Spacing,
-				Psi,
-				Capsule.OwnerID);
+			continue;
+		}
+
+		const uint64 Key = MakePrimitiveKey(EPrimitiveType::Capsule, Capsule.OwnerID, ComputeGeometryHash(Capsule));
+		ActivePrimitiveKeys.Add(Key);
+
+		if (!PrimitiveCache.Contains(Key))
+		{
+			TArray<FGPUBoundaryParticle>& CachedParticles = PrimitiveCache.Add(Key);
+			GenerateCapsuleBoundaryParticles(Capsule.Start, Capsule.End, Capsule.Radius, Spacing, Psi, Capsule.OwnerID, CachedParticles);
+			NewPrimitivesGenerated++;
+		}
+		else
+		{
+			CachedPrimitivesReused++;
 		}
 	}
 
-	// Boxes
+	// Process Boxes
 	for (const FGPUCollisionBox& Box : Boxes)
 	{
-		if (Box.BoneIndex < 0)  // Only static colliders
+		if (Box.BoneIndex >= 0)
+		{
+			continue;
+		}
+
+		const uint64 Key = MakePrimitiveKey(EPrimitiveType::Box, Box.OwnerID, ComputeGeometryHash(Box));
+		ActivePrimitiveKeys.Add(Key);
+
+		if (!PrimitiveCache.Contains(Key))
 		{
 			FQuat4f Rotation(Box.Rotation.X, Box.Rotation.Y, Box.Rotation.Z, Box.Rotation.W);
-			GenerateBoxBoundaryParticles(
-				Box.Center,
-				Box.Extent,
-				Rotation,
-				Spacing,
-				Psi,
-				Box.OwnerID);
+			TArray<FGPUBoundaryParticle>& CachedParticles = PrimitiveCache.Add(Key);
+			GenerateBoxBoundaryParticles(Box.Center, Box.Extent, Rotation, Spacing, Psi, Box.OwnerID, CachedParticles);
+			NewPrimitivesGenerated++;
+		}
+		else
+		{
+			CachedPrimitivesReused++;
 		}
 	}
 
-	// Convex hulls
+	// Process Convex hulls
 	for (const FGPUCollisionConvex& Convex : Convexes)
 	{
-		if (Convex.BoneIndex < 0)  // Only static colliders
+		if (Convex.BoneIndex >= 0)
 		{
-			GenerateConvexBoundaryParticles(
-				Convex,
-				ConvexPlanes,
-				Spacing,
-				Psi,
-				Convex.OwnerID);
+			continue;
+		}
+
+		const uint64 Key = MakePrimitiveKey(EPrimitiveType::Convex, Convex.OwnerID, ComputeGeometryHash(Convex));
+		ActivePrimitiveKeys.Add(Key);
+
+		if (!PrimitiveCache.Contains(Key))
+		{
+			TArray<FGPUBoundaryParticle>& CachedParticles = PrimitiveCache.Add(Key);
+			GenerateConvexBoundaryParticles(Convex, ConvexPlanes, Spacing, Psi, Convex.OwnerID, CachedParticles);
+			NewPrimitivesGenerated++;
+		}
+		else
+		{
+			CachedPrimitivesReused++;
 		}
 	}
 
-	// Log generation results - disabled for performance
-	// static int32 LogCounter = 0;
-	// if (++LogCounter % 60 == 1)
-	// {
-	// 	UE_LOG(LogGPUStaticBoundary, Log, TEXT("Generated %d static boundary particles (Spacing=%.1f, Psi=%.4f)"),
-	// 		BoundaryParticles.Num(), Spacing, Psi);
-	// }
+	// Check if active primitive set changed (requires GPU re-upload)
+	// TSet doesn't have != operator, so we compare manually
+	bool bActivePrimitivesChanged = (ActivePrimitiveKeys.Num() != PreviousActivePrimitiveKeys.Num());
+	if (!bActivePrimitivesChanged)
+	{
+		// Same size - check if all keys match
+		for (const uint64& Key : ActivePrimitiveKeys)
+		{
+			if (!PreviousActivePrimitiveKeys.Contains(Key))
+			{
+				bActivePrimitivesChanged = true;
+				break;
+			}
+		}
+	}
+
+	if (bActivePrimitivesChanged || NewPrimitivesGenerated > 0)
+	{
+		// Rebuild BoundaryParticles array from active cached primitives
+		BoundaryParticles.Reset();
+
+		// Estimate capacity
+		int32 EstimatedTotal = 0;
+		for (const uint64& Key : ActivePrimitiveKeys)
+		{
+			if (const TArray<FGPUBoundaryParticle>* CachedParticles = PrimitiveCache.Find(Key))
+			{
+				EstimatedTotal += CachedParticles->Num();
+			}
+		}
+		BoundaryParticles.Reserve(EstimatedTotal);
+
+		// Append all active primitive particles
+		for (const uint64& Key : ActivePrimitiveKeys)
+		{
+			if (const TArray<FGPUBoundaryParticle>* CachedParticles = PrimitiveCache.Find(Key))
+			{
+				BoundaryParticles.Append(*CachedParticles);
+			}
+		}
+
+		UE_LOG(LogGPUStaticBoundary, Log, 
+			TEXT("Boundary particles updated: Total=%d, NewPrimitives=%d, CachedReused=%d, ActivePrimitives=%d"),
+			BoundaryParticles.Num(), NewPrimitivesGenerated, CachedPrimitivesReused, ActivePrimitiveKeys.Num());
+
+		return true;  // GPU upload required
+	}
+
+	// No changes - skip GPU upload
+	return false;
 }
 
 void FGPUStaticBoundaryManager::ClearBoundaryParticles()
 {
 	BoundaryParticles.Reset();
-	bCacheDirty = true;
+	PrimitiveCache.Empty();
+	ActivePrimitiveKeys.Empty();
+	PreviousActivePrimitiveKeys.Empty();
+	bCacheInvalidated = true;
+}
+
+void FGPUStaticBoundaryManager::InvalidateCache()
+{
+	PrimitiveCache.Empty();
+	ActivePrimitiveKeys.Empty();
+	PreviousActivePrimitiveKeys.Empty();
+	bCacheInvalidated = true;
+	
+	UE_LOG(LogGPUStaticBoundary, Log, TEXT("Cache explicitly invalidated"));
 }
 
 //=============================================================================
@@ -202,7 +367,8 @@ void FGPUStaticBoundaryManager::GenerateSphereBoundaryParticles(
 	float Radius,
 	float Spacing,
 	float Psi,
-	int32 OwnerID)
+	int32 OwnerID,
+	TArray<FGPUBoundaryParticle>& OutParticles)
 {
 	// Use Fibonacci spiral for uniform distribution on sphere
 	const float GoldenRatio = (1.0f + FMath::Sqrt(5.0f)) / 2.0f;
@@ -211,6 +377,8 @@ void FGPUStaticBoundaryManager::GenerateSphereBoundaryParticles(
 	// Calculate number of points based on surface area and spacing
 	const float SurfaceArea = 4.0f * PI * Radius * Radius;
 	const int32 NumPoints = FMath::Max(4, FMath::CeilToInt(SurfaceArea / (Spacing * Spacing)));
+
+	OutParticles.Reserve(OutParticles.Num() + NumPoints);
 
 	for (int32 i = 0; i < NumPoints; ++i)
 	{
@@ -234,7 +402,7 @@ void FGPUStaticBoundaryManager::GenerateSphereBoundaryParticles(
 		Particle.Psi = Psi;
 		Particle.OwnerID = OwnerID;
 
-		BoundaryParticles.Add(Particle);
+		OutParticles.Add(Particle);
 	}
 }
 
@@ -244,7 +412,8 @@ void FGPUStaticBoundaryManager::GenerateCapsuleBoundaryParticles(
 	float Radius,
 	float Spacing,
 	float Psi,
-	int32 OwnerID)
+	int32 OwnerID,
+	TArray<FGPUBoundaryParticle>& OutParticles)
 {
 	const FVector3f Axis = End - Start;
 	const float Height = Axis.Size();
@@ -252,7 +421,7 @@ void FGPUStaticBoundaryManager::GenerateCapsuleBoundaryParticles(
 	if (Height < SMALL_NUMBER)
 	{
 		// Degenerate capsule = sphere
-		GenerateSphereBoundaryParticles((Start + End) * 0.5f, Radius, Spacing, Psi, OwnerID);
+		GenerateSphereBoundaryParticles((Start + End) * 0.5f, Radius, Spacing, Psi, OwnerID, OutParticles);
 		return;
 	}
 
@@ -275,6 +444,12 @@ void FGPUStaticBoundaryManager::GenerateCapsuleBoundaryParticles(
 	const float Circumference = 2.0f * PI * Radius;
 	const int32 NumPointsPerRing = FMath::Max(6, FMath::CeilToInt(Circumference / Spacing));
 
+	// Estimate total particles
+	const int32 CylinderParticles = (NumRings + 1) * NumPointsPerRing;
+	const float HemisphereSurfaceArea = 2.0f * PI * Radius * Radius;
+	const int32 NumCapPoints = FMath::Max(4, FMath::CeilToInt(HemisphereSurfaceArea / (Spacing * Spacing)));
+	OutParticles.Reserve(OutParticles.Num() + CylinderParticles + NumCapPoints * 2);
+
 	for (int32 Ring = 0; Ring <= NumRings; ++Ring)
 	{
 		const float T = static_cast<float>(Ring) / static_cast<float>(NumRings);
@@ -292,13 +467,11 @@ void FGPUStaticBoundaryManager::GenerateCapsuleBoundaryParticles(
 			Particle.Psi = Psi;
 			Particle.OwnerID = OwnerID;
 
-			BoundaryParticles.Add(Particle);
+			OutParticles.Add(Particle);
 		}
 	}
 
 	// Hemisphere caps (simplified as Fibonacci spiral)
-	const float HemisphereSurfaceArea = 2.0f * PI * Radius * Radius;
-	const int32 NumCapPoints = FMath::Max(4, FMath::CeilToInt(HemisphereSurfaceArea / (Spacing * Spacing)));
 	const float GoldenRatio = (1.0f + FMath::Sqrt(5.0f)) / 2.0f;
 	const float AngleIncrement = PI * 2.0f * GoldenRatio;
 
@@ -325,7 +498,7 @@ void FGPUStaticBoundaryManager::GenerateCapsuleBoundaryParticles(
 		Particle.Psi = Psi;
 		Particle.OwnerID = OwnerID;
 
-		BoundaryParticles.Add(Particle);
+		OutParticles.Add(Particle);
 	}
 
 	// End cap (hemisphere pointing in +AxisDir)
@@ -348,7 +521,7 @@ void FGPUStaticBoundaryManager::GenerateCapsuleBoundaryParticles(
 		Particle.Psi = Psi;
 		Particle.OwnerID = OwnerID;
 
-		BoundaryParticles.Add(Particle);
+		OutParticles.Add(Particle);
 	}
 }
 
@@ -358,7 +531,8 @@ void FGPUStaticBoundaryManager::GenerateBoxBoundaryParticles(
 	const FQuat4f& Rotation,
 	float Spacing,
 	float Psi,
-	int32 OwnerID)
+	int32 OwnerID,
+	TArray<FGPUBoundaryParticle>& OutParticles)
 {
 	// Local axes
 	const FVector3f LocalX = Rotation.RotateVector(FVector3f(1, 0, 0));
@@ -392,6 +566,16 @@ void FGPUStaticBoundaryManager::GenerateBoxBoundaryParticles(
 	// -Z face
 	Faces.Add({ -LocalZ, Center - LocalZ * Extent.Z, LocalX, LocalY, Extent.X, Extent.Y });
 
+	// Estimate total particles
+	int32 EstimatedTotal = 0;
+	for (const FFaceInfo& Face : Faces)
+	{
+		const int32 NumU = FMath::Max(1, FMath::CeilToInt(Face.UExtent * 2.0f / Spacing));
+		const int32 NumV = FMath::Max(1, FMath::CeilToInt(Face.VExtent * 2.0f / Spacing));
+		EstimatedTotal += (NumU + 1) * (NumV + 1);
+	}
+	OutParticles.Reserve(OutParticles.Num() + EstimatedTotal);
+
 	for (const FFaceInfo& Face : Faces)
 	{
 		const int32 NumU = FMath::Max(1, FMath::CeilToInt(Face.UExtent * 2.0f / Spacing));
@@ -412,7 +596,7 @@ void FGPUStaticBoundaryManager::GenerateBoxBoundaryParticles(
 				Particle.Psi = Psi;
 				Particle.OwnerID = OwnerID;
 
-				BoundaryParticles.Add(Particle);
+				OutParticles.Add(Particle);
 			}
 		}
 	}
@@ -423,7 +607,8 @@ void FGPUStaticBoundaryManager::GenerateConvexBoundaryParticles(
 	const TArray<FGPUConvexPlane>& AllPlanes,
 	float Spacing,
 	float Psi,
-	int32 OwnerID)
+	int32 OwnerID,
+	TArray<FGPUBoundaryParticle>& OutParticles)
 {
 	// For convex hulls, we sample points on each face
 	// Each face is defined by a plane, and we need to find the face vertices
@@ -503,7 +688,7 @@ void FGPUStaticBoundaryManager::GenerateConvexBoundaryParticles(
 					Particle.Psi = Psi;
 					Particle.OwnerID = OwnerID;
 
-					BoundaryParticles.Add(Particle);
+					OutParticles.Add(Particle);
 				}
 			}
 		}

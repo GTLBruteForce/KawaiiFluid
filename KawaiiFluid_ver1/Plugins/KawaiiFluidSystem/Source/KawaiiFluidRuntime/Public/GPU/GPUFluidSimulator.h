@@ -578,6 +578,12 @@ public:
 	void SetStaticBoundaryParticleSpacing(float Spacing) { if (StaticBoundaryManager.IsValid()) StaticBoundaryManager->SetParticleSpacing(Spacing); }
 
 	/**
+	 * Invalidate static boundary particle cache (call when World changes)
+	 * This forces full regeneration on next GenerateStaticBoundaryParticles call
+	 */
+	void InvalidateStaticBoundaryCache() { if (StaticBoundaryManager.IsValid()) StaticBoundaryManager->InvalidateCache(); }
+
+	/**
 	 * Check if static boundary GPU processing is enabled (BoundarySkinningManager flag)
 	 */
 	bool IsGPUStaticBoundaryEnabled() const { return BoundarySkinningManager.IsValid() && BoundarySkinningManager->IsStaticBoundaryEnabled(); }
@@ -1431,7 +1437,74 @@ private:
 	/** Enable flag for debug Z-Order index readback and recording */
 	std::atomic<bool> bDebugZOrderIndexEnabled{false};
 
+	//=============================================================================
+	// Particle Bounds Readback (Async GPU→CPU for World Collision Query)
+	// Reads particle AABB from GPU to expand world collision query bounds
+	// Uses FRHIGPUBufferReadback for non-blocking readback (2-3 frame latency)
+	//=============================================================================
+
+	static constexpr int32 NUM_PARTICLE_BOUNDS_READBACK_BUFFERS = 3;  // Triple buffering
+
+	/** Async readback objects for particle bounds (2 × FVector3f: Min, Max) */
+	FRHIGPUBufferReadback* ParticleBoundsReadbacks[NUM_PARTICLE_BOUNDS_READBACK_BUFFERS] = { nullptr };
+
+	/** Current write index for particle bounds readback ring buffer */
+	int32 ParticleBoundsReadbackWriteIndex = 0;
+
+	/** Frame number tracking for each particle bounds readback buffer */
+	uint64 ParticleBoundsReadbackFrameNumbers[NUM_PARTICLE_BOUNDS_READBACK_BUFFERS] = { 0 };
+
+	/** Cached particle bounds (AABB from GPU readback) */
+	FBox CachedParticleBounds;
+
+	/** Frame number of cached particle bounds */
+	std::atomic<uint64> ReadyParticleBoundsFrame{0};
+
+	/** Enable flag for particle bounds readback (for unlimited simulation range) */
+	std::atomic<bool> bParticleBoundsReadbackEnabled{false};
+
 public:
+	//=============================================================================
+	// Particle Bounds Readback API (for Unlimited Simulation Range)
+	//=============================================================================
+
+	/**
+	 * Enable or disable particle bounds readback
+	 * When enabled, particle AABB is asynchronously read back for world collision query
+	 * @param bEnabled - true to enable async bounds readback
+	 */
+	void SetParticleBoundsReadbackEnabled(bool bEnabled) { bParticleBoundsReadbackEnabled.store(bEnabled); }
+
+	/**
+	 * Check if particle bounds readback is enabled
+	 */
+	bool IsParticleBoundsReadbackEnabled() const { return bParticleBoundsReadbackEnabled.load(); }
+
+	/**
+	 * Check if particle bounds are ready for use
+	 * @return true if async readback has completed and bounds are available
+	 */
+	bool HasReadyParticleBounds() const { return ReadyParticleBoundsFrame.load() > 0 && CachedParticleBounds.IsValid; }
+
+	/**
+	 * Get cached particle bounds (non-blocking, returns previously completed readback)
+	 * @return Particle AABB from GPU (may be 2-3 frames old)
+	 */
+	FBox GetCachedParticleBounds() const { return CachedParticleBounds; }
+
+	/**
+	 * Get the frame number of cached particle bounds
+	 * @return Frame number when bounds were captured
+	 */
+	uint64 GetCachedParticleBoundsFrame() const { return ReadyParticleBoundsFrame.load(); }
+
+	/**
+	 * Enqueue particle bounds readback (call from render thread after ExtractRenderDataWithBounds)
+	 * @param RHICmdList - RHI command list
+	 * @param SourceBuffer - Bounds buffer from GPU (2 × FVector3f: Min, Max)
+	 */
+	void EnqueueParticleBoundsReadback(FRHICommandListImmediate& RHICmdList, FRHIBuffer* SourceBuffer);
+
 	//=============================================================================
 	// Shadow Position Readback API
 	//=============================================================================
@@ -1605,6 +1678,19 @@ void ReleaseAnisotropyReadbackObjects();
 
 	/** Add RDG pass to record Z-Order array indices (call BEFORE ParticleID re-sort) */
 	void AddRecordZOrderIndicesPass(FRDGBuilder& GraphBuilder, FRDGBufferRef ParticleBuffer, int32 ParticleCount);
+
+	//=============================================================================
+	// Particle Bounds Readback Internal Functions
+	//=============================================================================
+
+	/** Allocate particle bounds readback objects */
+	void AllocateParticleBoundsReadbackObjects(FRHICommandListImmediate& RHICmdList);
+
+	/** Release particle bounds readback objects */
+	void ReleaseParticleBoundsReadbackObjects();
+
+	/** Process particle bounds readback (check for completion, populate CachedParticleBounds) */
+	void ProcessParticleBoundsReadback();
 };
 
 /**

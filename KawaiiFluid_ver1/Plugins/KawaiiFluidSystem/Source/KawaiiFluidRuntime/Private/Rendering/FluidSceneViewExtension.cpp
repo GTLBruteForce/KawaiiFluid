@@ -28,6 +28,7 @@
 #include "Core/KawaiiRenderParticle.h"
 #include "GPU/GPUFluidSimulator.h"
 #include "GPU/GPUFluidSimulatorShaders.h"
+#include "RHIGPUReadback.h"  // FRHIGPUBufferReadback for particle bounds readback
 #include "Rendering/FluidDepthPass.h"
 
 // ==============================================================================
@@ -216,6 +217,19 @@ void FFluidSceneViewExtension::PreRenderViewFamily_RenderThread(
 				ParticleRadius,
 				BoundsMargin
 			);
+
+			// Enqueue particle bounds readback for Unlimited Simulation Range world collision
+			// This allows CPU to know particle AABB for expanding collision query bounds
+			if (GPUSimulator->IsParticleBoundsReadbackEnabled())
+			{
+				AddReadbackBufferPass(GraphBuilder,
+					RDG_EVENT_NAME("GPUFluid::ParticleBoundsReadback"),
+					BoundsBuffer,
+					[GPUSimulator, BoundsBuffer](FRHICommandListImmediate& InRHICmdList)
+					{
+						GPUSimulator->EnqueueParticleBoundsReadback(InRHICmdList, BoundsBuffer->GetRHI());
+					});
+			}
 		}
 
 		// Extract SoA buffers (Position/Velocity)

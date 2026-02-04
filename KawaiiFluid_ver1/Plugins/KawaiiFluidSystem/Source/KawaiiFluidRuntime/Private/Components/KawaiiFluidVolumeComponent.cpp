@@ -145,6 +145,20 @@ void UKawaiiFluidVolumeComponent::PostEditChangeProperty(FPropertyChangedEvent& 
 		VolumeSize.Z = FMath::Max(VolumeSize.Z, 10.0f);
 	}
 
+	// When bUseHybridTiledZOrder is disabled, reset bUseUnlimitedSize to false
+	// This ensures size controls remain accessible when switching modes
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, bUseHybridTiledZOrder))
+	{
+		if (!bUseHybridTiledZOrder && bUseUnlimitedSize)
+		{
+			bUseUnlimitedSize = false;
+			// Restore wireframe visibility
+			bShowBoundsInEditor = true;
+			bShowBoundsAtRuntime = false;
+			SetVisibility(true);
+		}
+	}
+
 	// When bUseUnlimitedSize changes, ensure wireframe visibility is updated
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UKawaiiFluidVolumeComponent, bUseUnlimitedSize))
 	{

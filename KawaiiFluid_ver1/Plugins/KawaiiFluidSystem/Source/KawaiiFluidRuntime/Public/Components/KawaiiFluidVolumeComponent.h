@@ -109,18 +109,32 @@ public:
 	int32 MaxParticleCount = 200000;
 
 	//========================================
-	// Static Boundary Particles (Akinci 2012)
+	// Collision Settings
 	//========================================
 
+	/** Use world collision (floor, walls, static meshes) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Volume|Collision")
+	bool bUseWorldCollision = true;
+
 	/**
-	 * Enable static boundary particles for density contribution at walls/floors
+	 * Enable static boundary particles for density contribution at walls/floors (Akinci 2012)
 	 * This helps prevent density deficit near boundaries which causes wall climbing artifacts.
 	 *
-	 * WARNING: Currently this feature may cause particles to fly around chaotically.
-	 * Keep disabled until the underlying issue is resolved.
+	 * PERFORMANCE WARNING:
+	 * - CPU cost: Boundary particles are generated on CPU for each collision primitive
+	 * - GPU memory: Additional particle buffer allocation (proportional to surface area)
+	 * - Neighbor search: O(N × M) where N=fluid particles, M=boundary particles
+	 * - Density calculation: Extra kernel evaluations per fluid particle
+	 *
+	 * Recommended for small enclosed spaces where wall behavior is critical.
+	 * Not recommended for large open areas or performance-sensitive scenarios.
+	 *
+	 * NOTE: Only available when World Collision is enabled and "Use Unlimited Size" is disabled.
+	 * In Unlimited Size mode, static boundary particles are always disabled for performance.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Volume|Boundary",
-		meta = (DisplayName = "Enable Static Boundary Particles"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Volume|Collision",
+		meta = (DisplayName = "Enable Static Boundary Particles",
+		        EditCondition = "bUseWorldCollision && !bUseUnlimitedSize", EditConditionHides))
 	bool bEnableStaticBoundaryParticles = false;
 
 	/**
@@ -128,18 +142,10 @@ public:
 	 * Lower values = denser boundary particles = better density coverage but more particles
 	 * Higher values = sparser boundary particles = fewer particles but may have gaps
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Volume|Boundary",
-		meta = (EditCondition = "bEnableStaticBoundaryParticles", ClampMin = "1.0", ClampMax = "50.0",
-		        DisplayName = "Boundary Particle Spacing"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Volume|Collision",
+		meta = (EditCondition = "bUseWorldCollision && bEnableStaticBoundaryParticles && !bUseUnlimitedSize", EditConditionHides,
+		        ClampMin = "1.0", ClampMax = "50.0", DisplayName = "Boundary Particle Spacing"))
 	float StaticBoundaryParticleSpacing = 5.0f;
-
-	//========================================
-	// Simulation Settings
-	//========================================
-
-	/** Use world collision (floor, walls, static meshes) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Volume|Collision")
-	bool bUseWorldCollision = true;
 
 	//========================================
 	// Collision Events
@@ -407,9 +413,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Fluid Volume")
 	int32 GetGridAxisBits() const { return GridAxisBits; }
 
-	/** Is static boundary particles enabled */
+	/** Is static boundary particles enabled (always false when Use Unlimited Size is enabled) */
 	UFUNCTION(BlueprintPure, Category = "Fluid Volume")
-	bool IsStaticBoundaryParticlesEnabled() const { return bEnableStaticBoundaryParticles; }
+	bool IsStaticBoundaryParticlesEnabled() const { return !bUseUnlimitedSize && bEnableStaticBoundaryParticles; }
 
 	/** Get static boundary particle spacing */
 	UFUNCTION(BlueprintPure, Category = "Fluid Volume")
