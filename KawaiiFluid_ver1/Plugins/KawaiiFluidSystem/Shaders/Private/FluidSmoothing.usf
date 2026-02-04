@@ -859,3 +859,78 @@ void VelocityGaussianBlurVerticalCS(uint3 DispatchThreadId : SV_DispatchThreadID
 	float2 Result = (TotalWeight > 0.0f) ? (TotalWeightedVelocity / TotalWeight) : float2(0.0f, 0.0f);
 	VelocityOutputTexture[CenterCoord] = Result;
 }
+
+//=============================================================================
+// Thickness Downsample (2x2 -> 1)
+// Uses average (not min) because thickness is additive
+//=============================================================================
+
+[numthreads(THREADGROUP_SIZE, THREADGROUP_SIZE, 1)]
+void ThicknessDownsampleCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	if (any(DispatchThreadId.xy >= uint2(TextureSize)))
+	{
+		return;
+	}
+
+	int2 OutCoord = int2(DispatchThreadId.xy);
+	int2 InCoord = OutCoord * 2;
+
+	// Clamp to valid range
+	int2 MaxCoord = int2(FullResTextureSize) - 1;
+	int2 C00 = clamp(InCoord, int2(0, 0), MaxCoord);
+	int2 C10 = clamp(InCoord + int2(1, 0), int2(0, 0), MaxCoord);
+	int2 C01 = clamp(InCoord + int2(0, 1), int2(0, 0), MaxCoord);
+	int2 C11 = clamp(InCoord + int2(1, 1), int2(0, 0), MaxCoord);
+
+	float t00 = InputTexture.Load(int3(C00, 0));
+	float t10 = InputTexture.Load(int3(C10, 0));
+	float t01 = InputTexture.Load(int3(C01, 0));
+	float t11 = InputTexture.Load(int3(C11, 0));
+
+	// Simple average for thickness
+	float OutThickness = (t00 + t10 + t01 + t11) * 0.25f;
+
+	OutputTexture[OutCoord] = OutThickness;
+}
+
+//=============================================================================
+// Thickness Upsample (1 -> 2x2)
+// Simple bilinear interpolation (no joint bilateral needed for thickness)
+//=============================================================================
+
+[numthreads(THREADGROUP_SIZE, THREADGROUP_SIZE, 1)]
+void ThicknessUpsampleCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	if (any(DispatchThreadId.xy >= uint2(FullResTextureSize)))
+	{
+		return;
+	}
+
+	int2 OutCoord = int2(DispatchThreadId.xy);
+
+	// Half-res coordinate (bilinear position)
+	float2 HalfCoord = (float2(OutCoord) + 0.5f) * 0.5f - 0.5f;
+	int2 HalfCoord00 = int2(floor(HalfCoord));
+
+	// Bilinear weights
+	float2 Frac = HalfCoord - float2(HalfCoord00);
+
+	// Sample 2x2 from half-res
+	int2 HC00 = clamp(HalfCoord00, int2(0, 0), int2(HalfResTextureSize) - 1);
+	int2 HC10 = clamp(HalfCoord00 + int2(1, 0), int2(0, 0), int2(HalfResTextureSize) - 1);
+	int2 HC01 = clamp(HalfCoord00 + int2(0, 1), int2(0, 0), int2(HalfResTextureSize) - 1);
+	int2 HC11 = clamp(HalfCoord00 + int2(1, 1), int2(0, 0), int2(HalfResTextureSize) - 1);
+
+	float t00 = InputTexture.Load(int3(HC00, 0));
+	float t10 = InputTexture.Load(int3(HC10, 0));
+	float t01 = InputTexture.Load(int3(HC01, 0));
+	float t11 = InputTexture.Load(int3(HC11, 0));
+
+	// Bilinear interpolation
+	float t0 = lerp(t00, t10, Frac.x);
+	float t1 = lerp(t01, t11, Frac.x);
+	float OutThickness = lerp(t0, t1, Frac.y);
+
+	OutputTexture[OutCoord] = OutThickness;
+}

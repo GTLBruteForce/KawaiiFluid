@@ -57,6 +57,7 @@ void RenderFluidNarrowRangeSmoothingPass(
  *
  * @param BlurRadius  Spatial filter radius in pixels
  * @param NumIterations  Number of blur iterations (1-5)
+ * @param bUseHalfRes  If true, downsample -> blur at half res -> upsample (~4x faster)
  */
 void RenderFluidThicknessSmoothingPass(
 	FRDGBuilder& GraphBuilder,
@@ -64,7 +65,8 @@ void RenderFluidThicknessSmoothingPass(
 	FRDGTextureRef InputThicknessTexture,
 	FRDGTextureRef& OutSmoothedThicknessTexture,
 	float BlurRadius = 5.0f,
-	int32 NumIterations = 2);
+	int32 NumIterations = 2,
+	bool bUseHalfRes = true);
 
 /**
  * Separable Gaussian Blur for Fluid Velocity Smoothing

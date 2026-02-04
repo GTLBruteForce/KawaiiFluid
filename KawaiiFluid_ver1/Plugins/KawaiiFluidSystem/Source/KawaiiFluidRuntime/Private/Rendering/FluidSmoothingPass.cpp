@@ -435,6 +435,72 @@ IMPLEMENT_GLOBAL_SHADER(FFluidVelocityGaussianBlurVerticalCS,
                         SF_Compute);
 
 //=============================================================================
+// Thickness Downsample Compute Shader (2x -> 1x, average)
+//=============================================================================
+
+class FFluidThicknessDownsampleCS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FFluidThicknessDownsampleCS);
+	SHADER_USE_PARAMETER_STRUCT(FFluidThicknessDownsampleCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputTexture)
+		SHADER_PARAMETER(FVector2f, TextureSize)
+		SHADER_PARAMETER(FVector2f, FullResTextureSize)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, OutputTexture)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters,
+	                                         FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE"), 8);
+	}
+};
+
+IMPLEMENT_GLOBAL_SHADER(FFluidThicknessDownsampleCS,
+                        "/Plugin/KawaiiFluidSystem/Private/FluidSmoothing.usf", "ThicknessDownsampleCS",
+                        SF_Compute);
+
+//=============================================================================
+// Thickness Upsample Compute Shader (1x -> 2x, bilinear)
+//=============================================================================
+
+class FFluidThicknessUpsampleCS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FFluidThicknessUpsampleCS);
+	SHADER_USE_PARAMETER_STRUCT(FFluidThicknessUpsampleCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputTexture)
+		SHADER_PARAMETER(FVector2f, FullResTextureSize)
+		SHADER_PARAMETER(FVector2f, HalfResTextureSize)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, OutputTexture)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters,
+	                                         FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE"), 8);
+	}
+};
+
+IMPLEMENT_GLOBAL_SHADER(FFluidThicknessUpsampleCS,
+                        "/Plugin/KawaiiFluidSystem/Private/FluidSmoothing.usf", "ThicknessUpsampleCS",
+                        SF_Compute);
+
+//=============================================================================
 // Narrow-Range Filter Smoothing Pass (Truong & Yuksel 2018)
 // Uses Half-Resolution filtering for ~4x performance improvement
 //
@@ -705,70 +771,193 @@ void RenderFluidThicknessSmoothingPass(
 	FRDGTextureRef InputThicknessTexture,
 	FRDGTextureRef& OutSmoothedThicknessTexture,
 	float BlurRadius,
-	int32 NumIterations)
+	int32 NumIterations,
+	bool bUseHalfRes)
 {
-	RDG_EVENT_SCOPE(GraphBuilder, "FluidThicknessSmoothing_Separable");
+	RDG_EVENT_SCOPE(GraphBuilder, "FluidThicknessSmoothing_%s", bUseHalfRes ? TEXT("HalfRes") : TEXT("FullRes"));
 	check(InputThicknessTexture);
 
 	NumIterations = FMath::Clamp(NumIterations, 1, 5);
 
-	FIntPoint TextureSize = InputThicknessTexture->Desc.Extent;
-
-	// Use R16F format to match the input thickness texture
-	FRDGTextureDesc IntermediateDesc = FRDGTextureDesc::Create2D(
-		TextureSize,
-		PF_R16F,
-		FClearValueBinding::None,
-		TexCreate_ShaderResource | TexCreate_UAV);
-
+	FIntPoint FullResSize = InputThicknessTexture->Desc.Extent;
 	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-	TShaderMapRef<FFluidThicknessGaussianBlurHorizontalCS> HorizontalShader(GlobalShaderMap);
-	TShaderMapRef<FFluidThicknessGaussianBlurVerticalCS> VerticalShader(GlobalShaderMap);
 
-	FRDGTextureRef CurrentInput = InputThicknessTexture;
-
-	for (int32 Iteration = 0; Iteration < NumIterations; ++Iteration)
+	if (bUseHalfRes)
 	{
-		// Pass 1: Horizontal blur
-		FRDGTextureRef HorizontalOutput = GraphBuilder.CreateTexture(
-			IntermediateDesc, TEXT("FluidThicknessBlur_H"));
+		//=====================================================================
+		// Half-Resolution Path: Downsample -> Blur -> Upsample
+		//=====================================================================
+		FIntPoint HalfResSize = FIntPoint(
+			FMath::DivideAndRoundUp(FullResSize.X, 2),
+			FMath::DivideAndRoundUp(FullResSize.Y, 2));
+
+		// Half-res texture descriptor
+		FRDGTextureDesc HalfResDesc = FRDGTextureDesc::Create2D(
+			HalfResSize,
+			PF_R16F,
+			FClearValueBinding::None,
+			TexCreate_ShaderResource | TexCreate_UAV);
+
+		// Full-res texture descriptor (for final output)
+		FRDGTextureDesc FullResDesc = FRDGTextureDesc::Create2D(
+			FullResSize,
+			PF_R16F,
+			FClearValueBinding::None,
+			TexCreate_ShaderResource | TexCreate_UAV);
+
+		//--- Step 1: Downsample to half resolution ---
+		FRDGTextureRef HalfResThickness;
 		{
-			auto* PassParameters = GraphBuilder.AllocParameters<FFluidThicknessGaussianBlurHorizontalCS::FParameters>();
+			TShaderMapRef<FFluidThicknessDownsampleCS> DownsampleShader(GlobalShaderMap);
+
+			HalfResThickness = GraphBuilder.CreateTexture(HalfResDesc, TEXT("FluidThickness_HalfRes"));
+
+			auto* PassParameters = GraphBuilder.AllocParameters<FFluidThicknessDownsampleCS::FParameters>();
+			PassParameters->InputTexture = InputThicknessTexture;
+			PassParameters->TextureSize = FVector2f(HalfResSize.X, HalfResSize.Y);
+			PassParameters->FullResTextureSize = FVector2f(FullResSize.X, FullResSize.Y);
+			PassParameters->OutputTexture = GraphBuilder.CreateUAV(HalfResThickness);
+
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("ThicknessDownsample"),
+				DownsampleShader,
+				PassParameters,
+				FComputeShaderUtils::GetGroupCount(HalfResSize, 8));
+		}
+
+		//--- Step 2: Blur at half resolution ---
+		TShaderMapRef<FFluidThicknessGaussianBlurHorizontalCS> HorizontalShader(GlobalShaderMap);
+		TShaderMapRef<FFluidThicknessGaussianBlurVerticalCS> VerticalShader(GlobalShaderMap);
+
+		// Adjust blur radius for half resolution
+		float HalfResBlurRadius = FMath::Max(BlurRadius * 0.5f, 1.0f);
+
+		FRDGTextureRef CurrentInput = HalfResThickness;
+
+		for (int32 Iteration = 0; Iteration < NumIterations; ++Iteration)
+		{
+			// Horizontal blur
+			FRDGTextureRef HorizontalOutput = GraphBuilder.CreateTexture(
+				HalfResDesc, TEXT("FluidThicknessBlur_H"));
+			{
+				auto* PassParameters = GraphBuilder.AllocParameters<FFluidThicknessGaussianBlurHorizontalCS::FParameters>();
+				PassParameters->InputTexture = CurrentInput;
+				PassParameters->TextureSize = FVector2f(HalfResSize.X, HalfResSize.Y);
+				PassParameters->BlurRadius = HalfResBlurRadius;
+				PassParameters->OutputTexture = GraphBuilder.CreateUAV(HorizontalOutput);
+
+				FComputeShaderUtils::AddPass(
+					GraphBuilder,
+					RDG_EVENT_NAME("ThicknessBlur_H_Iter%d", Iteration),
+					HorizontalShader,
+					PassParameters,
+					FComputeShaderUtils::GetGroupCount(HalfResSize, 8));
+			}
+
+			// Vertical blur
+			FRDGTextureRef VerticalOutput = GraphBuilder.CreateTexture(
+				HalfResDesc, TEXT("FluidThicknessBlur_V"));
+			{
+				auto* PassParameters = GraphBuilder.AllocParameters<FFluidThicknessGaussianBlurVerticalCS::FParameters>();
+				PassParameters->InputTexture = HorizontalOutput;
+				PassParameters->TextureSize = FVector2f(HalfResSize.X, HalfResSize.Y);
+				PassParameters->BlurRadius = HalfResBlurRadius;
+				PassParameters->OutputTexture = GraphBuilder.CreateUAV(VerticalOutput);
+
+				FComputeShaderUtils::AddPass(
+					GraphBuilder,
+					RDG_EVENT_NAME("ThicknessBlur_V_Iter%d", Iteration),
+					VerticalShader,
+					PassParameters,
+					FComputeShaderUtils::GetGroupCount(HalfResSize, 8));
+			}
+
+			CurrentInput = VerticalOutput;
+		}
+
+		//--- Step 3: Upsample back to full resolution ---
+		FRDGTextureRef FinalOutput;
+		{
+			TShaderMapRef<FFluidThicknessUpsampleCS> UpsampleShader(GlobalShaderMap);
+
+			FinalOutput = GraphBuilder.CreateTexture(FullResDesc, TEXT("FluidThickness_Upsampled"));
+
+			auto* PassParameters = GraphBuilder.AllocParameters<FFluidThicknessUpsampleCS::FParameters>();
 			PassParameters->InputTexture = CurrentInput;
-			PassParameters->TextureSize = FVector2f(TextureSize.X, TextureSize.Y);
-			PassParameters->BlurRadius = BlurRadius;
-			PassParameters->OutputTexture = GraphBuilder.CreateUAV(HorizontalOutput);
+			PassParameters->FullResTextureSize = FVector2f(FullResSize.X, FullResSize.Y);
+			PassParameters->HalfResTextureSize = FVector2f(HalfResSize.X, HalfResSize.Y);
+			PassParameters->OutputTexture = GraphBuilder.CreateUAV(FinalOutput);
 
 			FComputeShaderUtils::AddPass(
 				GraphBuilder,
-				RDG_EVENT_NAME("ThicknessBlur_H_Iter%d", Iteration),
-				HorizontalShader,
+				RDG_EVENT_NAME("ThicknessUpsample"),
+				UpsampleShader,
 				PassParameters,
-				FComputeShaderUtils::GetGroupCount(TextureSize, 8));
+				FComputeShaderUtils::GetGroupCount(FullResSize, 8));
 		}
 
-		// Pass 2: Vertical blur
-		FRDGTextureRef VerticalOutput = GraphBuilder.CreateTexture(
-			IntermediateDesc, TEXT("FluidThicknessBlur_V"));
-		{
-			auto* PassParameters = GraphBuilder.AllocParameters<FFluidThicknessGaussianBlurVerticalCS::FParameters>();
-			PassParameters->InputTexture = HorizontalOutput;
-			PassParameters->TextureSize = FVector2f(TextureSize.X, TextureSize.Y);
-			PassParameters->BlurRadius = BlurRadius;
-			PassParameters->OutputTexture = GraphBuilder.CreateUAV(VerticalOutput);
-
-			FComputeShaderUtils::AddPass(
-				GraphBuilder,
-				RDG_EVENT_NAME("ThicknessBlur_V_Iter%d", Iteration),
-				VerticalShader,
-				PassParameters,
-				FComputeShaderUtils::GetGroupCount(TextureSize, 8));
-		}
-
-		CurrentInput = VerticalOutput;
+		OutSmoothedThicknessTexture = FinalOutput;
 	}
+	else
+	{
+		//=====================================================================
+		// Full-Resolution Path: Original implementation
+		//=====================================================================
+		FRDGTextureDesc IntermediateDesc = FRDGTextureDesc::Create2D(
+			FullResSize,
+			PF_R16F,
+			FClearValueBinding::None,
+			TexCreate_ShaderResource | TexCreate_UAV);
 
-	OutSmoothedThicknessTexture = CurrentInput;
+		TShaderMapRef<FFluidThicknessGaussianBlurHorizontalCS> HorizontalShader(GlobalShaderMap);
+		TShaderMapRef<FFluidThicknessGaussianBlurVerticalCS> VerticalShader(GlobalShaderMap);
+
+		FRDGTextureRef CurrentInput = InputThicknessTexture;
+
+		for (int32 Iteration = 0; Iteration < NumIterations; ++Iteration)
+		{
+			// Pass 1: Horizontal blur
+			FRDGTextureRef HorizontalOutput = GraphBuilder.CreateTexture(
+				IntermediateDesc, TEXT("FluidThicknessBlur_H"));
+			{
+				auto* PassParameters = GraphBuilder.AllocParameters<FFluidThicknessGaussianBlurHorizontalCS::FParameters>();
+				PassParameters->InputTexture = CurrentInput;
+				PassParameters->TextureSize = FVector2f(FullResSize.X, FullResSize.Y);
+				PassParameters->BlurRadius = BlurRadius;
+				PassParameters->OutputTexture = GraphBuilder.CreateUAV(HorizontalOutput);
+
+				FComputeShaderUtils::AddPass(
+					GraphBuilder,
+					RDG_EVENT_NAME("ThicknessBlur_H_Iter%d", Iteration),
+					HorizontalShader,
+					PassParameters,
+					FComputeShaderUtils::GetGroupCount(FullResSize, 8));
+			}
+
+			// Pass 2: Vertical blur
+			FRDGTextureRef VerticalOutput = GraphBuilder.CreateTexture(
+				IntermediateDesc, TEXT("FluidThicknessBlur_V"));
+			{
+				auto* PassParameters = GraphBuilder.AllocParameters<FFluidThicknessGaussianBlurVerticalCS::FParameters>();
+				PassParameters->InputTexture = HorizontalOutput;
+				PassParameters->TextureSize = FVector2f(FullResSize.X, FullResSize.Y);
+				PassParameters->BlurRadius = BlurRadius;
+				PassParameters->OutputTexture = GraphBuilder.CreateUAV(VerticalOutput);
+
+				FComputeShaderUtils::AddPass(
+					GraphBuilder,
+					RDG_EVENT_NAME("ThicknessBlur_V_Iter%d", Iteration),
+					VerticalShader,
+					PassParameters,
+					FComputeShaderUtils::GetGroupCount(FullResSize, 8));
+			}
+
+			CurrentInput = VerticalOutput;
+		}
+
+		OutSmoothedThicknessTexture = CurrentInput;
+	}
 }
 
 //=============================================================================
