@@ -14,6 +14,7 @@
 #include "Components/KawaiiFluidInteractionComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Async/Async.h"
 #include "RenderingThread.h"
 #include "GPU/GPUFluidSimulator.h"
@@ -73,6 +74,9 @@ namespace
 {
 	constexpr float GPUWorldCollisionMargin = 1.0f;
 	constexpr float GPUWorldBoundsTolerance = 0.1f;
+
+	// ISMC per-instance collision limits
+	constexpr int32 MaxISMCInstancesForCollision = 256;
 
 	bool AreBoundsEqual(const FBox& A, const FBox& B)
 	{
@@ -1489,6 +1493,76 @@ void UKawaiiFluidSimulationContext::AppendGPUWorldCollisionPrimitives(
 				continue;
 			}
 
+			// ISMC: Process each instance with its own world transform
+			const UInstancedStaticMeshComponent* ISMComp = Cast<UInstancedStaticMeshComponent>(PrimComp);
+			if (ISMComp)
+			{
+				const UStaticMesh* StaticMesh = ISMComp->GetStaticMesh();
+				const UBodySetup* BodySetup = StaticMesh ? StaticMesh->GetBodySetup() : nullptr;
+				if (!BodySetup)
+				{
+					continue;
+				}
+
+				const FKAggregateGeom& AggGeom = BodySetup->AggGeom;
+				if (AggGeom.SphereElems.Num() == 0 && AggGeom.SphylElems.Num() == 0 &&
+					AggGeom.BoxElems.Num() == 0 && AggGeom.ConvexElems.Num() == 0)
+				{
+					continue;
+				}
+
+				const int32 InstanceCount = ISMComp->GetInstanceCount();
+				if (InstanceCount == 0)
+				{
+					continue;
+				}
+
+				// Limit instance count to prevent GPU buffer overflow
+				const int32 EffectiveInstanceCount = FMath::Min(InstanceCount, MaxISMCInstancesForCollision);
+				if (InstanceCount > MaxISMCInstancesForCollision)
+				{
+					static int32 ISMCWarningLogCounter = 0;
+					if (++ISMCWarningLogCounter % 300 == 1)
+					{
+						UE_LOG(LogTemp, Warning,
+							TEXT("[WorldCollision] ISMC '%s' has %d instances, limiting to %d for collision"),
+							*ISMComp->GetName(), InstanceCount, MaxISMCInstancesForCollision);
+					}
+				}
+
+				ValidStaticMeshCount++;
+				const int32 OwnerID = Owner ? Owner->GetUniqueID() : 0;
+
+				// Create collision primitives for each instance
+				for (int32 InstanceIndex = 0; InstanceIndex < EffectiveInstanceCount; ++InstanceIndex)
+				{
+					FTransform InstanceWorldTransform;
+					if (!ISMComp->GetInstanceTransform(InstanceIndex, InstanceWorldTransform, true))
+					{
+						continue;
+					}
+
+					AppendAggGeomToGPUPrimitives(
+						AggGeom,
+						InstanceWorldTransform,
+						DefaultFriction,
+						DefaultRestitution,
+						OwnerID,
+						CachedGPUWorldCollisionPrimitives
+					);
+				}
+
+				// Debug logging (throttled)
+				if (bShouldLog)
+				{
+					UE_LOG(LogTemp, Log, TEXT("  [WorldCollision] ISMC: %s, Instances: %d (effective: %d)"),
+						*ISMComp->GetName(), InstanceCount, EffectiveInstanceCount);
+				}
+
+				continue;  // Skip regular StaticMeshComponent handling below
+			}
+
+			// Regular StaticMeshComponent handling
 			const UStaticMeshComponent* StaticMeshComp = Cast<UStaticMeshComponent>(PrimComp);
 			if (!StaticMeshComp)
 			{
