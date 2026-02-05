@@ -116,6 +116,7 @@ public:
 	 * @param OutCellEndBuffer - Output cell end buffer ref (for persistent extraction)
 	 * @param CurrentParticleCount - Number of particles
 	 * @param Params - Simulation parameters (for CellSize)
+	 * @param AllocParticleCount - Buffer allocation size (MaxParticleCount to avoid reallocation hitches)
 	 * @return Sorted particle buffer
 	 */
 	FRDGBufferRef ExecuteZOrderSortingPipeline(
@@ -129,6 +130,7 @@ public:
 		FRDGBufferRef& OutCellEndBuffer,
 		int32 CurrentParticleCount,
 		const FGPUFluidSimulationParams& Params,
+		int32 AllocParticleCount = 0,
 		// Optional: BoneDeltaAttachment buffer to reorder along with particles
 		FRDGBufferRef InAttachmentBuffer = nullptr,
 		FRDGBufferRef* OutSortedAttachmentBuffer = nullptr);
@@ -152,7 +154,8 @@ private:
 		FRDGBuilder& GraphBuilder,
 		FRDGBufferRef& InOutMortonCodes,
 		FRDGBufferRef& InOutParticleIndices,
-		int32 ParticleCount);
+		int32 ParticleCount,
+		int32 AllocParticleCount = 0);
 
 	/** Step 3: Reorder particle data based on sorted indices */
 	void AddReorderParticlesPass(

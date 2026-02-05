@@ -57,10 +57,14 @@ FRDGBufferRef FGPUZOrderSortManager::ExecuteZOrderSortingPipeline(
 	FRDGBufferRef& OutCellEndBuffer,
 	int32 CurrentParticleCount,
 	const FGPUFluidSimulationParams& Params,
+	int32 AllocParticleCount,
 	FRDGBufferRef InAttachmentBuffer,
 	FRDGBufferRef* OutSortedAttachmentBuffer)
 {
 	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid::ZOrderSorting");
+
+	// Use AllocParticleCount for buffer sizing to avoid D3D12 pool allocation hitches
+	if (AllocParticleCount <= 0) { AllocParticleCount = CurrentParticleCount; }
 
 	if (CurrentParticleCount <= 0)
 	{
@@ -91,7 +95,7 @@ FRDGBufferRef FGPUZOrderSortManager::ExecuteZOrderSortingPipeline(
 
 	// Morton codes and indices
 	{
-		FRDGBufferDesc MortonDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), CurrentParticleCount);
+		FRDGBufferDesc MortonDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), AllocParticleCount);
 		MortonCodesRDG = GraphBuilder.CreateBuffer(MortonDesc, TEXT("GPUFluid.MortonCodes"));
 		MortonCodesTempRDG = GraphBuilder.CreateBuffer(MortonDesc, TEXT("GPUFluid.MortonCodesTemp"));
 		SortIndicesRDG = GraphBuilder.CreateBuffer(MortonDesc, TEXT("GPUFluid.SortIndices"));
@@ -119,7 +123,7 @@ FRDGBufferRef FGPUZOrderSortManager::ExecuteZOrderSortingPipeline(
 	//=========================================================================
 	// Step 3: Radix Sort
 	//=========================================================================
-	AddRadixSortPasses(GraphBuilder, MortonCodesRDG, SortIndicesRDG, CurrentParticleCount);
+	AddRadixSortPasses(GraphBuilder, MortonCodesRDG, SortIndicesRDG, CurrentParticleCount, AllocParticleCount);
 
 	//=========================================================================
 	// Step 4: Reorder particle data based on sorted indices
@@ -128,7 +132,7 @@ FRDGBufferRef FGPUZOrderSortManager::ExecuteZOrderSortingPipeline(
 	FRDGBufferRef SortedParticleBuffer;
 	FRDGBufferRef SortedAttachmentBuffer = nullptr;
 	{
-		FRDGBufferDesc SortedDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), CurrentParticleCount);
+		FRDGBufferDesc SortedDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), AllocParticleCount);
 		SortedParticleBuffer = GraphBuilder.CreateBuffer(SortedDesc, TEXT("GPUFluid.SortedParticles"));
 
 		FRDGBufferSRVRef OldParticlesSRV = GraphBuilder.CreateSRV(InParticleBuffer);
@@ -140,7 +144,7 @@ FRDGBufferRef FGPUZOrderSortManager::ExecuteZOrderSortingPipeline(
 		FRDGBufferUAVRef SortedAttachmentsUAV = nullptr;
 		if (InAttachmentBuffer)
 		{
-			FRDGBufferDesc AttachmentDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUBoneDeltaAttachment), CurrentParticleCount);
+			FRDGBufferDesc AttachmentDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUBoneDeltaAttachment), AllocParticleCount);
 			SortedAttachmentBuffer = GraphBuilder.CreateBuffer(AttachmentDesc, TEXT("GPUFluid.SortedBoneDeltaAttachments"));
 			OldAttachmentsSRV = GraphBuilder.CreateSRV(InAttachmentBuffer);
 			SortedAttachmentsUAV = GraphBuilder.CreateUAV(SortedAttachmentBuffer);
@@ -259,8 +263,10 @@ void FGPUZOrderSortManager::AddRadixSortPasses(
 	FRDGBuilder& GraphBuilder,
 	FRDGBufferRef& InOutMortonCodes,
 	FRDGBufferRef& InOutParticleIndices,
-	int32 ParticleCount)
+	int32 ParticleCount,
+	int32 AllocParticleCount)
 {
+	if (AllocParticleCount <= 0) { AllocParticleCount = ParticleCount; }
 	if (ParticleCount <= 0)
 	{
 		return;
@@ -299,11 +305,11 @@ void FGPUZOrderSortManager::AddRadixSortPasses(
 	const int32 NumBlocks = FMath::DivideAndRoundUp(ParticleCount, GPU_RADIX_ELEMENTS_PER_GROUP);
 	const int32 RequiredHistogramSize = GPU_RADIX_SIZE * NumBlocks;
 
-	// Create transient ping-pong buffers
-	FRDGBufferDesc KeysTempDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ParticleCount);
+	// Create transient ping-pong buffers (pre-allocated to AllocParticleCount to avoid D3D12 pool hitches)
+	FRDGBufferDesc KeysTempDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), AllocParticleCount);
 	FRDGBufferRef KeysTemp = GraphBuilder.CreateBuffer(KeysTempDesc, TEXT("RadixSort.KeysTemp"));
 
-	FRDGBufferDesc ValuesTempDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ParticleCount);
+	FRDGBufferDesc ValuesTempDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), AllocParticleCount);
 	FRDGBufferRef ValuesTemp = GraphBuilder.CreateBuffer(ValuesTempDesc, TEXT("RadixSort.ValuesTemp"));
 
 	FRDGBufferDesc HistogramDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), RequiredHistogramSize);

@@ -1216,7 +1216,8 @@ private:
 	// Read index = 1 - CurrentNeighborBufferIndex (previous frame's buffer for Cohesion Force)
 	TRefCountPtr<FRDGPooledBuffer> NeighborListBuffers[2];
 	TRefCountPtr<FRDGPooledBuffer> NeighborCountsBuffers[2];
-	int32 NeighborBufferParticleCapacities[2] = {0, 0};
+	int32 NeighborBufferAllocCapacities[2] = {0, 0};    // Allocated buffer size (for reallocation check)
+	int32 NeighborBufferParticleCapacities[2] = {0, 0}; // Actual particle count written (for PrevParticleCount)
 	int32 CurrentNeighborBufferIndex = 0;
 	bool bPrevNeighborCacheValid = false;        // False on first frame (skip Cohesion)
 

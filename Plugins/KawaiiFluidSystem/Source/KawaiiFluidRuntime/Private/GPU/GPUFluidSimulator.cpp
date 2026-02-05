@@ -253,6 +253,7 @@ void FGPUFluidSimulator::ReleaseRHI()
 	{
 		NeighborListBuffers[i].SafeRelease();
 		NeighborCountsBuffers[i].SafeRelease();
+		NeighborBufferAllocCapacities[i] = 0;
 		NeighborBufferParticleCapacities[i] = 0;
 	}
 	CurrentNeighborBufferIndex = 0;
@@ -491,6 +492,9 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 
 	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluidSimulation (Particles: %d)", CurrentParticleCount);
 
+	// Pre-allocate transient buffers to MaxParticleCount to avoid D3D12 pool allocation hitches
+	const int32 AllocParticleCount = MaxParticleCount > 0 ? MaxParticleCount : CurrentParticleCount;
+
 	// =====================================================
 	// Phase 1: Prepare Particle Buffer (CPU Upload or Reuse)
 	// =====================================================
@@ -501,7 +505,7 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 	}
 
 	// Create transient position buffer for spatial hash
-	FRDGBufferDesc PositionBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), CurrentParticleCount);
+	FRDGBufferDesc PositionBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector3f), AllocParticleCount);
 	FRDGBufferRef PositionBuffer = GraphBuilder.CreateBuffer(PositionBufferDesc, TEXT("GPUFluidPositions"));
 
 	FRDGBufferUAVRef ParticlesUAVLocal = GraphBuilder.CreateUAV(ParticleBuffer);
@@ -557,7 +561,7 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 			WorldBoundaryParticlesSRVLocal = GraphBuilder.CreateSRV(WorldBoundaryParticlesBuffer);
 
 			// Ensure BoneDeltaAttachment buffer exists
-			BoneDeltaAttachmentBufferRDG = EnsureBoneDeltaAttachmentBuffer(GraphBuilder, CurrentParticleCount);
+			BoneDeltaAttachmentBufferRDG = EnsureBoneDeltaAttachmentBuffer(GraphBuilder, AllocParticleCount);
 			BoneDeltaAttachmentSRVLocal = GraphBuilder.CreateSRV(BoneDeltaAttachmentBufferRDG);
 			BoneDeltaAttachmentUAVLocal = GraphBuilder.CreateUAV(BoneDeltaAttachmentBufferRDG);
 
@@ -634,21 +638,22 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_SplitAoSToSoA");
 
 		// Create SoA buffers with bandwidth optimization (B plan)
+		// All sized to AllocParticleCount to avoid D3D12 pool allocation hitches
 		// Position: float3 (full precision, critical for simulation stability)
-		SpatialData.SoA_Positions = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), CurrentParticleCount * 3), TEXT("SoA_Positions"));
-		SpatialData.SoA_PredictedPositions = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), CurrentParticleCount * 3), TEXT("SoA_PredictedPositions"));
+		SpatialData.SoA_Positions = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), AllocParticleCount * 3), TEXT("SoA_Positions"));
+		SpatialData.SoA_PredictedPositions = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(float), AllocParticleCount * 3), TEXT("SoA_PredictedPositions"));
 
 		// Half-precision packed buffers (bandwidth optimization)
 		// PackedVelocities: uint2 per particle = 8 bytes (half4: vel.xy, vel.z, padding)
 		// PackedDensityLambda: uint per particle = 4 bytes (half2: density, lambda)
-		SpatialData.SoA_PackedVelocities = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32) * 2, CurrentParticleCount), TEXT("SoA_PackedVelocities"));
-		SpatialData.SoA_PackedDensityLambda = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), CurrentParticleCount), TEXT("SoA_PackedDensityLambda"));
+		SpatialData.SoA_PackedVelocities = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32) * 2, AllocParticleCount), TEXT("SoA_PackedVelocities"));
+		SpatialData.SoA_PackedDensityLambda = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), AllocParticleCount), TEXT("SoA_PackedDensityLambda"));
 
 		// Other buffers
-		SpatialData.SoA_Flags = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), CurrentParticleCount), TEXT("SoA_Flags"));
-		SpatialData.SoA_NeighborCounts = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), CurrentParticleCount), TEXT("SoA_NeighborCounts"));
-		SpatialData.SoA_ParticleIDs = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(int32), CurrentParticleCount), TEXT("SoA_ParticleIDs"));
-		SpatialData.SoA_SourceIDs = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(int32), CurrentParticleCount), TEXT("SoA_SourceIDs"));
+		SpatialData.SoA_Flags = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), AllocParticleCount), TEXT("SoA_Flags"));
+		SpatialData.SoA_NeighborCounts = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), AllocParticleCount), TEXT("SoA_NeighborCounts"));
+		SpatialData.SoA_ParticleIDs = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(int32), AllocParticleCount), TEXT("SoA_ParticleIDs"));
+		SpatialData.SoA_SourceIDs = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(int32), AllocParticleCount), TEXT("SoA_SourceIDs"));
 
 		// Run Split shader
 		TShaderMapRef<FSplitAoSToSoACS> ComputeShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
@@ -943,8 +948,8 @@ void FGPUFluidSimulator::BeginFrame()
 
 				if (bFirstSpawn)
 				{
-					// PATH 1: First spawn - create new buffer
-					const int32 BufferCapacity = FMath::Min(SpawnCount, Self->MaxParticleCount);
+					// PATH 1: First spawn - create new buffer (pre-allocate to MaxParticleCount)
+					const int32 BufferCapacity = Self->MaxParticleCount > 0 ? Self->MaxParticleCount : SpawnCount;
 					FRDGBufferDesc NewBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), BufferCapacity);
 					ParticleBuffer = GraphBuilder.CreateBuffer(NewBufferDesc, TEXT("GPUFluidParticles"));
 
@@ -960,9 +965,9 @@ void FGPUFluidSimulator::BeginFrame()
 				}
 				else
 				{
-					// PATH 2: Append spawn - copy existing + spawn new
+					// PATH 2: Append spawn - copy existing + spawn new (pre-allocate to MaxParticleCount)
 					const int32 TotalCount = PostOpCount + SpawnCount;
-					const int32 BufferCapacity = FMath::Min(TotalCount, Self->MaxParticleCount);
+					const int32 BufferCapacity = Self->MaxParticleCount > 0 ? Self->MaxParticleCount : FMath::Min(TotalCount, Self->MaxParticleCount);
 					FRDGBufferDesc NewBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), BufferCapacity);
 					FRDGBufferRef NewParticleBuffer = GraphBuilder.CreateBuffer(NewBufferDesc, TEXT("GPUFluidParticles"));
 
@@ -1249,7 +1254,7 @@ FRDGBufferRef FGPUFluidSimulator::PrepareParticleBuffer(
 	if (CachedGPUParticles.Num() > 0 && bNeedsFullUpload)
 	{
 		const int32 UploadCount = CachedGPUParticles.Num();
-		const int32 BufferCapacity = FMath::Min(UploadCount, MaxParticleCount);
+		const int32 BufferCapacity = MaxParticleCount > 0 ? MaxParticleCount : FMath::Min(UploadCount, MaxParticleCount);
 		FRDGBufferDesc NewBufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), BufferCapacity);
 		ParticleBuffer = GraphBuilder.CreateBuffer(NewBufferDesc, TEXT("GPUFluidParticles"));
 
@@ -1509,20 +1514,24 @@ void FGPUFluidSimulator::ExecuteConstraintSolverLoop(
 	// Create/resize neighbor caching buffers for CURRENT frame (WriteIndex)
 	// Double Buffering: WriteIndex is used for UAV writes this frame
 	// ReadIndex (1 - WriteIndex) contains previous frame's data for PredictPositions SRV reads
-	const int32 NeighborListSize = CurrentParticleCount * GPU_MAX_NEIGHBORS_PER_PARTICLE;
+	// Pre-allocate to MaxParticleCount to avoid runtime reallocation hitches
+	const int32 AllocParticleCount = MaxParticleCount > 0 ? MaxParticleCount : CurrentParticleCount;
+	const int32 NeighborListSize = AllocParticleCount * GPU_MAX_NEIGHBORS_PER_PARTICLE;
 	const int32 WriteIndex = CurrentNeighborBufferIndex;
 
-	if (NeighborBufferParticleCapacities[WriteIndex] < CurrentParticleCount || !NeighborListBuffers[WriteIndex].IsValid())
+	if (NeighborBufferAllocCapacities[WriteIndex] < AllocParticleCount || !NeighborListBuffers[WriteIndex].IsValid())
 	{
 		SpatialData.NeighborListBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), NeighborListSize), TEXT("GPUFluidNeighborList"));
-		SpatialData.NeighborCountsBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), CurrentParticleCount), TEXT("GPUFluidNeighborCounts"));
-		NeighborBufferParticleCapacities[WriteIndex] = CurrentParticleCount;
+		SpatialData.NeighborCountsBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), AllocParticleCount), TEXT("GPUFluidNeighborCounts"));
+		NeighborBufferAllocCapacities[WriteIndex] = AllocParticleCount;
 	}
 	else
 	{
 		SpatialData.NeighborListBuffer = GraphBuilder.RegisterExternalBuffer(NeighborListBuffers[WriteIndex], TEXT("GPUFluidNeighborList"));
 		SpatialData.NeighborCountsBuffer = GraphBuilder.RegisterExternalBuffer(NeighborCountsBuffers[WriteIndex], TEXT("GPUFluidNeighborCounts"));
 	}
+	// Track actual particle count written this frame (used as PrevParticleCount in PredictPositions)
+	NeighborBufferParticleCapacities[WriteIndex] = CurrentParticleCount;
 
 	FRDGBufferUAVRef NeighborListUAVLocal = GraphBuilder.CreateUAV(SpatialData.NeighborListBuffer);
 	FRDGBufferUAVRef NeighborCountsUAVLocal = GraphBuilder.CreateUAV(SpatialData.NeighborCountsBuffer);
@@ -1586,14 +1595,15 @@ void FGPUFluidSimulator::ExecuteAdhesion(
 	{
 		TRefCountPtr<FRDGPooledBuffer>& PersistentAttachmentBuffer = AdhesionManager->AccessPersistentAttachmentBuffer();
 		int32 AttachmentBufferSize = AdhesionManager->GetAttachmentBufferSize();
-		const bool bNeedNewBuffer = !PersistentAttachmentBuffer.IsValid() || AttachmentBufferSize < CurrentParticleCount;
+		const int32 AttachmentAllocCount = MaxParticleCount > 0 ? MaxParticleCount : CurrentParticleCount;
+		const bool bNeedNewBuffer = !PersistentAttachmentBuffer.IsValid() || AttachmentBufferSize < AttachmentAllocCount;
 
 		FRDGBufferRef AttachmentBuffer;
 		if (bNeedNewBuffer)
 		{
 			TArray<FGPUParticleAttachment> InitialAttachments;
-			InitialAttachments.SetNum(CurrentParticleCount);
-			for (int32 i = 0; i < CurrentParticleCount; ++i)
+			InitialAttachments.SetNum(AttachmentAllocCount);
+			for (int32 i = 0; i < AttachmentAllocCount; ++i)
 			{
 				FGPUParticleAttachment& Attachment = InitialAttachments[i];
 				Attachment.PrimitiveType = -1;
@@ -1606,14 +1616,14 @@ void FGPUFluidSimulator::ExecuteAdhesion(
 				Attachment.Padding = 0.0f;
 			}
 
-			AttachmentBuffer = CreateStructuredBuffer(GraphBuilder, TEXT("GPUFluidAttachments"), sizeof(FGPUParticleAttachment), CurrentParticleCount, InitialAttachments.GetData(), CurrentParticleCount * sizeof(FGPUParticleAttachment), ERDGInitialDataFlags::None);
+			AttachmentBuffer = CreateStructuredBuffer(GraphBuilder, TEXT("GPUFluidAttachments"), sizeof(FGPUParticleAttachment), AttachmentAllocCount, InitialAttachments.GetData(), AttachmentAllocCount * sizeof(FGPUParticleAttachment), ERDGInitialDataFlags::None);
 
 			if (PersistentAttachmentBuffer.IsValid() && AttachmentBufferSize > 0)
 			{
 				FRDGBufferRef OldBuffer = GraphBuilder.RegisterExternalBuffer(PersistentAttachmentBuffer, TEXT("GPUFluidAttachmentsOld"));
 				AddCopyBufferPass(GraphBuilder, AttachmentBuffer, 0, OldBuffer, 0, AttachmentBufferSize * sizeof(FGPUParticleAttachment));
 			}
-			AdhesionManager->SetAttachmentBufferSize(CurrentParticleCount);
+			AdhesionManager->SetAttachmentBufferSize(AttachmentAllocCount);
 		}
 		else
 		{
@@ -1975,19 +1985,22 @@ FRDGBufferRef FGPUFluidSimulator::ExecuteParticleIDSortPipeline(
 
 	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 
+	// Pre-allocate to MaxParticleCount to avoid D3D12 pool allocation hitches
+	const int32 AllocCount = MaxParticleCount > 0 ? MaxParticleCount : ParticleCount;
+
 	// ParticleID is 32-bit, 8 bits per pass = 4 passes total
 	const int32 RadixSortPasses = 4;
 	const int32 NumBlocks = FMath::DivideAndRoundUp(ParticleCount, GPU_RADIX_ELEMENTS_PER_GROUP);
 	const int32 RequiredHistogramSize = GPU_RADIX_SIZE * NumBlocks;
 
-	// Create transient buffers for sorting
-	FRDGBufferDesc KeysDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ParticleCount);
+	// Create transient buffers for sorting (sized to AllocCount)
+	FRDGBufferDesc KeysDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), AllocCount);
 	FRDGBufferRef Keys[2] = {
 		GraphBuilder.CreateBuffer(KeysDesc, TEXT("ParticleIDSort.Keys0")),
 		GraphBuilder.CreateBuffer(KeysDesc, TEXT("ParticleIDSort.Keys1"))
 	};
 
-	FRDGBufferDesc ValuesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), ParticleCount);
+	FRDGBufferDesc ValuesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), AllocCount);
 	FRDGBufferRef Values[2] = {
 		GraphBuilder.CreateBuffer(ValuesDesc, TEXT("ParticleIDSort.Values0")),
 		GraphBuilder.CreateBuffer(ValuesDesc, TEXT("ParticleIDSort.Values1"))
@@ -2121,7 +2134,7 @@ FRDGBufferRef FGPUFluidSimulator::ExecuteParticleIDSortPipeline(
 	FRDGBufferRef SortedIndices = Values[BufferIndex];
 
 	// Reorder particle data based on sorted indices
-	FRDGBufferDesc SortedParticlesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), ParticleCount);
+	FRDGBufferDesc SortedParticlesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), AllocCount);
 	FRDGBufferRef SortedParticleBuffer = GraphBuilder.CreateBuffer(SortedParticlesDesc, TEXT("ParticleIDSort.SortedParticles"));
 
 	// Reordering attachment buffers not needed for ParticleID sort - create dummy buffer
@@ -2661,10 +2674,11 @@ FRDGBufferRef FGPUFluidSimulator::ExecuteZOrderSortingPipeline(
 	{
 		return InParticleBuffer;
 	}
+	const int32 SortAllocCount = MaxParticleCount > 0 ? MaxParticleCount : CurrentParticleCount;
 	return ZOrderSortManager->ExecuteZOrderSortingPipeline(GraphBuilder, InParticleBuffer,
 		OutCellStartUAV, OutCellStartSRV, OutCellEndUAV, OutCellEndSRV,
 		OutCellStartBuffer, OutCellEndBuffer,
-		CurrentParticleCount, Params,
+		CurrentParticleCount, Params, SortAllocCount,
 		InAttachmentBuffer, OutSortedAttachmentBuffer);
 }
 
