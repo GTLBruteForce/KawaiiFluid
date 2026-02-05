@@ -5,8 +5,16 @@
 #include "LandscapeComponent.h"
 #include "EngineUtils.h"
 #include "LandscapeProxy.h"
+#include "Async/ParallelFor.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHeightmapExtractor, Log, All);
+
+// Thread-local min/max tracking for parallel height sampling
+struct FHeightMinMax
+{
+	float MinZ = FLT_MAX;
+	float MaxZ = -FLT_MAX;
+};
 
 bool FLandscapeHeightmapExtractor::ExtractHeightmap(
 	ALandscapeProxy* Landscape,
@@ -47,12 +55,21 @@ bool FLandscapeHeightmapExtractor::ExtractHeightmap(
 	// Allocate height data
 	OutHeightData.SetNumUninitialized(Resolution * Resolution);
 
-	// Sample heights in a grid
+	// Sample heights in a grid (parallel)
 	float MinZ = OutBounds.Max.Z;
 	float MaxZ = OutBounds.Min.Z;
 
-	for (int32 y = 0; y < Resolution; ++y)
+	// Thread-local accumulators for min/max
+	const int32 NumThreads = FMath::Max(1, FPlatformMisc::NumberOfWorkerThreadsToSpawn() + 1);
+	TArray<FHeightMinMax> ThreadMinMax;
+	ThreadMinMax.SetNum(NumThreads);
+
+	// Parallel sampling - each thread handles a row
+	ParallelFor(Resolution, [&](int32 y)
 	{
+		const int32 ThreadIdx = FPlatformTLS::GetCurrentThreadId() % NumThreads;
+		FHeightMinMax& LocalMinMax = ThreadMinMax[ThreadIdx];
+
 		const float WorldY = OutBounds.Min.Y + y * StepY;
 
 		for (int32 x = 0; x < Resolution; ++x)
@@ -60,13 +77,20 @@ bool FLandscapeHeightmapExtractor::ExtractHeightmap(
 			const float WorldX = OutBounds.Min.X + x * StepX;
 			const float Height = SampleLandscapeHeight(Landscape, WorldX, WorldY);
 
-			// Track actual height range
-			MinZ = FMath::Min(MinZ, Height);
-			MaxZ = FMath::Max(MaxZ, Height);
+			// Track height range (thread-local)
+			LocalMinMax.MinZ = FMath::Min(LocalMinMax.MinZ, Height);
+			LocalMinMax.MaxZ = FMath::Max(LocalMinMax.MaxZ, Height);
 
-			// Store raw height for now (will normalize later)
+			// Store raw height
 			OutHeightData[y * Resolution + x] = Height;
 		}
+	});
+
+	// Merge thread-local min/max
+	for (const FHeightMinMax& Local : ThreadMinMax)
+	{
+		MinZ = FMath::Min(MinZ, Local.MinZ);
+		MaxZ = FMath::Max(MaxZ, Local.MaxZ);
 	}
 
 	// Update Z bounds to actual height range (with padding for collision margin)
@@ -157,12 +181,32 @@ bool FLandscapeHeightmapExtractor::ExtractCombinedHeightmap(
 	// Allocate height data
 	OutHeightData.SetNumUninitialized(Resolution * Resolution);
 
-	// Sample heights from all landscapes
+	// Sample heights from all landscapes (parallel)
 	float MinZ = OutBounds.Max.Z;
 	float MaxZ = OutBounds.Min.Z;
 
-	for (int32 y = 0; y < Resolution; ++y)
+	// Thread-local accumulators for min/max
+	const int32 NumThreads = FMath::Max(1, FPlatformMisc::NumberOfWorkerThreadsToSpawn() + 1);
+	TArray<FHeightMinMax> ThreadMinMax;
+	ThreadMinMax.SetNum(NumThreads);
+
+	// Pre-cache landscape bounds (avoid repeated calls in parallel loop)
+	TArray<FBox> LandscapeBoundsCache;
+	LandscapeBoundsCache.SetNum(Landscapes.Num());
+	for (int32 i = 0; i < Landscapes.Num(); ++i)
 	{
+		if (Landscapes[i])
+		{
+			LandscapeBoundsCache[i] = Landscapes[i]->GetComponentsBoundingBox(true);
+		}
+	}
+
+	// Parallel sampling - each thread handles a row
+	ParallelFor(Resolution, [&](int32 y)
+	{
+		const int32 ThreadIdx = FPlatformTLS::GetCurrentThreadId() % NumThreads;
+		FHeightMinMax& LocalMinMax = ThreadMinMax[ThreadIdx];
+
 		const float WorldY = OutBounds.Min.Y + y * StepY;
 
 		for (int32 x = 0; x < Resolution; ++x)
@@ -173,12 +217,13 @@ bool FLandscapeHeightmapExtractor::ExtractCombinedHeightmap(
 			float Height = OutBounds.Min.Z;
 			bool bFoundHeight = false;
 
-			for (ALandscapeProxy* Landscape : Landscapes)
+			for (int32 i = 0; i < Landscapes.Num(); ++i)
 			{
+				ALandscapeProxy* Landscape = Landscapes[i];
 				if (!Landscape) continue;
 
-				// Check if point is within this landscape's XY bounds
-				FBox LandscapeBounds = Landscape->GetComponentsBoundingBox(true);
+				// Check if point is within this landscape's XY bounds (use cached)
+				const FBox& LandscapeBounds = LandscapeBoundsCache[i];
 				if (WorldX >= LandscapeBounds.Min.X && WorldX <= LandscapeBounds.Max.X &&
 					WorldY >= LandscapeBounds.Min.Y && WorldY <= LandscapeBounds.Max.Y)
 				{
@@ -190,12 +235,19 @@ bool FLandscapeHeightmapExtractor::ExtractCombinedHeightmap(
 
 			if (bFoundHeight)
 			{
-				MinZ = FMath::Min(MinZ, Height);
-				MaxZ = FMath::Max(MaxZ, Height);
+				LocalMinMax.MinZ = FMath::Min(LocalMinMax.MinZ, Height);
+				LocalMinMax.MaxZ = FMath::Max(LocalMinMax.MaxZ, Height);
 			}
 
 			OutHeightData[y * Resolution + x] = Height;
 		}
+	});
+
+	// Merge thread-local min/max
+	for (const FHeightMinMax& Local : ThreadMinMax)
+	{
+		MinZ = FMath::Min(MinZ, Local.MinZ);
+		MaxZ = FMath::Max(MaxZ, Local.MaxZ);
 	}
 
 	// Update Z bounds (with padding for collision margin)
