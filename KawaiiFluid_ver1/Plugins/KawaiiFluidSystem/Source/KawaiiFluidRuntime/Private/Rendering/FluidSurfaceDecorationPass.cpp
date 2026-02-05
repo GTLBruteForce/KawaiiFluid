@@ -382,8 +382,8 @@ void RenderFluidSurfaceDecorationPass(
 	PassParameters->FlowSpeed = Params.FlowMap.FlowSpeed;
 	PassParameters->FlowDistortionStrength = Params.FlowMap.DistortionStrength;
 
-	// Layer (auto-enable if texture is assigned)
-	PassParameters->bLayerEnabled = (Params.Layer.bEnabled || bLayerHasTexture) ? 1 : 0;
+	// Layer respect bEnabled flag only
+	PassParameters->bLayerEnabled = Params.Layer.bEnabled ? 1 : 0;
 	PassParameters->LayerTilingScale = Params.Layer.TilingScale;
 	PassParameters->LayerAddressingMode = static_cast<int32>(Params.Layer.AddressingMode);
 	PassParameters->LayerOpacity = Params.Layer.Opacity;
