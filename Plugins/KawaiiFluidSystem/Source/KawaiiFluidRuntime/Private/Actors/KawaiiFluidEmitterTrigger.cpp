@@ -59,10 +59,10 @@ void AKawaiiFluidEmitterTrigger::BeginPlay()
 		TriggerBox->SetBoxExtent(BoxExtent);
 	}
 
-	// Warn if no target emitter assigned
-	if (!TargetEmitter)
+	// Warn if no target emitters assigned
+	if (TargetEmitters.Num() == 0)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidEmitterTrigger [%s]: No TargetEmitter assigned!"), *GetName());
+		UE_LOG(LogTemp, Warning, TEXT("KawaiiFluidEmitterTrigger [%s]: No TargetEmitters assigned!"), *GetName());
 	}
 }
 
@@ -70,9 +70,15 @@ void AKawaiiFluidEmitterTrigger::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	if (ClearFramesRemaining > 0 && TargetEmitter)
+	if (ClearFramesRemaining > 0)
 	{
-		TargetEmitter->ClearSpawnedParticles();
+		for (AKawaiiFluidEmitter* Emitter : TargetEmitters)
+		{
+			if (Emitter)
+			{
+				Emitter->ClearSpawnedParticles();
+			}
+		}
 		--ClearFramesRemaining;
 
 		if (ClearFramesRemaining <= 0)
@@ -94,49 +100,59 @@ void AKawaiiFluidEmitterTrigger::Tick(float DeltaTime)
 
 void AKawaiiFluidEmitterTrigger::ExecuteTriggerAction()
 {
-	if (!TargetEmitter)
+	for (AKawaiiFluidEmitter* Emitter : TargetEmitters)
 	{
-		return;
-	}
+		if (!Emitter)
+		{
+			continue;
+		}
 
-	switch (TriggerAction)
-	{
-	case EKawaiiFluidTriggerAction::Start:
-		TargetEmitter->StartSpawn();
-		break;
-	case EKawaiiFluidTriggerAction::Stop:
-		TargetEmitter->StopSpawn();
-		break;
-	case EKawaiiFluidTriggerAction::Toggle:
-		TargetEmitter->ToggleSpawn();
-		break;
+		switch (TriggerAction)
+		{
+		case EKawaiiFluidTriggerAction::Start:
+			Emitter->StartSpawn();
+			break;
+		case EKawaiiFluidTriggerAction::Stop:
+			Emitter->StopSpawn();
+			break;
+		case EKawaiiFluidTriggerAction::Toggle:
+			Emitter->ToggleSpawn();
+			break;
+		}
 	}
 }
 
 void AKawaiiFluidEmitterTrigger::ExecuteExitAction()
 {
-	if (!TargetEmitter)
-	{
-		return;
-	}
-
 	// Only process exit actions when TriggerAction is Start
 	if (TriggerAction != EKawaiiFluidTriggerAction::Start)
 	{
 		return;
 	}
 
-	// Stop spawning if configured
-	if (bStopOnExit)
+	for (AKawaiiFluidEmitter* Emitter : TargetEmitters)
 	{
-		TargetEmitter->StopSpawn();
+		if (!Emitter)
+		{
+			continue;
+		}
+
+		// Stop spawning if configured
+		if (bStopOnExit)
+		{
+			Emitter->StopSpawn();
+		}
+
+		// TODO: Multi-frame Tick clear is a workaround for GPU readback latency.
+		// Replace with GPU-side SourceID bulk despawn or despawn completion callback.
+		if (bClearParticlesOnExit)
+		{
+			Emitter->ClearSpawnedParticles();
+		}
 	}
 
-	// TODO: Multi-frame Tick clear is a workaround for GPU readback latency.
-	// Replace with GPU-side SourceID bulk despawn or despawn completion callback.
 	if (bClearParticlesOnExit)
 	{
-		TargetEmitter->ClearSpawnedParticles();
 		ClearFramesRemaining = ClearParticleFrameCount - 1;
 		if (ClearFramesRemaining > 0)
 		{

@@ -61,10 +61,10 @@ public:
 	// Trigger Settings
 	//========================================
 
-	/** The emitter to control when triggered.
-	 *  Assign this in the editor by selecting an emitter from the world. */
+	/** The emitters to control when triggered.
+	 *  Assign these in the editor by selecting emitters from the world. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trigger")
-	TObjectPtr<AKawaiiFluidEmitter> TargetEmitter;
+	TArray<TObjectPtr<AKawaiiFluidEmitter>> TargetEmitters;
 
 	/** Action to perform when an actor enters the trigger */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trigger")
