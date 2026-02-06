@@ -62,7 +62,7 @@ struct FCompactParticleStatsEx
 // Shader Parameters
 //=============================================================================
 StructuredBuffer<FGPUFluidParticle> InParticles;
-int ParticleCount;
+StructuredBuffer<uint> ParticleCountBuffer;
 
 // Output buffer - one of these will be bound depending on mode
 RWStructuredBuffer<FCompactParticleStats> OutCompactStats;
@@ -78,7 +78,7 @@ RWStructuredBuffer<FCompactParticleStatsEx> OutCompactStatsEx;
 void CompactStatsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     uint Idx = DispatchThreadId.x;
-    if (Idx >= (uint)ParticleCount)
+    if (Idx >= ParticleCountBuffer[6])
     {
         return;
     }
@@ -104,7 +104,7 @@ void CompactStatsCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 void CompactStatsExCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     uint Idx = DispatchThreadId.x;
-    if (Idx >= (uint)ParticleCount)
+    if (Idx >= ParticleCountBuffer[6])
     {
         return;
     }

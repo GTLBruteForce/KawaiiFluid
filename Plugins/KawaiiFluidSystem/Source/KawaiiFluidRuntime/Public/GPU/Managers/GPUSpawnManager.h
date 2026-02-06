@@ -41,16 +41,21 @@ public:
 	void Reset()
 	{
 		FScopeLock SpawnGuard(&SpawnLock);
-		FScopeLock DespawnGuard(&DespawnByIDLock);
+		FScopeLock DespawnGuard(&GPUDespawnLock);
 
 		PendingSpawnRequests.Empty();
 		ActiveSpawnRequests.Empty();
-		PendingDespawnByIDs.Empty();
-		ActiveDespawnByIDs.Empty();
-		AlreadyRequestedIDs.Empty();
+		PendingGPUBrushDespawns.Empty();
+		ActiveGPUBrushDespawns.Empty();
+		PendingGPUSourceDespawns.Empty();
+		ActiveGPUSourceDespawns.Empty();
+		PendingGPUOldestSpawnCount = 0;
+		ActiveGPUOldestSpawnCount = 0;
+		PendingGPUExplicitRemoveCount = 0;
+		ActiveGPUExplicitRemoveCount = 0;
 
 		bHasPendingSpawnRequests.store(false);
-		bHasPendingDespawnByIDRequests.store(false);
+		bHasPendingGPUDespawnRequests.store(false);
 		NextParticleID.store(0);
 	}
 
@@ -60,11 +65,16 @@ public:
 	 */
 	void ClearDespawnTracking()
 	{
-		FScopeLock Lock(&DespawnByIDLock);
-		PendingDespawnByIDs.Empty();
-		ActiveDespawnByIDs.Empty();
-		AlreadyRequestedIDs.Empty();
-		bHasPendingDespawnByIDRequests.store(false);
+		FScopeLock Lock(&GPUDespawnLock);
+		PendingGPUBrushDespawns.Empty();
+		ActiveGPUBrushDespawns.Empty();
+		PendingGPUSourceDespawns.Empty();
+		ActiveGPUSourceDespawns.Empty();
+		PendingGPUOldestSpawnCount = 0;
+		ActiveGPUOldestSpawnCount = 0;
+		PendingGPUExplicitRemoveCount = 0;
+		ActiveGPUExplicitRemoveCount = 0;
+		bHasPendingGPUDespawnRequests.store(false);
 	}
 
 	//=========================================================================
@@ -103,59 +113,59 @@ public:
 	bool HasPendingSpawnRequests() const { return bHasPendingSpawnRequests.load(); }
 
 	//=========================================================================
-	// ID-Based Despawn API (Thread-Safe)
+	// GPU-Driven Despawn API (Thread-Safe)
+	// Despawn decisions made entirely on GPU (no CPU readback dependency)
 	//=========================================================================
 
 	/**
-	 * Add a despawn request by particle ID (thread-safe)
-	 * @param ParticleID - ID of particle to despawn
+	 * Add a brush despawn request - removes particles within radius (thread-safe)
+	 * @param Center - World position of brush center
+	 * @param Radius - Brush radius (will be squared on construction)
 	 */
-	void AddDespawnByIDRequest(int32 ParticleID);
+	void AddGPUDespawnBrushRequest(const FVector3f& Center, float Radius);
 
 	/**
-	 * Cleanup AlreadyRequestedIDs based on currently alive particles.
-	 * Both arrays are sorted by ParticleID, so std::set_intersection is used O(n+m).
-	 * @param AliveParticleIDs - Sorted array of IDs currently alive on GPU
+	 * Add a source despawn request - removes all particles with matching SourceID (thread-safe)
+	 * @param SourceID - Source component ID to despawn
 	 */
-	void CleanupCompletedRequests(const TArray<int32>& AliveParticleIDs);
+	void AddGPUDespawnSourceRequest(int32 SourceID);
 
 	/**
-	 * Add multiple despawn requests by particle IDs (thread-safe, more efficient)
-	 * CleanupCompletedRequests is called from ProcessStatsReadback when readback completes
-	 * @param ParticleIDs - Array of particle IDs to despawn
+	 * Add an oldest despawn request for particle recycling (thread-safe, cumulative)
+	 * GPU computes actual removal: max(0, GPU_Count + IncomingSpawnCount - MaxParticleCount)
+	 * @param IncomingSpawnCount - Number of particles about to be spawned
 	 */
-	void AddDespawnByIDRequests(const TArray<int32>& ParticleIDs);
-
-	/** Swap pending ID despawn requests to active buffer (call at start of simulation frame)
-	 * @return Number of IDs to despawn this frame
-	 */
-	int32 SwapDespawnByIDBuffers();
-
-	/** Get number of pending ID despawn requests (thread-safe) */
-	int32 GetPendingDespawnByIDCount() const;
-
-	/** Check if there are pending ID despawn requests (lock-free) */
-	bool HasPendingDespawnByIDRequests() const { return bHasPendingDespawnByIDRequests.load(); }
+	void AddGPUDespawnOldestRequest(int32 IncomingSpawnCount);
 
 	/**
-	 * Add despawn requests, filtering out already requested IDs (thread-safe)
-	 * @param CandidateIDs - Sorted array of candidate particle IDs
-	 * @param MaxCount - Maximum number of new IDs to add
-	 * @return Number of new IDs actually added
+	 * Add explicit oldest removal request - removes exactly N particles (thread-safe, cumulative)
+	 * @param RemoveCount - Exact number of oldest particles to remove
 	 */
-	int32 AddDespawnByIDRequestsFiltered(const TArray<int32>& CandidateIDs, int32 MaxCount);
+	void AddGPUExplicitRemoveOldestRequest(int32 RemoveCount);
+
+	/** Check if there are pending GPU despawn requests (lock-free) */
+	bool HasPendingGPUDespawnRequests() const { return bHasPendingGPUDespawnRequests.load(); }
+
+	/** Swap pending GPU despawn requests to active buffers (call at start of simulation frame)
+	 * @return true if any despawn requests were swapped
+	 */
+	bool SwapGPUDespawnBuffers();
 
 	/**
-	 * Add ID-based despawn particles RDG pass
-	 * Uses binary search on sorted ID list for O(log n) lookup per particle
+	 * Add GPU-driven despawn RDG passes
+	 * Pipeline: ClearUAV(AliveMask,1) → [Brush] → [Source] → [Oldest] → UpdateSourceCounters → PrefixSum → Compact
 	 * @param GraphBuilder - RDG builder
-	 * @param InOutParticleBuffer - Particle Buffer After Remove
-	 * @param InOutParticleCount - Particle Count After Remove
+	 * @param InOutParticleBuffer - Particle buffer (updated to compacted output)
+	 * @param InOutParticleCount - Particle count (used for dispatch, not updated by GPU)
+	 * @param NextParticleIDHint - Hint for IDShiftBits computation (from NextParticleID)
+	 * @param ParticleCountBuffer - GPU particle count buffer for bounds checking in shaders
 	 */
-	void AddDespawnByIDPass(
+	void AddGPUDespawnPass(
 		FRDGBuilder& GraphBuilder,
 		FRDGBufferRef& InOutParticleBuffer,
-		int32& InOutParticleCount);
+		int32& InOutParticleCount,
+		int32 NextParticleIDHint,
+		FRDGBufferRef ParticleCountBuffer);
 
 	//=========================================================================
 	// Source Counter API (Per-Component Particle Count Tracking)
@@ -306,15 +316,25 @@ private:
 	std::atomic<bool> bHasPendingSpawnRequests{false};
 
 	//=========================================================================
-	// Double-Buffered ID-Based Despawn Requests
+	// Double-Buffered GPU-Driven Despawn Requests
 	//=========================================================================
-	TArray<int32> PendingDespawnByIDs;
-	TArray<int32> ActiveDespawnByIDs;
-	TArray<int32> AlreadyRequestedIDs;  // Maintained in sorted order, uses std::set_* operations
-	mutable FCriticalSection DespawnByIDLock;
+	TArray<FGPUDespawnBrushRequest> PendingGPUBrushDespawns;
+	TArray<FGPUDespawnBrushRequest> ActiveGPUBrushDespawns;
+	TArray<int32> PendingGPUSourceDespawns;
+	TArray<int32> ActiveGPUSourceDespawns;
+	int32 PendingGPUOldestSpawnCount = 0;      // recycle: incoming spawn count
+	int32 ActiveGPUOldestSpawnCount = 0;
+	int32 PendingGPUExplicitRemoveCount = 0;   // explicit: remove exactly N
+	int32 ActiveGPUExplicitRemoveCount = 0;
+	mutable FCriticalSection GPUDespawnLock;
 
 	// Lock-free flag for quick pending check
-	std::atomic<bool> bHasPendingDespawnByIDRequests{false};
+	std::atomic<bool> bHasPendingGPUDespawnRequests{false};
+
+	// Persistent buffers for Oldest despawn histogram
+	TRefCountPtr<FRDGPooledBuffer> PersistentIDHistogramBuffer;      // uint32 x 256
+	TRefCountPtr<FRDGPooledBuffer> PersistentOldestThresholdBuffer;  // uint32 x 2
+	TRefCountPtr<FRDGPooledBuffer> PersistentBoundaryCounterBuffer;  // uint32 x 1
 
 	//=========================================================================
 	// Particle ID Tracking

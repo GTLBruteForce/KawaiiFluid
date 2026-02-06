@@ -913,32 +913,162 @@ public:
 
 
 //=============================================================================
-// ID-Based Despawn Particles Compute Shader
-// Marks particles for removal by matching ParticleID against sorted ID list
-// Uses binary search for O(log n) lookup per particle
+// GPU-Driven Despawn Compute Shaders
+// Marks particles for removal by brush, source, or oldest criteria
 //=============================================================================
-class FMarkDespawnByIDCS : public FGlobalShader
+
+// Brush-based despawn: marks particles within spherical brush radius
+class FMarkDespawnByBrushCS : public FGlobalShader
 {
 public:
-	DECLARE_GLOBAL_SHADER(FMarkDespawnByIDCS);
-	SHADER_USE_PARAMETER_STRUCT(FMarkDespawnByIDCS, FGlobalShader);
+	DECLARE_GLOBAL_SHADER(FMarkDespawnByBrushCS);
+	SHADER_USE_PARAMETER_STRUCT(FMarkDespawnByBrushCS, FGlobalShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		// Input: Sorted array of particle IDs to despawn
-		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<int>, DespawnIDs)
-
-		// Input: Particle buffer to check
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUDespawnBrushRequest>, BrushRequests)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
-
-		// Output: Alive mask (1 = alive, 0 = dead)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, OutAliveMask)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleCountBuffer)
+		SHADER_PARAMETER(int32, BrushRequestCount)
+	END_SHADER_PARAMETER_STRUCT()
 
-		// Per-source particle count (decrement when particle is marked for removal)
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};
+
+// Source-based despawn: marks particles matching specific SourceIDs
+class FMarkDespawnBySourceCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FMarkDespawnBySourceCS);
+	SHADER_USE_PARAMETER_STRUCT(FMarkDespawnBySourceCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<int>, DespawnSourceIDs)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, OutAliveMask)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleCountBuffer)
+		SHADER_PARAMETER(int32, DespawnSourceIDCount)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};
+
+// Oldest despawn Pass 1: Build 256-bucket histogram of ParticleID upper bits
+class FBuildIDHistogramCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FBuildIDHistogramCS);
+	SHADER_USE_PARAMETER_STRUCT(FBuildIDHistogramCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, IDHistogram)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleCountBuffer)
+		SHADER_PARAMETER(int32, IDShiftBits)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};
+
+// Oldest despawn Pass 2: Find threshold bucket via prefix sum (single thread)
+class FFindOldestThresholdCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FFindOldestThresholdCS);
+	SHADER_USE_PARAMETER_STRUCT(FFindOldestThresholdCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		// Note: IDHistogram is RW in HLSL (shared file with BuildIDHistogramCS) but read-only here
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, IDHistogram)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, OldestThreshold)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleCountBuffer)
+		SHADER_PARAMETER(int32, IncomingSpawnCount)
+		SHADER_PARAMETER(int32, MaxParticleCount)
+		SHADER_PARAMETER(int32, ExplicitRemoveCount)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+};
+
+// Oldest despawn Pass 3: Mark particles below threshold + atomic boundary
+class FMarkOldestParticlesCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FMarkOldestParticlesCS);
+	SHADER_USE_PARAMETER_STRUCT(FMarkOldestParticlesCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
+		// Note: OldestThreshold is RW in HLSL (shared file with FindOldestThresholdCS) but read-only here
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, OldestThreshold)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, OutAliveMask)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, BoundaryCounter)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleCountBuffer)
+		SHADER_PARAMETER(int32, IDShiftBits)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static constexpr int32 ThreadGroupSize = 256;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
+	}
+};
+
+// Source counter update: decrements counters for particles marked dead
+class FUpdateSourceCountersDespawnCS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FUpdateSourceCountersDespawnCS);
+	SHADER_USE_PARAMETER_STRUCT(FUpdateSourceCountersDespawnCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, AliveMask)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, SourceCounters)
-
-		// Parameters
-		SHADER_PARAMETER(int32, DespawnIDCount)
-		SHADER_PARAMETER(int32, ParticleCount)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleCountBuffer)
 		SHADER_PARAMETER(int32, MaxSourceCount)
 	END_SHADER_PARAMETER_STRUCT()
 
@@ -949,9 +1079,7 @@ public:
 		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
-	static void ModifyCompilationEnvironment(
-		const FGlobalShaderPermutationParameters& Parameters,
-		FShaderCompilerEnvironment& OutEnvironment)
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
@@ -1983,82 +2111,6 @@ public:
 // Sort particles by ParticleID for CPU readback optimization.
 // Reads ParticleID directly from Particles buffer (first pass only).
 //=============================================================================
-
-/**
- * ParticleID Histogram Compute Shader
- * Reads ParticleID directly from Particles buffer instead of KeysIn
- */
-class FRadixSortHistogramParticleIDCS : public FGlobalShader
-{
-public:
-	DECLARE_GLOBAL_SHADER(FRadixSortHistogramParticleIDCS);
-	SHADER_USE_PARAMETER_STRUCT(FRadixSortHistogramParticleIDCS, FGlobalShader);
-
-	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, Histogram)
-		SHADER_PARAMETER(int32, ElementCount)
-		SHADER_PARAMETER(int32, BitOffset)
-		SHADER_PARAMETER(int32, NumGroups)
-	END_SHADER_PARAMETER_STRUCT()
-
-	static constexpr int32 ThreadGroupSize = 256;
-
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
-	}
-
-	static void ModifyCompilationEnvironment(
-		const FGlobalShaderPermutationParameters& Parameters,
-		FShaderCompilerEnvironment& OutEnvironment)
-	{
-		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
-		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
-		OutEnvironment.SetDefine(TEXT("RADIX_BITS"), GPU_RADIX_BITS);
-		OutEnvironment.SetDefine(TEXT("RADIX_SIZE"), GPU_RADIX_SIZE);
-		OutEnvironment.SetDefine(TEXT("ELEMENTS_PER_THREAD"), GPU_RADIX_ELEMENTS_PER_THREAD);
-	}
-};
-
-/**
- * ParticleID Scatter Compute Shader
- * Reads ParticleID directly from Particles buffer, outputs to Keys/Values
- */
-class FRadixSortScatterParticleIDCS : public FGlobalShader
-{
-public:
-	DECLARE_GLOBAL_SHADER(FRadixSortScatterParticleIDCS);
-	SHADER_USE_PARAMETER_STRUCT(FRadixSortScatterParticleIDCS, FGlobalShader);
-
-	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, Particles)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, KeysOut)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, ValuesOut)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, HistogramSRV)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, GlobalOffsetsSRV)
-		SHADER_PARAMETER(int32, ElementCount)
-		SHADER_PARAMETER(int32, BitOffset)
-	END_SHADER_PARAMETER_STRUCT()
-
-	static constexpr int32 ThreadGroupSize = 256;
-
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
-	}
-
-	static void ModifyCompilationEnvironment(
-		const FGlobalShaderPermutationParameters& Parameters,
-		FShaderCompilerEnvironment& OutEnvironment)
-	{
-		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
-		OutEnvironment.SetDefine(TEXT("THREAD_GROUP_SIZE"), ThreadGroupSize);
-		OutEnvironment.SetDefine(TEXT("RADIX_BITS"), GPU_RADIX_BITS);
-		OutEnvironment.SetDefine(TEXT("RADIX_SIZE"), GPU_RADIX_SIZE);
-		OutEnvironment.SetDefine(TEXT("ELEMENTS_PER_THREAD"), GPU_RADIX_ELEMENTS_PER_THREAD);
-	}
-};
 
 //=============================================================================
 // Particle Reordering Shaders

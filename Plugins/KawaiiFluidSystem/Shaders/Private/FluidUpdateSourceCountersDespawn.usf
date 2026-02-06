@@ -1,0 +1,58 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Source Counter Update for GPU Despawn - Decrements source counters for marked particles
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+
+// ===================================================================================
+// Struct Definitions (Must match C++)
+// ===================================================================================
+
+struct FGPUFluidParticle
+{
+	float3 Position;           // 12 bytes
+	float Mass;                // 4 bytes (total: 16)
+	float3 PredictedPosition;  // 12 bytes
+	float Density;             // 4 bytes (total: 32)
+	float3 Velocity;           // 12 bytes
+	float Lambda;              // 4 bytes (total: 48)
+	int ParticleID;            // 4 bytes
+	int SourceID;              // 4 bytes
+	uint Flags;                // 4 bytes
+	uint NeighborCount;        // 4 bytes (total: 64)
+};
+
+// ===================================================================================
+// Parameter Definitions
+// ===================================================================================
+
+StructuredBuffer<uint> AliveMask;
+StructuredBuffer<FGPUFluidParticle> Particles;
+RWStructuredBuffer<uint> SourceCounters;
+
+StructuredBuffer<uint> ParticleCountBuffer;
+
+int MaxSourceCount;
+
+// ===================================================================================
+// Kernel: UpdateSourceCountersDespawnCS
+// Decrements source counters for particles marked as dead (AliveMask == 0)
+// ===================================================================================
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void UpdateSourceCountersDespawnCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	const uint Index = DispatchThreadId.x;
+	const uint Count = ParticleCountBuffer[6];
+
+	if (Index >= Count)
+		return;
+
+	if (AliveMask[Index] == 0)
+	{
+		int sid = Particles[Index].SourceID;
+		if (sid >= 0 && sid < MaxSourceCount)
+		{
+			InterlockedAdd(SourceCounters[sid], -1);
+		}
+	}
+}

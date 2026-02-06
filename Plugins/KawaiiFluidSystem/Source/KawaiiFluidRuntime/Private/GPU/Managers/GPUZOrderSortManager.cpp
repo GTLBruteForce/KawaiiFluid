@@ -70,6 +70,16 @@ FRDGBufferRef FGPUZOrderSortManager::ExecuteZOrderSortingPipeline(
 
 	if (CurrentParticleCount <= 0)
 	{
+		// Still create valid CellStart/CellEnd buffers so callers never get null SRVs
+		static uint32 InvalidIndex = 0xFFFFFFFF;
+		OutCellStartBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("ZOrder.CellStart.Empty"));
+		OutCellEndBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 1), TEXT("ZOrder.CellEnd.Empty"));
+		GraphBuilder.QueueBufferUpload(OutCellStartBuffer, &InvalidIndex, sizeof(uint32));
+		GraphBuilder.QueueBufferUpload(OutCellEndBuffer, &InvalidIndex, sizeof(uint32));
+		OutCellStartUAV = GraphBuilder.CreateUAV(OutCellStartBuffer);
+		OutCellStartSRV = GraphBuilder.CreateSRV(OutCellStartBuffer);
+		OutCellEndUAV = GraphBuilder.CreateUAV(OutCellEndBuffer);
+		OutCellEndSRV = GraphBuilder.CreateSRV(OutCellEndBuffer);
 		return InParticleBuffer;
 	}
 

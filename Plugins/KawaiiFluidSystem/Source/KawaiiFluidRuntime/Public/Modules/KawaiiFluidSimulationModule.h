@@ -463,27 +463,28 @@ public:
 	                                             float Radius, float Spacing, float Jitter,
 	                                             TArray<FGPUSpawnRequest>& OutBatch);
 
-	/** Remove all particles */
+	/** Remove all particles for this module's SourceID (GPU-driven) */
 	UFUNCTION(BlueprintCallable, Category = "Fluid")
 	void ClearAllParticles();
 
-	/** Remove N oldest particles (lowest ParticleID first)
-	 * Used to make room for new particles when MaxParticle limit is reached
-	 * GPU mode: Finds lowest ID from Readback data and requests deletion
-	 * @param Count Number of particles to remove
-	 * @return Actual number of particles requested for removal (0 if Readback fails)
+	/** Remove particles within radius (GPU-driven, no readback dependency)
+	 * @param Center World position of brush center
+	 * @param Radius Brush radius
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid")
-	int32 RemoveOldestParticles(int32 Count);
+	void DespawnByBrushGPU(FVector Center, float Radius);
 
-	/** Remove N oldest particles for specific Source
-	 * Used when external components like Emitter want to remove only their own particles
-	 * @param SourceID Target Source ID (0~63)
-	 * @param Count Number of particles to remove
-	 * @return Actual number of particles requested for removal
+	/** Remove all particles with specific SourceID (GPU-driven)
+	 * @param SourceID Source component ID to despawn
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Fluid")
-	int32 RemoveOldestParticlesForSource(int32 SourceID, int32 Count);
+	void DespawnBySourceGPU(int32 SourceID);
+
+	/** Remove N oldest particles (GPU-driven histogram, no readback dependency)
+	 * @param IncomingSpawnCount Number of particles about to be spawned (GPU computes actual removal)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fluid")
+	void DespawnOldestGPU(int32 IncomingSpawnCount);
 
 	/** Get particle positions array */
 	UFUNCTION(BlueprintCallable, Category = "Fluid")

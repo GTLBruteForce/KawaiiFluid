@@ -1414,110 +1414,52 @@ void UKawaiiFluidSimulationModule::ClearAllParticles()
 {
 	Particles.Empty();
 
-	// Clear GPU particles (only particles with this Module's SourceID)
-	// Safe access via TWeakPtr::Pin() - returns nullptr if GPUSimulator already destroyed
+	// GPU-driven despawn: remove all particles with this Module's SourceID
 	TSharedPtr<FGPUFluidSimulator> GPUSim = WeakGPUSimulator.Pin();
 	if (bGPUSimulationActive && GPUSim)
 	{
-		// Reference cached ParticleIDs by SourceID (no copy, O(1) lookup)
-		const TArray<int32>* MyParticleIDsPtr = GPUSim->GetParticleIDsBySourceID(CachedSourceID);
-		if (MyParticleIDsPtr && MyParticleIDsPtr->Num() > 0)
+		GPUSim->AddGPUDespawnSourceRequest(CachedSourceID);
+
+		// Cancel pending spawns to prevent ghost particles after despawn
+		if (FGPUSpawnManager* SpawnMgr = GPUSim->GetSpawnManager())
 		{
-			// Request despawn of my particles (CleanupCompletedRequests called during Readback)
-			GPUSim->AddDespawnByIDRequests(*MyParticleIDsPtr);
-			UE_LOG(LogTemp, Log, TEXT("ClearAllParticles: SourceID=%d, Clearing %d particles"),
-				CachedSourceID, MyParticleIDsPtr->Num());
+			SpawnMgr->CancelPendingSpawnsForSource(CachedSourceID);
 		}
+
+		UE_LOG(LogTemp, Log, TEXT("ClearAllParticles: SourceID=%d (GPU despawn by source)"), CachedSourceID);
 	}
 }
 
-int32 UKawaiiFluidSimulationModule::RemoveOldestParticles(int32 Count)
+void UKawaiiFluidSimulationModule::DespawnByBrushGPU(FVector Center, float Radius)
 {
-	if (Count <= 0)
-	{
-		return 0;
-	}
-
-	// GPU mode
 	TSharedPtr<FGPUFluidSimulator> GPUSim = WeakGPUSimulator.Pin();
 	if (bGPUSimulationActive && GPUSim)
 	{
-		// Reference cached ParticleIDs by SourceID (already sorted by ParticleID)
-		const TArray<int32>* MyParticleIDsPtr = GPUSim->GetParticleIDsBySourceID(CachedSourceID);
-		if (!MyParticleIDsPtr || MyParticleIDsPtr->Num() == 0)
-		{
-			return 0;
-		}
-
-		const int32 MyCount = MyParticleIDsPtr->Num();
-		const int32 RemoveCount = FMath::Min(Count, MyCount);
-
-		// Read back sorted by ParticleID from GPU - first N entries are oldest particles O(1)
-		TArray<int32> IDsToRemove;
-		IDsToRemove.SetNumUninitialized(RemoveCount);
-		FMemory::Memcpy(IDsToRemove.GetData(), MyParticleIDsPtr->GetData(), RemoveCount * sizeof(int32));
-
-		GPUSim->AddDespawnByIDRequests(IDsToRemove);
-
-		UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticles: SourceID=%d, Removing %d (IDs: %d~%d), Total=%d"),
-			CachedSourceID, RemoveCount, IDsToRemove[0], IDsToRemove.Last(), MyCount);
-
-		return RemoveCount;
+		GPUSim->AddGPUDespawnBrushRequest(FVector3f(Center), Radius);
 	}
-
-	return 0;
 }
 
-int32 UKawaiiFluidSimulationModule::RemoveOldestParticlesForSource(int32 SourceID, int32 Count)
+void UKawaiiFluidSimulationModule::DespawnBySourceGPU(int32 SourceID)
 {
-	if (Count <= 0 || SourceID < 0)
-	{
-		return 0;
-	}
-
-	// GPU mode
 	TSharedPtr<FGPUFluidSimulator> GPUSim = WeakGPUSimulator.Pin();
 	if (bGPUSimulationActive && GPUSim)
 	{
-		// Reference ParticleIDs of specified SourceID (already sorted by ParticleID)
-		const TArray<int32>* ParticleIDsPtr = GPUSim->GetParticleIDsBySourceID(SourceID);
-		if (!ParticleIDsPtr || ParticleIDsPtr->Num() == 0)
-		{
-			// Even if no particles exist, cancel pending spawns for despawn-all case
-			if (FGPUSpawnManager* SpawnMgr = GPUSim->GetSpawnManager())
-			{
-				SpawnMgr->CancelPendingSpawnsForSource(SourceID);
-			}
-			return 0;
-		}
+		GPUSim->AddGPUDespawnSourceRequest(SourceID);
+	}
+}
 
-		const int32 CurrentParticleCount = ParticleIDsPtr->Num();
-
-		// Check if this is a "despawn all" operation
-		// Cancel pending spawn requests to prevent ghost particles after despawn
-		const bool bIsDespawnAll = (Count >= CurrentParticleCount);
-		if (bIsDespawnAll)
-		{
-			if (FGPUSpawnManager* SpawnMgr = GPUSim->GetSpawnManager())
-			{
-				SpawnMgr->CancelPendingSpawnsForSource(SourceID);
-			}
-		}
-
-		// Use filtered version to skip already requested IDs
-		// Pass entire array as candidates, function will filter and take only Count new IDs
-		const int32 ActualRemoved = GPUSim->AddDespawnByIDRequestsFiltered(*ParticleIDsPtr, Count);
-
-		if (ActualRemoved > 0)
-		{
-			UE_LOG(LogTemp, Log, TEXT("RemoveOldestParticlesForSource: SourceID=%d, Requested %d, Actually added %d, DespawnAll=%d"),
-				SourceID, Count, ActualRemoved, bIsDespawnAll ? 1 : 0);
-		}
-
-		return ActualRemoved;
+void UKawaiiFluidSimulationModule::DespawnOldestGPU(int32 IncomingSpawnCount)
+{
+	if (IncomingSpawnCount <= 0)
+	{
+		return;
 	}
 
-	return 0;
+	TSharedPtr<FGPUFluidSimulator> GPUSim = WeakGPUSimulator.Pin();
+	if (bGPUSimulationActive && GPUSim)
+	{
+		GPUSim->AddGPUDespawnOldestRequest(IncomingSpawnCount);
+	}
 }
 
 TArray<FVector> UKawaiiFluidSimulationModule::GetParticlePositions() const

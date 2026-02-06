@@ -23,7 +23,7 @@ public:
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, InParticles)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FCompactParticleStats>, OutCompactStats)
-		SHADER_PARAMETER(int32, ParticleCount)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleCountBuffer)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;
@@ -57,7 +57,7 @@ public:
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FGPUFluidParticle>, InParticles)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FCompactParticleStatsEx>, OutCompactStatsEx)
-		SHADER_PARAMETER(int32, ParticleCount)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, ParticleCountBuffer)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static constexpr int32 ThreadGroupSize = 256;

@@ -120,9 +120,17 @@ public:
 	                          const FVector& Velocity, float Randomness = 0.8f,
 	                          const FVector& SurfaceNormal = FVector::UpVector);
 
-	/** Remove particles within radius */
+	/** Remove particles within radius (GPU-driven, no readback dependency) */
 	UFUNCTION(BlueprintCallable, Category = "Brush")
-	int32 RemoveParticlesInRadius(const FVector& WorldCenter, float Radius);
+	void RemoveParticlesInRadiusGPU(const FVector& WorldCenter, float Radius);
+
+	/** Remove all particles by SourceID (GPU-driven) */
+	UFUNCTION(BlueprintCallable, Category = "Brush")
+	void RemoveParticlesBySourceGPU(int32 SourceID);
+
+	/** Remove N oldest particles (GPU-driven) */
+	UFUNCTION(BlueprintCallable, Category = "Brush")
+	void RemoveOldestParticlesGPU(int32 Count);
 
 	/** Remove all particles + clear rendering */
 	UFUNCTION(BlueprintCallable, Category = "Brush")

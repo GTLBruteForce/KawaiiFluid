@@ -1,0 +1,71 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Brush-Based Despawn Shader - Marks particles within brush radius for removal
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+
+// ===================================================================================
+// Struct Definitions (Must match C++)
+// ===================================================================================
+
+struct FGPUFluidParticle
+{
+	float3 Position;           // 12 bytes
+	float Mass;                // 4 bytes (total: 16)
+	float3 PredictedPosition;  // 12 bytes
+	float Density;             // 4 bytes (total: 32)
+	float3 Velocity;           // 12 bytes
+	float Lambda;              // 4 bytes (total: 48)
+	int ParticleID;            // 4 bytes
+	int SourceID;              // 4 bytes
+	uint Flags;                // 4 bytes
+	uint NeighborCount;        // 4 bytes (total: 64)
+};
+
+struct FDespawnBrushRequest
+{
+	float3 Center;             // 12 bytes
+	float RadiusSq;            // 4 bytes (pre-squared on CPU)
+};
+
+// ===================================================================================
+// Parameter Definitions
+// ===================================================================================
+
+StructuredBuffer<FDespawnBrushRequest> BrushRequests;
+StructuredBuffer<FGPUFluidParticle> Particles;
+RWStructuredBuffer<uint> OutAliveMask;
+
+StructuredBuffer<uint> ParticleCountBuffer;
+
+int BrushRequestCount;
+
+// ===================================================================================
+// Kernel: MarkDespawnByBrushCS
+// Marks particles within any brush radius for removal (AliveMask = 0)
+// Contract: Only writes 0 (never writes 1). AliveMask must be pre-cleared to 1.
+// ===================================================================================
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void MarkDespawnByBrushCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	const uint Index = DispatchThreadId.x;
+	const uint Count = ParticleCountBuffer[6];
+
+	if (Index >= Count)
+	{
+		OutAliveMask[Index] = 0;
+		return;
+	}
+
+	float3 Pos = Particles[Index].Position;
+
+	for (int b = 0; b < BrushRequestCount; ++b)
+	{
+		float3 d = Pos - BrushRequests[b].Center;
+		if (dot(d, d) <= BrushRequests[b].RadiusSq)
+		{
+			OutAliveMask[Index] = 0;
+			return;
+		}
+	}
+}

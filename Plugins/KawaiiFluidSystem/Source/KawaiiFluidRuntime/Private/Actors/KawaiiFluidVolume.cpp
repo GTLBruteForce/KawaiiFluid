@@ -1663,66 +1663,47 @@ void AKawaiiFluidVolume::AddParticlesInRadius(const FVector& WorldCenter, float 
 	}
 }
 
-int32 AKawaiiFluidVolume::RemoveParticlesInRadius(const FVector& WorldCenter, float Radius)
+void AKawaiiFluidVolume::RemoveParticlesInRadiusGPU(const FVector& WorldCenter, float Radius)
 {
 	if (!SimulationModule)
 	{
-		return 0;
+		return;
 	}
 
-	// ID-based despawn: Collect ParticleIDs within radius from CPU readback data, then remove on GPU
+	// GPU-driven brush despawn: no readback dependency
 	FGPUFluidSimulator* GPUSimulator = SimulationModule->GetGPUSimulator();
-	if (!GPUSimulator)
+	if (GPUSimulator)
 	{
-		return 0;
+		GPUSimulator->AddGPUDespawnBrushRequest(FVector3f(WorldCenter), Radius);
+	}
+}
+
+void AKawaiiFluidVolume::RemoveParticlesBySourceGPU(int32 SourceID)
+{
+	if (!SimulationModule)
+	{
+		return;
 	}
 
-	// Get lightweight particle data (Position + ParticleID + SourceID only, no 6.4MB copy)
-	TArray<FVector3f> Positions;
-	TArray<int32> ParticleIDs;
-	TArray<int32> SourceIDs;
-	if (!GPUSimulator->GetParticlePositionsAndIDs(Positions, ParticleIDs, SourceIDs))
+	FGPUFluidSimulator* GPUSimulator = SimulationModule->GetGPUSimulator();
+	if (GPUSimulator)
 	{
-		// No valid readback data yet, skip this frame
-		return 0;
+		GPUSimulator->AddGPUDespawnSourceRequest(SourceID);
+	}
+}
+
+void AKawaiiFluidVolume::RemoveOldestParticlesGPU(int32 Count)
+{
+	if (!SimulationModule || Count <= 0)
+	{
+		return;
 	}
 
-	// Find particles within radius and collect their IDs (Volume removes all particles, no SourceID filter)
-	const float RadiusSq = Radius * Radius;
-	const FVector3f WorldCenterF = FVector3f(WorldCenter);
-	TArray<int32> ParticleIDsToRemove;
-	ParticleIDsToRemove.Reserve(128);
-
-	const int32 NumParticles = Positions.Num();
-	for (int32 i = 0; i < NumParticles; ++i)
+	FGPUFluidSimulator* GPUSimulator = SimulationModule->GetGPUSimulator();
+	if (GPUSimulator)
 	{
-		const float DistSq = FVector3f::DistSquared(Positions[i], WorldCenterF);
-		if (DistSq <= RadiusSq)
-		{
-			ParticleIDsToRemove.Add(ParticleIDs[i]);
-		}
+		GPUSimulator->AddGPUExplicitRemoveOldestRequest(Count);
 	}
-
-	// Submit ID-based despawn request (CleanupCompletedRequests called on Readback)
-	if (ParticleIDsToRemove.Num() > 0)
-	{
-		GPUSimulator->AddDespawnByIDRequests(ParticleIDsToRemove);
-	}
-
-	// Also remove oldest particles if exceeding max count
-	if (VolumeComponent)
-	{
-		const int32 MaxCount = VolumeComponent->MaxParticleCount;
-		const int32 CurrentCount = SimulationModule->GetParticleCount();
-		const int32 CountAfterRemoval = CurrentCount - ParticleIDsToRemove.Num();
-		if (MaxCount > 0 && CountAfterRemoval > MaxCount)
-		{
-			const int32 ExcessCount = CountAfterRemoval - MaxCount;
-			SimulationModule->RemoveOldestParticles(ExcessCount);
-		}
-	}
-
-	return ParticleIDsToRemove.Num();
 }
 
 void AKawaiiFluidVolume::ClearAllParticles()

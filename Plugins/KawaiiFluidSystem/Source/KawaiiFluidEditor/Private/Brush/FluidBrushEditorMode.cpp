@@ -436,7 +436,7 @@ void FFluidBrushEditorMode::ApplyBrush()
 			break;
 
 		case EFluidBrushMode::Remove:
-			TargetVolume->RemoveParticlesInRadius(BrushLocation, Settings.Radius);
+			TargetVolume->RemoveParticlesInRadiusGPU(BrushLocation, Settings.Radius);
 			break;
 	}
 }

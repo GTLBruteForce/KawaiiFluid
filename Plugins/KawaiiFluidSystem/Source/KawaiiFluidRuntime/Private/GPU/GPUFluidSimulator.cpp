@@ -875,7 +875,7 @@ void FGPUFluidSimulator::BeginFrame()
 
 	// Capture pending flags on game thread (before render command)
 	const bool bHasPendingSpawns = SpawnManager.IsValid() && SpawnManager->HasPendingSpawnRequests();
-	const bool bHasPendingDespawns = SpawnManager.IsValid() && SpawnManager->HasPendingDespawnByIDRequests();
+	const bool bHasPendingDespawns = SpawnManager.IsValid() && SpawnManager->HasPendingGPUDespawnRequests();
 
 	// Single render command for all BeginFrame operations
 	ENQUEUE_RENDER_COMMAND(GPUFluidBeginFrame)(
@@ -888,6 +888,10 @@ void FGPUFluidSimulator::BeginFrame()
 			// =====================================================
 			Self->ProcessCollisionFeedbackReadback(RHICmdList);
 			Self->ProcessColliderContactCountReadback(RHICmdList);
+
+			// Process particle count readback FIRST so CurrentParticleCount is
+			// GPU-accurate before ProcessStatsReadback uses it as iteration bound
+			Self->ProcessParticleCountReadback();
 
 			// Process stats readback - also extracts shadow data if bShadowReadbackEnabled
 			const bool bNeedStatsReadback = GetFluidStatsCollector().IsAnyReadbackNeeded();
@@ -926,11 +930,6 @@ void FGPUFluidSimulator::BeginFrame()
 			}
 
 			// =====================================================
-			// Step 1.5: Process Particle Count Readback (GPU → CPU)
-			// =====================================================
-			Self->ProcessParticleCountReadback();
-
-			// =====================================================
 			// Step 2: Process Spawn/Despawn Operations
 			// =====================================================
 			if (!bHasPendingSpawns && !bHasPendingDespawns)
@@ -948,32 +947,37 @@ void FGPUFluidSimulator::BeginFrame()
 				Self->SpawnManager->SwapBuffers();
 			}
 
-			// Process Despawn (ID-based removal)
+			// Process Despawn (GPU-driven)
 			if (bHasPendingDespawns && Self->SpawnManager.IsValid() && Self->PersistentParticleBuffer.IsValid())
 			{
 				SCOPED_DRAW_EVENT(RHICmdList, GPUFluid_BeginFrame_Despawn);
 
-				int32 DespawnCount = 0;
+				bool bHasActiveDespawns = false;
 				{
 					RDG_EVENT_SCOPE(GraphBuilder, "Despawn_SwapBuffers");
-					DespawnCount = Self->SpawnManager->SwapDespawnByIDBuffers();
+					bHasActiveDespawns = Self->SpawnManager->SwapGPUDespawnBuffers();
 				}
-				if (DespawnCount > 0)
+				if (bHasActiveDespawns)
 				{
 					int32 PreDespawnCount = Self->CurrentParticleCount;
 					{
 						RDG_EVENT_SCOPE(GraphBuilder, "Despawn_RegisterBuffer");
 						ParticleBuffer = GraphBuilder.RegisterExternalBuffer(Self->PersistentParticleBuffer, TEXT("GPUFluidParticlesForDespawn"));
 					}
+
+					// Register ParticleCountBuffer before despawn pass (needed for GPU bounds checking)
+					ParticleCountBuffer = Self->RegisterParticleCountBuffer(GraphBuilder);
+
 					{
 						RDG_EVENT_SCOPE(GraphBuilder, "Despawn_AddPass");
-						Self->SpawnManager->AddDespawnByIDPass(GraphBuilder, ParticleBuffer, PreDespawnCount);
+						const int32 NextParticleIDHint = Self->SpawnManager.IsValid() ? Self->SpawnManager->GetNextParticleID() : 0;
+						Self->SpawnManager->AddGPUDespawnPass(GraphBuilder, ParticleBuffer, PreDespawnCount,
+							NextParticleIDHint, ParticleCountBuffer);
 					}
 
 					// GPU: Write exact alive count after compaction
 					{
 						RDG_EVENT_SCOPE(GraphBuilder, "Despawn_WriteAliveCount");
-						ParticleCountBuffer = Self->RegisterParticleCountBuffer(GraphBuilder);
 
 						FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 						TShaderMapRef<FWriteAliveCountAfterCompactionCS> WriteCountShader(ShaderMap);
@@ -983,16 +987,13 @@ void FGPUFluidSimulator::BeginFrame()
 						WriteCountParams->PrefixSums = Self->SpawnManager->GetLastPrefixSumsSRV(GraphBuilder);
 						WriteCountParams->AliveMask = Self->SpawnManager->GetLastAliveMaskSRV(GraphBuilder);
 						WriteCountParams->ParticleCountBuffer = GraphBuilder.CreateUAV(ParticleCountBuffer);
-						WriteCountParams->OldParticleCount = PreDespawnCount;
+						WriteCountParams->OldParticleCount = Self->MaxParticleCount;
 
 						FComputeShaderUtils::AddPass(GraphBuilder,
 							RDG_EVENT_NAME("GPUFluid::WriteAliveCountAfterCompaction"),
 							WriteCountShader, WriteCountParams, FIntVector(1, 1, 1));
 					}
 
-					// CPU estimate: approximate alive count for ParticleCount uniform
-					// (exact value comes via readback next frame, but Phase 1 shaders still need the uniform)
-					Self->CurrentParticleCount = FMath::Max(0, PreDespawnCount - DespawnCount);
 				}
 			}
 
@@ -1169,15 +1170,9 @@ void FGPUFluidSimulator::EndFrame()
 		{
 			SCOPED_DRAW_EVENT(RHICmdList, GPUFluid_EndFrame);
 
-			// Cleanup despawn tracking when particles become 0
+			// Reset NextParticleID when particle count is 0 (prevents overflow)
 			{
-				SCOPED_DRAW_EVENT(RHICmdList, EndFrame_DespawnCleanup);
-				if (Self->CurrentParticleCount == 0 && Self->SpawnManager.IsValid())
-				{
-					Self->SpawnManager->CleanupCompletedRequests(TArray<int32>());
-				}
-
-				// Reset NextParticleID when particle count is 0 (prevents overflow)
+				SCOPED_DRAW_EVENT(RHICmdList, EndFrame_ParticleIDReset);
 				if (Self->CurrentParticleCount == 0 && Self->SpawnManager.IsValid())
 				{
 					Self->SpawnManager->TryResetParticleID(Self->CurrentParticleCount);
@@ -1193,30 +1188,27 @@ void FGPUFluidSimulator::EndFrame()
 				}
 			}
 
-			// Only enqueue readbacks if we have particles
-			if (Self->CurrentParticleCount > 0 && Self->PersistentParticleBuffer.IsValid())
+			// Readback guard: need particles and valid buffers
+			// Shaders use ParticleCountBuffer[6] (GPU-accurate count) for bounds, so stale
+			// CPU CurrentParticleCount is only used for buffer allocation (safe upper bound).
+			// ProcessStatsReadback uses min(stored, CurrentParticleCount) to clamp iteration.
+			if (Self->CurrentParticleCount > 0 && Self->PersistentParticleBuffer.IsValid()
+				&& Self->PersistentParticleCountBuffer.IsValid())
 			{
-				// Stats Readback after ParticleID sorting
-				// Use compact readback (32 bytes) when detailed stats are not needed
-				// This reduces GPU→CPU transfer from 6.4MB to 3.2MB for 100K particles
+				// Stats Readback directly from Z-Order state (no ParticleID sort needed)
+				// GPU-driven despawn eliminates the need for sorted-by-ID readback
 				{
-					SCOPED_DRAW_EVENT(RHICmdList, EndFrame_ParticleIDSortAndReadback);
+					SCOPED_DRAW_EVENT(RHICmdList, EndFrame_Readback);
 					FRDGBuilder GraphBuilder(RHICmdList);
 
-					// Register PersistentParticleBuffer in RDG
+					// Register PersistentParticleBuffer in RDG (currently Z-Order sorted)
 					FRDGBufferRef ParticleBuffer = GraphBuilder.RegisterExternalBuffer(Self->PersistentParticleBuffer);
 
-					// Debug Z-Order Index Recording (BEFORE ParticleID re-sort)
-					// ParticleBuffer is currently Z-Order sorted from previous Render pass
-					// Record each particle's array index: DebugIndices[ParticleID] = ArrayIndex
+					// Debug Z-Order Index Recording
 					if (Self->bDebugZOrderIndexEnabled.load())
 					{
 						Self->AddRecordZOrderIndicesPass(GraphBuilder, ParticleBuffer, Self->CurrentParticleCount);
 					}
-
-					// Sort by ParticleID
-					FRDGBufferRef SortedBuffer = Self->ExecuteParticleIDSortPipeline(
-						GraphBuilder, ParticleBuffer, Self->CurrentParticleCount);
 
 					const int32 ParticleCount = Self->CurrentParticleCount;
 					const bool bNeedDetailedStats = GetFluidStatsCollector().IsDetailedGPUEnabled();
@@ -1224,28 +1216,28 @@ void FGPUFluidSimulator::EndFrame()
 
 					if (bNeedDetailedStats || bNeedVelocity)
 					{
-						// Full 64-byte readback when:
-						// - Detailed stats enabled (need Density, Mass, Flags)
-						// - ISM rendering enabled (need Velocity)
-						// - Shadow readback enabled (need Velocity)
+						// Full 64-byte readback (Z-Order state, no sort)
 						AddReadbackBufferPass(GraphBuilder,
-							RDG_EVENT_NAME("GPUFluid::ParticleIDSortedReadback(Full)"),
-							SortedBuffer,
-							[Self, SortedBuffer, ParticleCount](FRHICommandListImmediate& InRHICmdList)
+							RDG_EVENT_NAME("GPUFluid::ZOrderReadback(Full)"),
+							ParticleBuffer,
+							[Self, ParticleBuffer, ParticleCount](FRHICommandListImmediate& InRHICmdList)
 							{
-								Self->EnqueueStatsReadback(InRHICmdList, SortedBuffer->GetRHI(), ParticleCount, /*bCompactMode=*/false);
+								Self->EnqueueStatsReadback(InRHICmdList, ParticleBuffer->GetRHI(), ParticleCount, /*bCompactMode=*/false);
 							});
 					}
 					else
 					{
 						// Compact 32-byte readback (50% bandwidth reduction)
-						// Used when only Position, ParticleID, SourceID, NeighborCount needed
-						// Create compact stats buffer
+						// ParticleCount (CPU) is used as safe upper bound for allocation only
+						// Shader uses ParticleCountBuffer[6] (GPU-accurate) for bounds
 						FRDGBufferDesc CompactBufferDesc = FRDGBufferDesc::CreateStructuredDesc(
 							sizeof(FCompactParticleStats), ParticleCount);
 						FRDGBufferRef CompactBuffer = GraphBuilder.CreateBuffer(CompactBufferDesc, TEXT("CompactStatsBuffer"));
 
-						// Run compact extraction shader
+						// Register ParticleCountBuffer for indirect dispatch + shader bounds
+						FRDGBufferRef CountBuffer = GraphBuilder.RegisterExternalBuffer(
+							Self->PersistentParticleCountBuffer, TEXT("ParticleCountBuffer_CompactStats"));
+
 						{
 							FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 							TShaderMapRef<FCompactStatsCS> ComputeShader(GlobalShaderMap);
@@ -1253,24 +1245,18 @@ void FGPUFluidSimulator::EndFrame()
 							FCompactStatsCS::FParameters* PassParameters =
 								GraphBuilder.AllocParameters<FCompactStatsCS::FParameters>();
 
-							PassParameters->InParticles = GraphBuilder.CreateSRV(SortedBuffer);
+							PassParameters->InParticles = GraphBuilder.CreateSRV(ParticleBuffer);
 							PassParameters->OutCompactStats = GraphBuilder.CreateUAV(CompactBuffer);
-							PassParameters->ParticleCount = ParticleCount;
+							PassParameters->ParticleCountBuffer = GraphBuilder.CreateSRV(CountBuffer);
 
-							const int32 ThreadGroupSize = FCompactStatsCS::ThreadGroupSize;
-							const int32 NumGroups = FMath::DivideAndRoundUp(ParticleCount, ThreadGroupSize);
-
-							FComputeShaderUtils::AddPass(
-								GraphBuilder,
-								RDG_EVENT_NAME("GPUFluid::CompactStats(%d)", ParticleCount),
-								ComputeShader,
-								PassParameters,
-								FIntVector(NumGroups, 1, 1));
+							GPUIndirectDispatch::AddIndirectComputePass(GraphBuilder,
+								RDG_EVENT_NAME("GPUFluid::CompactStats(Indirect)"),
+								ComputeShader, PassParameters, CountBuffer,
+								GPUIndirectDispatch::IndirectArgsOffset_TG256);
 						}
 
-						// Readback compact buffer
 						AddReadbackBufferPass(GraphBuilder,
-							RDG_EVENT_NAME("GPUFluid::ParticleIDSortedReadback(Compact)"),
+							RDG_EVENT_NAME("GPUFluid::ZOrderReadback(Compact)"),
 							CompactBuffer,
 							[Self, CompactBuffer, ParticleCount](FRHICommandListImmediate& InRHICmdList)
 							{
@@ -1313,6 +1299,7 @@ void FGPUFluidSimulator::EndFrame()
 				SCOPED_DRAW_EVENT(RHICmdList, EndFrame_SwapNeighborCache);
 				Self->SwapNeighborCacheBuffers();
 			}
+
 		}
 	);
 
@@ -2163,214 +2150,6 @@ void FGPUFluidSimulator::ExecutePostSimulation(
 	}
 }
 
-//=============================================================================
-// ParticleID Sort Pipeline - Sorts particles by ParticleID for O(1) oldest removal
-//=============================================================================
-
-FRDGBufferRef FGPUFluidSimulator::ExecuteParticleIDSortPipeline(
-	FRDGBuilder& GraphBuilder,
-	FRDGBufferRef InParticleBuffer,
-	int32 ParticleCount)
-{
-	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid::ParticleIDSort");
-
-	if (ParticleCount <= 0)
-	{
-		return InParticleBuffer;
-	}
-
-	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-
-	// Pre-allocate to MaxParticleCount to avoid D3D12 pool allocation hitches
-	const int32 AllocCount = MaxParticleCount > 0 ? MaxParticleCount : ParticleCount;
-
-	// ParticleID is 32-bit, 8 bits per pass = 4 passes total
-	const int32 RadixSortPasses = 4;
-	const int32 NumBlocks = FMath::DivideAndRoundUp(ParticleCount, GPU_RADIX_ELEMENTS_PER_GROUP);
-	const int32 RequiredHistogramSize = GPU_RADIX_SIZE * NumBlocks;
-
-	// Create transient buffers for sorting (sized to AllocCount)
-	FRDGBufferDesc KeysDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), AllocCount);
-	FRDGBufferRef Keys[2] = {
-		GraphBuilder.CreateBuffer(KeysDesc, TEXT("ParticleIDSort.Keys0")),
-		GraphBuilder.CreateBuffer(KeysDesc, TEXT("ParticleIDSort.Keys1"))
-	};
-
-	FRDGBufferDesc ValuesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), AllocCount);
-	FRDGBufferRef Values[2] = {
-		GraphBuilder.CreateBuffer(ValuesDesc, TEXT("ParticleIDSort.Values0")),
-		GraphBuilder.CreateBuffer(ValuesDesc, TEXT("ParticleIDSort.Values1"))
-	};
-
-	FRDGBufferDesc HistogramDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), RequiredHistogramSize);
-	FRDGBufferRef Histogram = GraphBuilder.CreateBuffer(HistogramDesc, TEXT("ParticleIDSort.Histogram"));
-
-	FRDGBufferDesc BucketOffsetsDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), GPU_RADIX_SIZE);
-	FRDGBufferRef BucketOffsets = GraphBuilder.CreateBuffer(BucketOffsetsDesc, TEXT("ParticleIDSort.BucketOffsets"));
-
-	int32 BufferIndex = 0;
-
-	for (int32 Pass = 0; Pass < RadixSortPasses; ++Pass)
-	{
-		const int32 BitOffset = Pass * GPU_RADIX_BITS;
-		const int32 SrcIndex = BufferIndex;
-		const int32 DstIndex = BufferIndex ^ 1;
-
-		RDG_EVENT_SCOPE(GraphBuilder, "ParticleIDSort Pass %d (bits %d-%d)", Pass, BitOffset, BitOffset + 7);
-
-		if (Pass == 0)
-		{
-			// First pass: Read directly from Particles[].ParticleID
-			// Histogram pass
-			{
-				TShaderMapRef<FRadixSortHistogramParticleIDCS> HistogramShader(ShaderMap);
-				FRadixSortHistogramParticleIDCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortHistogramParticleIDCS::FParameters>();
-				Params->Particles = GraphBuilder.CreateSRV(InParticleBuffer);
-				Params->Histogram = GraphBuilder.CreateUAV(Histogram);
-				Params->ElementCount = ParticleCount;
-				Params->BitOffset = BitOffset;
-				Params->NumGroups = NumBlocks;
-
-				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("ParticleID_Histogram"), HistogramShader, Params, FIntVector(NumBlocks, 1, 1));
-			}
-
-			// Global Prefix Sum
-			{
-				TShaderMapRef<FRadixSortGlobalPrefixSumCS> PrefixSumShader(ShaderMap);
-				FRadixSortGlobalPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortGlobalPrefixSumCS::FParameters>();
-				Params->Histogram = GraphBuilder.CreateUAV(Histogram);
-				Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
-				Params->NumGroups = NumBlocks;
-
-				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("GlobalPrefixSum"), PrefixSumShader, Params, FIntVector(1, 1, 1));
-			}
-
-			// Bucket Prefix Sum
-			{
-				TShaderMapRef<FRadixSortBucketPrefixSumCS> BucketSumShader(ShaderMap);
-				FRadixSortBucketPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortBucketPrefixSumCS::FParameters>();
-				Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
-
-				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("BucketPrefixSum"), BucketSumShader, Params, FIntVector(1, 1, 1));
-			}
-
-			// Scatter pass - reads from Particles, writes to Keys/Values
-			{
-				TShaderMapRef<FRadixSortScatterParticleIDCS> ScatterShader(ShaderMap);
-				FRadixSortScatterParticleIDCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortScatterParticleIDCS::FParameters>();
-				Params->Particles = GraphBuilder.CreateSRV(InParticleBuffer);
-				Params->KeysOut = GraphBuilder.CreateUAV(Keys[DstIndex]);
-				Params->ValuesOut = GraphBuilder.CreateUAV(Values[DstIndex]);
-				Params->HistogramSRV = GraphBuilder.CreateSRV(Histogram);
-				Params->GlobalOffsetsSRV = GraphBuilder.CreateSRV(BucketOffsets);
-				Params->ElementCount = ParticleCount;
-				Params->BitOffset = BitOffset;
-
-				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("ParticleID_Scatter"), ScatterShader, Params, FIntVector(NumBlocks, 1, 1));
-			}
-		}
-		else
-		{
-			// Subsequent passes: Read from Keys/Values buffers (standard radix sort)
-			// Histogram pass
-			{
-				TShaderMapRef<FRadixSortHistogramCS> HistogramShader(ShaderMap);
-				FRadixSortHistogramCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortHistogramCS::FParameters>();
-				Params->KeysIn = GraphBuilder.CreateSRV(Keys[SrcIndex]);
-				Params->ValuesIn = GraphBuilder.CreateSRV(Values[SrcIndex]);
-				Params->Histogram = GraphBuilder.CreateUAV(Histogram);
-				Params->ElementCount = ParticleCount;
-				Params->BitOffset = BitOffset;
-				Params->NumGroups = NumBlocks;
-
-				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Histogram"), HistogramShader, Params, FIntVector(NumBlocks, 1, 1));
-			}
-
-			// Global Prefix Sum
-			{
-				TShaderMapRef<FRadixSortGlobalPrefixSumCS> PrefixSumShader(ShaderMap);
-				FRadixSortGlobalPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortGlobalPrefixSumCS::FParameters>();
-				Params->Histogram = GraphBuilder.CreateUAV(Histogram);
-				Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
-				Params->NumGroups = NumBlocks;
-
-				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("GlobalPrefixSum"), PrefixSumShader, Params, FIntVector(1, 1, 1));
-			}
-
-			// Bucket Prefix Sum
-			{
-				TShaderMapRef<FRadixSortBucketPrefixSumCS> BucketSumShader(ShaderMap);
-				FRadixSortBucketPrefixSumCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortBucketPrefixSumCS::FParameters>();
-				Params->GlobalOffsets = GraphBuilder.CreateUAV(BucketOffsets);
-
-				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("BucketPrefixSum"), BucketSumShader, Params, FIntVector(1, 1, 1));
-			}
-
-			// Scatter pass
-			{
-				TShaderMapRef<FRadixSortScatterCS> ScatterShader(ShaderMap);
-				FRadixSortScatterCS::FParameters* Params = GraphBuilder.AllocParameters<FRadixSortScatterCS::FParameters>();
-				Params->KeysIn = GraphBuilder.CreateSRV(Keys[SrcIndex]);
-				Params->ValuesIn = GraphBuilder.CreateSRV(Values[SrcIndex]);
-				Params->KeysOut = GraphBuilder.CreateUAV(Keys[DstIndex]);
-				Params->ValuesOut = GraphBuilder.CreateUAV(Values[DstIndex]);
-				Params->HistogramSRV = GraphBuilder.CreateSRV(Histogram);
-				Params->GlobalOffsetsSRV = GraphBuilder.CreateSRV(BucketOffsets);
-				Params->ElementCount = ParticleCount;
-				Params->BitOffset = BitOffset;
-
-				FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Scatter"), ScatterShader, Params, FIntVector(NumBlocks, 1, 1));
-			}
-		}
-
-		BufferIndex ^= 1;
-	}
-
-	// Final sorted indices are in Values[BufferIndex]
-	FRDGBufferRef SortedIndices = Values[BufferIndex];
-
-	// Reorder particle data based on sorted indices
-	FRDGBufferDesc SortedParticlesDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUFluidParticle), AllocCount);
-	FRDGBufferRef SortedParticleBuffer = GraphBuilder.CreateBuffer(SortedParticlesDesc, TEXT("ParticleIDSort.SortedParticles"));
-
-	// Reordering attachment buffers not needed for ParticleID sort - create dummy buffer
-	FRDGBufferDesc DummyAttachmentDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FGPUBoneDeltaAttachment), 1);
-	FRDGBufferRef DummyAttachmentBuffer = GraphBuilder.CreateBuffer(DummyAttachmentDesc, TEXT("ParticleIDSort.DummyAttachment"));
-
-	// Clear dummy buffer to satisfy RDG validation (buffer must be written before read)
-	AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(DummyAttachmentBuffer), 0);
-
-	{
-		TShaderMapRef<FReorderParticlesCS> ComputeShader(ShaderMap);
-		FReorderParticlesCS::FParameters* Params = GraphBuilder.AllocParameters<FReorderParticlesCS::FParameters>();
-		Params->OldParticles = GraphBuilder.CreateSRV(InParticleBuffer);
-		Params->SortedIndices = GraphBuilder.CreateSRV(SortedIndices);
-		Params->SortedParticles = GraphBuilder.CreateUAV(SortedParticleBuffer);
-		// Dummy buffer binding (RDG does not allow nullptr)
-		Params->OldBoneDeltaAttachments = GraphBuilder.CreateSRV(DummyAttachmentBuffer);
-		Params->SortedBoneDeltaAttachments = GraphBuilder.CreateUAV(DummyAttachmentBuffer);
-		Params->bReorderAttachments = 0;  // Do not actually reorder
-		Params->ParticleCount = ParticleCount;
-		if (PersistentParticleCountBuffer.IsValid())
-		{
-			FRDGBufferRef ParticleCountBuffer = GraphBuilder.RegisterExternalBuffer(PersistentParticleCountBuffer);
-			Params->ParticleCountBuffer = GraphBuilder.CreateSRV(ParticleCountBuffer);
-		}
-
-		const int32 NumGroups = FMath::DivideAndRoundUp(ParticleCount, FReorderParticlesCS::ThreadGroupSize);
-
-		FComputeShaderUtils::AddPass(
-			GraphBuilder,
-			RDG_EVENT_NAME("ParticleIDSort::ReorderParticles(%d)", ParticleCount),
-			ComputeShader,
-			Params,
-			FIntVector(NumGroups, 1, 1)
-		);
-	}
-
-	return SortedParticleBuffer;
-}
-
 void FGPUFluidSimulator::ExtractPersistentBuffers(
 	FRDGBuilder& GraphBuilder,
 	FRDGBufferRef ParticleBuffer,
@@ -2474,22 +2253,36 @@ void FGPUFluidSimulator::AddSpawnRequests(const TArray<FGPUSpawnRequest>& Reques
 	if (SpawnManager.IsValid()) { SpawnManager->AddSpawnRequests(Requests); }
 }
 
-void FGPUFluidSimulator::AddDespawnByIDRequests(const TArray<int32>& ParticleIDs)
+void FGPUFluidSimulator::AddGPUDespawnBrushRequest(const FVector3f& Center, float Radius)
 {
-	if (SpawnManager.IsValid() && ParticleIDs.Num() > 0)
+	if (SpawnManager.IsValid())
 	{
-		SpawnManager->AddDespawnByIDRequests(ParticleIDs);
-		// Count update happens in PrepareParticleBuffer after AddDespawnByIDPass execution
+		SpawnManager->AddGPUDespawnBrushRequest(Center, Radius);
 	}
 }
 
-int32 FGPUFluidSimulator::AddDespawnByIDRequestsFiltered(const TArray<int32>& CandidateIDs, int32 MaxCount)
+void FGPUFluidSimulator::AddGPUDespawnSourceRequest(int32 SourceID)
 {
-	if (SpawnManager.IsValid() && CandidateIDs.Num() > 0 && MaxCount > 0)
+	if (SpawnManager.IsValid())
 	{
-		return SpawnManager->AddDespawnByIDRequestsFiltered(CandidateIDs, MaxCount);
+		SpawnManager->AddGPUDespawnSourceRequest(SourceID);
 	}
-	return 0;
+}
+
+void FGPUFluidSimulator::AddGPUDespawnOldestRequest(int32 IncomingSpawnCount)
+{
+	if (SpawnManager.IsValid())
+	{
+		SpawnManager->AddGPUDespawnOldestRequest(IncomingSpawnCount);
+	}
+}
+
+void FGPUFluidSimulator::AddGPUExplicitRemoveOldestRequest(int32 RemoveCount)
+{
+	if (SpawnManager.IsValid())
+	{
+		SpawnManager->AddGPUExplicitRemoveOldestRequest(RemoveCount);
+	}
 }
 
 bool FGPUFluidSimulator::GetParticlePositionsAndIDs(TArray<FVector3f>& OutPositions, TArray<int32>& OutParticleIDs, TArray<int32>& OutSourceIDs)
@@ -4154,7 +3947,10 @@ void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdLi
 		return;  // No ready buffers
 	}
 
-	const int32 ParticleCount = StatsReadbackParticleCounts[ReadIdx];
+	// Use min(stored, CurrentParticleCount) to handle CPU/GPU count desync after despawn.
+	// ProcessParticleCountReadback runs first, so CurrentParticleCount reflects GPU-accurate count.
+	// stored count may be stale (too high) if despawn compacted particles after enqueue.
+	const int32 ParticleCount = FMath::Min(StatsReadbackParticleCounts[ReadIdx], CurrentParticleCount);
 	if (ParticleCount <= 0)
 	{
 		return;
@@ -4459,13 +4255,8 @@ void FGPUFluidSimulator::ProcessStatsReadback(FRHICommandListImmediate& RHICmdLi
 			}
 		}
 
-		// Grab DespawnByIDLock outside BufferLock (prevent lock nesting)
-		// Cannot reuse built array in CleanupCompletedRequests (MoveTemped)
-		// Can just reference CachedAllParticleIDs - safe here since only render thread modifies
-		if (SpawnManager.IsValid())
-		{
-			SpawnManager->CleanupCompletedRequests(CachedAllParticleIDs);
-		}
+		// GPU-driven despawn: no CPU-side cleanup needed
+		// (CleanupCompletedRequests removed - despawn decisions are purely GPU-side)
 	}
 
 	StatsReadbacks[ReadIdx]->Unlock();

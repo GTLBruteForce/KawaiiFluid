@@ -404,7 +404,7 @@ void FFluidPreviewScene::SpawnParticles(float DeltaTime)
 		if (CurrentCount > Settings.MaxParticleCount)
 		{
 			const int32 ToRemove = CurrentCount - Settings.MaxParticleCount;
-			SimulationModule->RemoveOldestParticlesForSource(0, ToRemove);
+			GPUSimulator->AddGPUExplicitRemoveOldestRequest(ToRemove);
 		}
 	}
 }

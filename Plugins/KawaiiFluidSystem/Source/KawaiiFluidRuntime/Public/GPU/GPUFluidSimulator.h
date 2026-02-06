@@ -153,7 +153,7 @@ public:
 		bEverHadParticles = false;
 		PersistentParticleCountBuffer = nullptr;
 
-		// Also reset SpawnManager state (NextParticleID, AlreadyRequestedIDs, etc.)
+		// Also reset SpawnManager state (NextParticleID, despawn queues, etc.)
 		if (SpawnManager)
 		{
 			SpawnManager->Reset();
@@ -713,20 +713,30 @@ public:
 	void AddSpawnRequests(const TArray<FGPUSpawnRequest>& Requests);
 
 	/**
-	 * Add despawn requests by particle IDs (thread-safe)
-	 * Uses binary search on GPU for O(log n) matching per particle
-	 * CleanupCompletedRequests is called from ProcessStatsReadback when readback completes
-	 * @param ParticleIDs - Array of particle IDs to despawn
+	 * Add GPU brush despawn request - removes particles within radius (thread-safe)
+	 * @param Center - World position of brush center
+	 * @param Radius - Brush radius
 	 */
-	void AddDespawnByIDRequests(const TArray<int32>& ParticleIDs);
+	void AddGPUDespawnBrushRequest(const FVector3f& Center, float Radius);
 
 	/**
-	 * Add despawn requests, filtering out already requested IDs
-	 * @param CandidateIDs - Sorted array of candidate particle IDs
-	 * @param MaxCount - Maximum number of new IDs to add
-	 * @return Number of new IDs actually added
+	 * Add GPU source despawn request - removes all particles with SourceID (thread-safe)
+	 * @param SourceID - Source component ID to despawn
 	 */
-	int32 AddDespawnByIDRequestsFiltered(const TArray<int32>& CandidateIDs, int32 MaxCount);
+	void AddGPUDespawnSourceRequest(int32 SourceID);
+
+	/**
+	 * Add GPU oldest despawn request for recycling (thread-safe, cumulative)
+	 * GPU computes actual removal: max(0, GPU_Count + IncomingSpawnCount - MaxParticleCount)
+	 * @param IncomingSpawnCount - Number of particles about to be spawned
+	 */
+	void AddGPUDespawnOldestRequest(int32 IncomingSpawnCount);
+
+	/**
+	 * Add explicit oldest removal - removes exactly N oldest particles (thread-safe, cumulative)
+	 * @param RemoveCount - Exact number to remove (CPU specifies count)
+	 */
+	void AddGPUExplicitRemoveOldestRequest(int32 RemoveCount);
 
 	/**
 	 * Lightweight API for despawn operations - returns positions, IDs and source IDs
@@ -1112,19 +1122,6 @@ private:
 	//=============================================================================
 	// ParticleID Sorting for Readback Optimization
 	//=============================================================================
-
-	/**
-	 * Execute ParticleID sort pipeline - sorts particles by ParticleID (oldest first)
-	 * Used for CPU readback optimization: enables O(1) oldest particle removal
-	 * @param GraphBuilder - RDG builder
-	 * @param InParticleBuffer - Input particle buffer (Z-Order sorted)
-	 * @param ParticleCount - Number of particles
-	 * @return Sorted particle buffer (transient, valid within RDG scope)
-	 */
-	FRDGBufferRef ExecuteParticleIDSortPipeline(
-		FRDGBuilder& GraphBuilder,
-		FRDGBufferRef InParticleBuffer,
-		int32 ParticleCount);
 
 private:
 	//=============================================================================

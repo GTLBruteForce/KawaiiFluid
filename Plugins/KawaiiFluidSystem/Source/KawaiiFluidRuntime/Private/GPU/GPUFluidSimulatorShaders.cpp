@@ -76,9 +76,29 @@ IMPLEMENT_GLOBAL_SHADER(FSpawnParticlesCS,
 	"/Plugin/KawaiiFluidSystem/Private/FluidSpawnParticles.usf",
 	"SpawnParticlesCS", SF_Compute);
 
-IMPLEMENT_GLOBAL_SHADER(FMarkDespawnByIDCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidDespawnByID.usf",
-	"MarkDespawnByIDCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FMarkDespawnByBrushCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidDespawnByBrush.usf",
+	"MarkDespawnByBrushCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FMarkDespawnBySourceCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidDespawnBySource.usf",
+	"MarkDespawnBySourceCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FBuildIDHistogramCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidDespawnOldest.usf",
+	"BuildIDHistogramCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FFindOldestThresholdCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidDespawnOldest.usf",
+	"FindOldestThresholdCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FMarkOldestParticlesCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidDespawnOldest.usf",
+	"MarkOldestParticlesCS", SF_Compute);
+
+IMPLEMENT_GLOBAL_SHADER(FUpdateSourceCountersDespawnCS,
+	"/Plugin/KawaiiFluidSystem/Private/FluidUpdateSourceCountersDespawn.usf",
+	"UpdateSourceCountersDespawnCS", SF_Compute);
 
 IMPLEMENT_GLOBAL_SHADER(FPrefixSumBlockCS_RDG,
 	"/Plugin/KawaiiFluidSystem/Private/FluidPrefixSum.usf",
@@ -176,18 +196,6 @@ IMPLEMENT_GLOBAL_SHADER(FRadixSortScatterCS,
 IMPLEMENT_GLOBAL_SHADER(FRadixSortSmallCS,
 	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
 	"RadixSortSmallCS", SF_Compute);
-
-//=============================================================================
-// ParticleID Radix Sort Shaders
-//=============================================================================
-
-IMPLEMENT_GLOBAL_SHADER(FRadixSortHistogramParticleIDCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
-	"RadixSortHistogramParticleIDCS", SF_Compute);
-
-IMPLEMENT_GLOBAL_SHADER(FRadixSortScatterParticleIDCS,
-	"/Plugin/KawaiiFluidSystem/Private/FluidRadixSort.usf",
-	"RadixSortScatterParticleIDCS", SF_Compute);
 
 //=============================================================================
 // Particle Reordering Shaders

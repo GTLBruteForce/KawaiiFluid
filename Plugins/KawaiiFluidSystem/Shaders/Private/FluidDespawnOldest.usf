@@ -1,0 +1,161 @@
+// Copyright KawaiiFluid Team. All Rights Reserved.
+// Oldest-Based Despawn Shader - Removes N oldest particles using histogram approach
+// 3 kernels: BuildIDHistogramCS, FindOldestThresholdCS, MarkOldestParticlesCS
+
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+
+// ===================================================================================
+// Struct Definitions (Must match C++)
+// ===================================================================================
+
+struct FGPUFluidParticle
+{
+	float3 Position;           // 12 bytes
+	float Mass;                // 4 bytes (total: 16)
+	float3 PredictedPosition;  // 12 bytes
+	float Density;             // 4 bytes (total: 32)
+	float3 Velocity;           // 12 bytes
+	float Lambda;              // 4 bytes (total: 48)
+	int ParticleID;            // 4 bytes
+	int SourceID;              // 4 bytes
+	uint Flags;                // 4 bytes
+	uint NeighborCount;        // 4 bytes (total: 64)
+};
+
+// ===================================================================================
+// Shared Parameters
+// ===================================================================================
+
+StructuredBuffer<FGPUFluidParticle> Particles;
+StructuredBuffer<uint> ParticleCountBuffer;
+
+// ===================================================================================
+// Pass 1: BuildIDHistogramCS
+// Builds a 256-bucket histogram of ParticleID upper bits
+// ===================================================================================
+
+RWStructuredBuffer<uint> IDHistogram;      // uint32 x 256
+int IDShiftBits;                           // = max(0, floor(log2(max(1, NextParticleID))) - 7)
+
+groupshared uint SharedHist[256];
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void BuildIDHistogramCS(uint3 GroupId : SV_GroupID, uint3 GroupThreadId : SV_GroupThreadID, uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	const uint tid = GroupThreadId.x;
+	const uint Count = ParticleCountBuffer[6];
+
+	// Clear shared histogram
+	SharedHist[tid] = 0;
+	GroupMemoryBarrierWithGroupSync();
+
+	// Each thread processes exactly one particle (dispatch covers all)
+	const uint i = DispatchThreadId.x;
+	if (i < Count)
+	{
+		uint pid = (uint)Particles[i].ParticleID;
+		uint bucket = pid >> (uint)IDShiftBits;
+		bucket = min(bucket, 255u);
+		InterlockedAdd(SharedHist[bucket], 1);
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+
+	// Flush shared histogram to global
+	if (SharedHist[tid] > 0)
+	{
+		InterlockedAdd(IDHistogram[tid], SharedHist[tid]);
+	}
+}
+
+// ===================================================================================
+// Pass 2: FindOldestThresholdCS
+// Scans histogram from bucket 0 upward to find threshold bucket
+// Single-threaded pass (256 buckets is trivial)
+// ===================================================================================
+
+RWStructuredBuffer<uint> OldestThreshold;  // [0] = threshold bucket, [1] = remaining count in boundary bucket
+int IncomingSpawnCount;    // recycle mode: GPU computes removal from counts
+int MaxParticleCount;      // recycle mode: max particle capacity
+int ExplicitRemoveCount;   // explicit mode: remove exactly this many
+
+[numthreads(1, 1, 1)]
+void FindOldestThresholdCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	// Compute total removal: explicit + recycle
+	int currentCount = (int)ParticleCountBuffer[6];
+	int recycleRemove = max(0, currentCount + IncomingSpawnCount - MaxParticleCount);
+	int removeCount = ExplicitRemoveCount + recycleRemove;
+
+	if (removeCount <= 0)
+	{
+		// No removal needed - threshold bucket 0 with 0 remaining = no marks
+		// (unsigned: bucket < 0u is always false, bucket == 0 && 0 > 0 is false)
+		OldestThreshold[0] = 0;
+		OldestThreshold[1] = 0;
+		return;
+	}
+
+	uint acc = 0;
+
+	for (uint b = 0; b < 256; ++b)
+	{
+		uint bucketCount = IDHistogram[b];
+		if (acc + bucketCount >= (uint)removeCount)
+		{
+			OldestThreshold[0] = b;
+			OldestThreshold[1] = (uint)removeCount - acc;
+			return;
+		}
+		acc += bucketCount;
+	}
+
+	// RemoveCount exceeds total particles - mark all as removable
+	OldestThreshold[0] = 255;
+	OldestThreshold[1] = (uint)removeCount - acc;
+}
+
+// ===================================================================================
+// Pass 3: MarkOldestParticlesCS
+// Marks particles in buckets below threshold, plus atomic counting at boundary
+// ===================================================================================
+
+RWStructuredBuffer<uint> OutAliveMask;
+RWStructuredBuffer<uint> BoundaryCounter;  // uint32 x 1 (atomic counter for boundary bucket)
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void MarkOldestParticlesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	const uint Index = DispatchThreadId.x;
+	const uint Count = ParticleCountBuffer[6];
+
+	if (Index >= Count)
+	{
+		OutAliveMask[Index] = 0;
+		return;
+	}
+
+	uint pid = (uint)Particles[Index].ParticleID;
+	uint bucket = pid >> (uint)IDShiftBits;
+	bucket = min(bucket, 255u);
+
+	uint thresholdBucket = OldestThreshold[0];
+	uint remaining = OldestThreshold[1];
+
+	if (bucket < thresholdBucket)
+	{
+		// Definitely below threshold - mark for removal
+		OutAliveMask[Index] = 0;
+	}
+	else if (bucket == thresholdBucket && remaining > 0)
+	{
+		// Boundary bucket - use atomic counter for exact N removal
+		uint prev;
+		InterlockedAdd(BoundaryCounter[0], 1, prev);
+		if (prev < remaining)
+		{
+			OutAliveMask[Index] = 0;
+		}
+	}
+}

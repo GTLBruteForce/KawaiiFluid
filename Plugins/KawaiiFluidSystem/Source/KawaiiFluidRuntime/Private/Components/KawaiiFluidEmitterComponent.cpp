@@ -665,9 +665,10 @@ void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 				const int32 Margin = SpawnedThisFrame * 3;
 
 				// Check Volume total particle count
+				FGPUFluidSimulator* GPUSim = Module->GetGPUSimulator();
 				int32 VolumeMax = MaxParticleCount;
 				int32 VolumeTotalCount = CurrentCount;
-				if (FGPUFluidSimulator* GPUSim = Module->GetGPUSimulator())
+				if (GPUSim)
 				{
 					VolumeMax = GPUSim->GetMaxParticleCount();
 					VolumeTotalCount = GPUSim->GetParticleCount();
@@ -679,10 +680,10 @@ void UKawaiiFluidEmitterComponent::ProcessStreamEmitter(float DeltaTime)
 				const bool bEmitterNearLimit = (CurrentCount >= MaxParticleCount - Margin);
 				const bool bVolumeNearLimit = (VolumeTotalCount >= VolumeMax - Margin);
 
-				if (bEmitterNearLimit || bVolumeNearLimit)
+				if ((bEmitterNearLimit || bVolumeNearLimit) && GPUSim)
 				{
 					const int32 ToRemove = SpawnedThisFrame;
-					Module->RemoveOldestParticlesForSource(CachedSourceID, ToRemove);
+					GPUSim->AddGPUExplicitRemoveOldestRequest(ToRemove);
 				}
 			}
 		}
@@ -1242,15 +1243,10 @@ void UKawaiiFluidEmitterComponent::ClearSpawnedParticles()
 		}
 	}
 
-	// Get particle IDs for this emitter's SourceID
-	const TArray<int32>* MyParticleIDsPtr = GPUSim->GetParticleIDsBySourceID(CachedSourceID);
-	if (MyParticleIDsPtr && MyParticleIDsPtr->Num() > 0)
-	{
-		// Request despawn of this emitter's particles
-		GPUSim->AddDespawnByIDRequests(*MyParticleIDsPtr);
-		UE_LOG(LogTemp, Log, TEXT("EmitterComponent [%s]: Clearing %d particles (SourceID=%d)"),
-			*GetName(), MyParticleIDsPtr->Num(), CachedSourceID);
-	}
+	// GPU-driven despawn: remove all particles with this emitter's SourceID
+	GPUSim->AddGPUDespawnSourceRequest(CachedSourceID);
+	UE_LOG(LogTemp, Log, TEXT("EmitterComponent [%s]: GPU despawn by source (SourceID=%d)"),
+		*GetName(), CachedSourceID);
 
 	// Reset spawned count and allow re-spawning
 	SpawnedParticleCount = 0;
@@ -1466,12 +1462,12 @@ void UKawaiiFluidEmitterComponent::DespawnAllParticles()
 		return;
 	}
 
-	// Remove all particles belonging to this emitter
-	const int32 RemovedCount = Module->RemoveOldestParticlesForSource(CachedSourceID, CurrentCount);
+	// GPU-driven despawn: remove all particles belonging to this emitter
+	Module->DespawnBySourceGPU(CachedSourceID);
 	SpawnedParticleCount = 0;
 
-	UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: DespawnAllParticles - Removed %d particles (SourceID=%d)"),
-		*GetName(), RemovedCount, CachedSourceID);
+	UE_LOG(LogTemp, Log, TEXT("UKawaiiFluidEmitterComponent [%s]: DespawnAllParticles - GPU despawn by source (SourceID=%d)"),
+		*GetName(), CachedSourceID);
 }
 
 APawn* UKawaiiFluidEmitterComponent::GetPlayerPawn()

@@ -79,6 +79,23 @@ FORCEINLINE bool HasValidSource(int32 SourceID)
 }
 
 /**
+ * GPU Despawn Brush Request
+ * Defines a spherical region for particle removal
+ * Matches HLSL FDespawnBrushRequest struct (16 bytes)
+ */
+struct FGPUDespawnBrushRequest
+{
+	FVector3f Center;    // 12 bytes - World position of brush center
+	float RadiusSq;      // 4 bytes  - Squared radius (pre-computed on CPU)
+
+	FGPUDespawnBrushRequest() : Center(FVector3f::ZeroVector), RadiusSq(0.0f) {}
+	FGPUDespawnBrushRequest(const FVector3f& InCenter, float InRadius)
+		: Center(InCenter), RadiusSq(InRadius * InRadius) {}
+};
+
+static_assert(sizeof(FGPUDespawnBrushRequest) == 16, "FGPUDespawnBrushRequest must be 16 bytes");
+
+/**
  * GPU Fluid Simulation Parameters
  * Passed to compute shaders as constant buffer
  */
