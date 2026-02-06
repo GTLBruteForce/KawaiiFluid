@@ -149,6 +149,9 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Drag Force Feedback")
 	int32 CurrentContactCount;
 
+	/** Previous frame contact count (for detecting sudden contact loss). */
+	int32 PreviousContactCount = 0;
+
 	/** Current average pressure. */
 	UPROPERTY(BlueprintReadOnly, Category = "Fluid Interaction|Drag Force Feedback")
 	float CurrentAveragePressure;

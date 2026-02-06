@@ -491,6 +491,13 @@ void FGPUFluidSimulator::SimulateSubstep_RDG(FRDGBuilder& GraphBuilder, const FG
 		return;
 	}
 
+	// Skip if all particles were despawned (e.g. exited trigger volume)
+	// bEverHadParticles stays true, but spatial data (CellStart etc.) won't be built for 0 particles
+	if (CurrentParticleCount <= 0)
+	{
+		return;
+	}
+
 	// Need persistent buffer for simulation
 	if (!PersistentParticleBuffer.IsValid())
 	{
@@ -1688,8 +1695,10 @@ void FGPUFluidSimulator::ExecuteConstraintSolverLoop(
 {
 	RDG_EVENT_SCOPE(GraphBuilder, "GPUFluid_ConstraintSolverLoop");
 
-	// Skip constraint solver when no particles (avoid 0-size buffer creation)
-	if (!bEverHadParticles)
+	// Skip constraint solver when no particles exist
+	// NOTE: bEverHadParticles stays true after despawn, so also check CurrentParticleCount
+	// to avoid running passes with null spatial data (CellStartSRV etc.)
+	if (!bEverHadParticles || CurrentParticleCount <= 0)
 	{
 		return;
 	}

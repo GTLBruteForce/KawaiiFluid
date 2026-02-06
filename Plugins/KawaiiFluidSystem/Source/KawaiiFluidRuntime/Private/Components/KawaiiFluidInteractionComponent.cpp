@@ -289,14 +289,23 @@ void UKawaiiFluidInteractionComponent::ProcessCollisionFeedback(float DeltaTime)
 
 	if (!TargetSubsystem)
 	{
-		// No contact → decay force
-		SmoothedForce = FMath::VInterpTo(SmoothedForce, FVector::ZeroVector, DeltaTime, ForceSmoothingSpeed);
-		CurrentFluidForce = SmoothedForce;
 		CurrentContactCount = 0;
+		// No subsystem: check for sudden loss vs gradual decay
+		if (PreviousContactCount > 0)
+		{
+			// Sudden contact loss → immediate reset
+			SmoothedForce = FVector::ZeroVector;
+			EstimatedBuoyancyCenterOffset = FVector::ZeroVector;
+		}
+		else
+		{
+			SmoothedForce = FMath::VInterpTo(SmoothedForce, FVector::ZeroVector, DeltaTime, ForceSmoothingSpeed);
+			EstimatedBuoyancyCenterOffset = FMath::VInterpTo(
+				EstimatedBuoyancyCenterOffset, FVector::ZeroVector, DeltaTime, 2.0f);
+		}
+		CurrentFluidForce = SmoothedForce;
 		CurrentAveragePressure = 0.0f;
-		// Gradual decay (prevents sudden changes)
-		EstimatedBuoyancyCenterOffset = FMath::VInterpTo(
-			EstimatedBuoyancyCenterOffset, FVector::ZeroVector, DeltaTime, 2.0f);
+		PreviousContactCount = CurrentContactCount;
 		return;
 	}
 
@@ -320,6 +329,12 @@ void UKawaiiFluidInteractionComponent::ProcessCollisionFeedback(float DeltaTime)
 
 		FGPUFluidSimulator* GPUSimulator = Module->GetGPUSimulator();
 		if (!GPUSimulator)
+		{
+			continue;
+		}
+
+		// Skip modules with no active particles (readback data is stale after despawn)
+		if (GPUSimulator->GetParticleCount() <= 0)
 		{
 			continue;
 		}
@@ -381,12 +396,22 @@ void UKawaiiFluidInteractionComponent::ProcessCollisionFeedback(float DeltaTime)
 
 	if (!GPUSimulator && CurrentContactCount == 0)
 	{
-		// No contact → decay force
-		SmoothedForce = FMath::VInterpTo(SmoothedForce, FVector::ZeroVector, DeltaTime, ForceSmoothingSpeed);
+		// No contact: check for sudden loss vs gradual decay
+		if (PreviousContactCount > 0)
+		{
+			// Sudden contact loss → immediate reset
+			SmoothedForce = FVector::ZeroVector;
+			EstimatedBuoyancyCenterOffset = FVector::ZeroVector;
+		}
+		else
+		{
+			SmoothedForce = FMath::VInterpTo(SmoothedForce, FVector::ZeroVector, DeltaTime, ForceSmoothingSpeed);
+			EstimatedBuoyancyCenterOffset = FMath::VInterpTo(
+				EstimatedBuoyancyCenterOffset, FVector::ZeroVector, DeltaTime, 2.0f);
+		}
 		CurrentFluidForce = SmoothedForce;
 		CurrentAveragePressure = 0.0f;
-		EstimatedBuoyancyCenterOffset = FMath::VInterpTo(
-			EstimatedBuoyancyCenterOffset, FVector::ZeroVector, DeltaTime, 2.0f);
+		PreviousContactCount = CurrentContactCount;
 		return;
 	}
 
@@ -593,10 +618,18 @@ void UKawaiiFluidInteractionComponent::ProcessCollisionFeedback(float DeltaTime)
 		}
 		else
 		{
-			// No contacts: decay slowly (don't reset immediately)
-			// This prevents flickering due to GPU readback latency
-			EstimatedBuoyancyCenterOffset = FMath::VInterpTo(
-				EstimatedBuoyancyCenterOffset, FVector::ZeroVector, DeltaTime, BuoyancyCenterSmoothingSpeed * 0.5f);
+			// No buoyancy contacts: check if this is a sudden loss (particles disappeared)
+			if (PreviousContactCount > 0 && CurrentContactCount <= 0)
+			{
+				// Sudden contact loss → immediate reset (particles disappeared entirely)
+				EstimatedBuoyancyCenterOffset = FVector::ZeroVector;
+			}
+			else
+			{
+				// Gradual contact loss → decay slowly (GPU readback flickering prevention)
+				EstimatedBuoyancyCenterOffset = FMath::VInterpTo(
+					EstimatedBuoyancyCenterOffset, FVector::ZeroVector, DeltaTime, BuoyancyCenterSmoothingSpeed * 0.5f);
+			}
 		}
 	}
 	else
@@ -621,6 +654,9 @@ void UKawaiiFluidInteractionComponent::ProcessCollisionFeedback(float DeltaTime)
 	{
 		CheckBoneImpacts();
 	}
+
+	// Track contact count for next frame's sudden-loss detection
+	PreviousContactCount = CurrentContactCount;
 
 	// Update fluid tag events (OnFluidEnter/OnFluidExit)
 	UpdateFluidTagEvents();
