@@ -207,8 +207,8 @@ float G_SchlickGGX(float NoX, float Roughness)
  * Smith Geometry Function (combined view and light).
  * Combines shadowing from both view and light directions.
  *
- * @param NoV Dot product of Normal and View direction
- * @param NoL Dot product of Normal and Light direction
+ * @param NoV Normal dot View
+ * @param NoL Normal dot Light
  * @param Roughness Surface roughness
  * @return Combined geometry term G
  */
@@ -679,11 +679,10 @@ bool SampleFluidSurface(float2 UV, float2 FluidUV, float2 SceneUV, out FFluidSur
 	OutSurface.ViewPos = ReconstructViewPosition(UV, OutSurface.Depth);
 	OutSurface.ViewDir = normalize(-OutSurface.ViewPos);
 
-	// Ensure normal faces camera
-	if (dot(OutSurface.Normal, OutSurface.ViewDir) < 0.0)
-	{
-		OutSurface.Normal = -OutSurface.Normal;
-	}
+	// Ensure normal faces camera with smooth transition to prevent rapid flipping/shimmering at grazing angles
+	float NoV_Raw = dot(OutSurface.Normal, OutSurface.ViewDir);
+	float FacingWeight = saturate(NoV_Raw * 10.0 + 0.5); // Smooth blend instead of hard if()
+	OutSurface.Normal = normalize(lerp(OutSurface.ViewDir, OutSurface.Normal, FacingWeight));
 
 	// Grazing angle compensation for stable shading
 	float RawNoV = saturate(dot(OutSurface.Normal, OutSurface.ViewDir));
@@ -948,6 +947,7 @@ void CalculateRefraction(
 		if (NeighborFluidDepth > BACKGROUND_DEPTH_THRESH) continue;
 
 		float3 NeighborNormal = FluidNormalTexture.SampleLevel(PointClampSampler, NeighborUV, 0).xyz;
+
 		if (length(NeighborNormal) < 0.1) continue;
 		NeighborNormal = normalize(NeighborNormal);
 
@@ -1181,7 +1181,7 @@ void MainPS(
 	}
 
 	// Get scene depth
-	float SceneDeviceZ = SceneDepthTexture.SampleLevel(InputSampler, SceneUV, 0).r;
+	float SceneDeviceZ = SceneDepthTexture.SampleLevel(PointClampSampler, SceneUV, 0).r;
 	float SceneLinearDepth = ConvertFromDeviceZ(SceneDeviceZ);
 
 	// Calculate PBR lighting

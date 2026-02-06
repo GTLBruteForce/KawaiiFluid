@@ -126,7 +126,7 @@ void RenderFluidDepthPass(
 
 	// Pre-compute view matrices (same for all renderers in this View)
 	const FMatrix ViewMatrix = View.ViewMatrices.GetViewMatrix();
-	const FMatrix ProjectionMatrix = View.ViewMatrices.GetProjectionNoAAMatrix();
+	const FMatrix ProjectionMatrix = View.ViewMatrices.GetProjectionMatrix();
 	const FMatrix ViewProjectionMatrix = View.ViewMatrices.GetViewProjectionMatrix();
 
 	// Pre-compute ViewRect parameters (same for all renderers)

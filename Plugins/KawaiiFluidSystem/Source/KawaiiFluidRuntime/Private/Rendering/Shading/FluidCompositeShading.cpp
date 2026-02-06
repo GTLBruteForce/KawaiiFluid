@@ -140,7 +140,7 @@ void KawaiiScreenSpaceShading::RenderPostProcessShading(
 	// View matrices
 	PassParameters->InverseProjectionMatrix =
 		FMatrix44f(View.ViewMatrices.GetInvProjectionMatrix());
-	PassParameters->ProjectionMatrix = FMatrix44f(View.ViewMatrices.GetProjectionNoAAMatrix());
+	PassParameters->ProjectionMatrix = FMatrix44f(View.ViewMatrices.GetProjectionMatrix());
 	PassParameters->ViewMatrix = FMatrix44f(View.ViewMatrices.GetViewMatrix());
 
 	// Rendering parameters

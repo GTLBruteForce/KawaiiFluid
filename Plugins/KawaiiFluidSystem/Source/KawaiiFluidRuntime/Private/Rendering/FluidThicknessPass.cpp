@@ -107,7 +107,7 @@ void RenderFluidThicknessPass(
 		}
 
 		FMatrix ViewMatrix = View.ViewMatrices.GetViewMatrix();
-		FMatrix ProjectionMatrix = View.ViewMatrices.GetProjectionNoAAMatrix();
+		FMatrix ProjectionMatrix = View.ViewMatrices.GetProjectionMatrix();
 
 		auto* PassParameters = GraphBuilder.AllocParameters<FFluidThicknessParameters>();
 		PassParameters->ParticlePositions = ParticleBufferSRV;
