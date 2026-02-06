@@ -29,7 +29,6 @@ nav:
   - Overview: index.md
   - Getting Started: getting-started.md
   - User Guides:
-      - Volume and Emitter: getting-started.md
       - Fluid Brush Tool: brush-tool-guide.md
       - Rendering Options: rendering-option-guide.md
       - Interaction Blueprint Examples: interaction-blueprint-examples.md
