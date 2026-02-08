@@ -1,6 +1,6 @@
 ﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "AssetTypeActions/AssetTypeActions_FluidPreset.h"
+#include "AssetTypeActions/AssetTypeActions_KawaiiFluidPreset.h"
 #include "KawaiiFluidEditor.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Editor/KawaiiFluidPresetAssetEditor.h"
@@ -8,27 +8,27 @@
 
 #define LOCTEXT_NAMESPACE "AssetTypeActions_FluidPreset"
 
-FText FAssetTypeActions_FluidPreset::GetName() const
+FText FAssetTypeActions_KawaiiFluidPreset::GetName() const
 {
 	return LOCTEXT("AssetName", "Kawaii Fluid Preset");
 }
 
-UClass* FAssetTypeActions_FluidPreset::GetSupportedClass() const
+UClass* FAssetTypeActions_KawaiiFluidPreset::GetSupportedClass() const
 {
 	return UKawaiiFluidPresetDataAsset::StaticClass();
 }
 
-FColor FAssetTypeActions_FluidPreset::GetTypeColor() const
+FColor FAssetTypeActions_KawaiiFluidPreset::GetTypeColor() const
 {
 	return FColor(50, 100, 200);
 }
 
-uint32 FAssetTypeActions_FluidPreset::GetCategories()
+uint32 FAssetTypeActions_KawaiiFluidPreset::GetCategories()
 {
 	return FKawaiiFluidEditorModule::Get().GetAssetCategory();
 }
 
-void FAssetTypeActions_FluidPreset::OpenAssetEditor(const TArray<UObject*>& InObjects, TSharedPtr<IToolkitHost> EditWithinLevelEditor)
+void FAssetTypeActions_KawaiiFluidPreset::OpenAssetEditor(const TArray<UObject*>& InObjects, TSharedPtr<IToolkitHost> EditWithinLevelEditor)
 {
 	const EToolkitMode::Type Mode = EditWithinLevelEditor.IsValid() ? EToolkitMode::WorldCentric : EToolkitMode::Standalone;
 
@@ -42,7 +42,7 @@ void FAssetTypeActions_FluidPreset::OpenAssetEditor(const TArray<UObject*>& InOb
 	}
 }
 
-UThumbnailInfo* FAssetTypeActions_FluidPreset::GetThumbnailInfo(UObject* Asset) const
+UThumbnailInfo* FAssetTypeActions_KawaiiFluidPreset::GetThumbnailInfo(UObject* Asset) const
 {
 	UKawaiiFluidPresetDataAsset* Preset = CastChecked<UKawaiiFluidPresetDataAsset>(Asset);
 	UThumbnailInfo* ThumbnailInfo = Preset->ThumbnailInfo;

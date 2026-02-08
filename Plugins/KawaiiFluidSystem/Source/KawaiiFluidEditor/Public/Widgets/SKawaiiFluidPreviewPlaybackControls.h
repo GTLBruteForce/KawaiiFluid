@@ -12,10 +12,10 @@ class FKawaiiFluidPresetAssetEditor;
  * Playback control widget for fluid preview
  * Contains Play, Pause, Stop, Reset buttons and speed slider
  */
-class KAWAIIFLUIDEDITOR_API SFluidPreviewPlaybackControls : public SCompoundWidget
+class KAWAIIFLUIDEDITOR_API SKawaiiFluidPreviewPlaybackControls : public SCompoundWidget
 {
 public:
-	SLATE_BEGIN_ARGS(SFluidPreviewPlaybackControls) {}
+	SLATE_BEGIN_ARGS(SKawaiiFluidPreviewPlaybackControls) {}
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs, TSharedPtr<FKawaiiFluidPresetAssetEditor> InEditor);

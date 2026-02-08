@@ -7,8 +7,8 @@
 #include "EditorUndoClient.h"
 
 class UKawaiiFluidPresetDataAsset;
-class SFluidPresetEditorViewport;
-class FFluidPreviewScene;
+class SKawaiiFluidPresetEditorViewport;
+class FKawaiiFluidPreviewScene;
 class UFluidPreviewSettingsObject;
 
 /**
@@ -85,7 +85,7 @@ public:
 	UKawaiiFluidPresetDataAsset* GetEditingPreset() const { return EditingPreset; }
 
 	/** Get preview scene */
-	TSharedPtr<FFluidPreviewScene> GetPreviewScene() const { return PreviewScene; }
+	TSharedPtr<FKawaiiFluidPreviewScene> GetPreviewScene() const { return PreviewScene; }
 
 	//========================================
 	// Property Change Handling
@@ -134,10 +134,10 @@ private:
 	//========================================
 
 	/** Preview scene */
-	TSharedPtr<FFluidPreviewScene> PreviewScene;
+	TSharedPtr<FKawaiiFluidPreviewScene> PreviewScene;
 
 	/** Viewport widget */
-	TSharedPtr<SFluidPresetEditorViewport> ViewportWidget;
+	TSharedPtr<SKawaiiFluidPresetEditorViewport> ViewportWidget;
 
 	//========================================
 	// Details Views

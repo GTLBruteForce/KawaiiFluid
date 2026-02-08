@@ -8,7 +8,7 @@
 /**
  * Slate style set for KawaiiFluid Editor
  */
-class KAWAIIFLUIDEDITOR_API FFluidEditorStyle
+class KAWAIIFLUIDEDITOR_API FKawaiiFluidEditorStyle
 {
 public:
 	static void Initialize();

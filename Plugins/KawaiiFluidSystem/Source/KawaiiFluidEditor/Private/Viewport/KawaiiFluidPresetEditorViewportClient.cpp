@@ -1,13 +1,13 @@
 ﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "Viewport/FluidPresetEditorViewportClient.h"
-#include "Viewport/SFluidPresetEditorViewport.h"
-#include "Preview/FluidPreviewScene.h"
+#include "Viewport/KawaiiFluidPresetEditorViewportClient.h"
+#include "Viewport/SKawaiiFluidPresetEditorViewport.h"
+#include "Preview/KawaiiFluidPreviewScene.h"
 #include "AdvancedPreviewScene.h"
 
-FFluidPresetEditorViewportClient::FFluidPresetEditorViewportClient(
-	TSharedRef<FFluidPreviewScene> InPreviewScene,
-	TSharedRef<SFluidPresetEditorViewport> InViewportWidget)
+FKawaiiFluidPresetEditorViewportClient::FKawaiiFluidPresetEditorViewportClient(
+	TSharedRef<FKawaiiFluidPreviewScene> InPreviewScene,
+	TSharedRef<SKawaiiFluidPresetEditorViewport> InViewportWidget)
 	: FEditorViewportClient(nullptr, &InPreviewScene.Get(), StaticCastSharedRef<SEditorViewport>(InViewportWidget))
 	, PreviewScene(InPreviewScene)
 	, ViewportWidgetPtr(InViewportWidget)
@@ -32,23 +32,23 @@ FFluidPresetEditorViewportClient::FFluidPresetEditorViewportClient(
 	EngineShowFlags.SetAntiAliasing(true);
 }
 
-FFluidPresetEditorViewportClient::~FFluidPresetEditorViewportClient()
+FKawaiiFluidPresetEditorViewportClient::~FKawaiiFluidPresetEditorViewportClient()
 {
 }
 
-void FFluidPresetEditorViewportClient::Tick(float DeltaSeconds)
+void FKawaiiFluidPresetEditorViewportClient::Tick(float DeltaSeconds)
 {
 	FEditorViewportClient::Tick(DeltaSeconds);
 
 	// Preview scene tick is handled by the asset editor
 }
 
-void FFluidPresetEditorViewportClient::Draw(const FSceneView* View, FPrimitiveDrawInterface* PDI)
+void FKawaiiFluidPresetEditorViewportClient::Draw(const FSceneView* View, FPrimitiveDrawInterface* PDI)
 {
 	FEditorViewportClient::Draw(View, PDI);
 }
 
-bool FFluidPresetEditorViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
+bool FKawaiiFluidPresetEditorViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
 {
 	bool bHandled = false;
 
@@ -58,7 +58,7 @@ bool FFluidPresetEditorViewportClient::InputKey(const FInputKeyEventArgs& EventA
 		if (EventArgs.Key == EKeys::F)
 		{
 			// Focus on particles
-			TSharedPtr<SFluidPresetEditorViewport> ViewportWidget = ViewportWidgetPtr.Pin();
+			TSharedPtr<SKawaiiFluidPresetEditorViewport> ViewportWidget = ViewportWidgetPtr.Pin();
 			if (ViewportWidget.IsValid())
 			{
 				ViewportWidget->FocusOnParticles();
@@ -81,24 +81,24 @@ bool FFluidPresetEditorViewportClient::InputKey(const FInputKeyEventArgs& EventA
 	return bHandled;
 }
 
-void FFluidPresetEditorViewportClient::ProcessClick(FSceneView& View, HHitProxy* HitProxy, FKey Key, EInputEvent Event, uint32 HitX, uint32 HitY)
+void FKawaiiFluidPresetEditorViewportClient::ProcessClick(FSceneView& View, HHitProxy* HitProxy, FKey Key, EInputEvent Event, uint32 HitX, uint32 HitY)
 {
 	FEditorViewportClient::ProcessClick(View, HitProxy, Key, Event, HitX, HitY);
 }
 
-FLinearColor FFluidPresetEditorViewportClient::GetBackgroundColor() const
+FLinearColor FKawaiiFluidPresetEditorViewportClient::GetBackgroundColor() const
 {
 	return FLinearColor(0.1f, 0.1f, 0.12f, 1.0f);
 }
 
-void FFluidPresetEditorViewportClient::SetInitialCameraPosition()
+void FKawaiiFluidPresetEditorViewportClient::SetInitialCameraPosition()
 {
 	SetViewLocation(FVector(-400.0f, 0.0f, 250.0f));
 	SetViewRotation(FRotator(-25.0f, 0.0f, 0.0f));
 	SetLookAtLocation(FVector(0.0f, 0.0f, 100.0f));
 }
 
-void FFluidPresetEditorViewportClient::FocusOnBounds(const FBoxSphereBounds& Bounds)
+void FKawaiiFluidPresetEditorViewportClient::FocusOnBounds(const FBoxSphereBounds& Bounds)
 {
 	const float HalfFOVRadians = FMath::DegreesToRadians(ViewFOV / 2.0f);
 	const float DistanceFromSphere = Bounds.SphereRadius / FMath::Tan(HalfFOVRadians);

@@ -6,19 +6,19 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
 
-class FFluidPreviewScene;
+class FKawaiiFluidPreviewScene;
 
 /**
  * Stats overlay widget for fluid preview viewport
  * Displays particle count, FPS, density, etc.
  */
-class KAWAIIFLUIDEDITOR_API SFluidPreviewStatsOverlay : public SCompoundWidget
+class KAWAIIFLUIDEDITOR_API SKawaiiFluidPreviewStatsOverlay : public SCompoundWidget
 {
 public:
-	SLATE_BEGIN_ARGS(SFluidPreviewStatsOverlay) {}
+	SLATE_BEGIN_ARGS(SKawaiiFluidPreviewStatsOverlay) {}
 	SLATE_END_ARGS()
 
-	void Construct(const FArguments& InArgs, TSharedPtr<FFluidPreviewScene> InPreviewScene);
+	void Construct(const FArguments& InArgs, TSharedPtr<FKawaiiFluidPreviewScene> InPreviewScene);
 
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 
@@ -30,7 +30,7 @@ private:
 
 private:
 	/** Preview scene reference */
-	TWeakPtr<FFluidPreviewScene> PreviewScenePtr;
+	TWeakPtr<FKawaiiFluidPreviewScene> PreviewScenePtr;
 
 	/** Cached values */
 	float CachedFPS{};

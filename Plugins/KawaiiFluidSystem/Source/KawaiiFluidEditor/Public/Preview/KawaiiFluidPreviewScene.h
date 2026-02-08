@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "AdvancedPreviewScene.h"
-#include "Preview/FluidPreviewSettings.h"
+#include "Preview/KawaiiFluidPreviewSettings.h"
 #include "Interfaces/IKawaiiFluidDataProvider.h"
 
 class UKawaiiFluidPresetDataAsset;
@@ -20,12 +20,12 @@ struct FFluidParticle;
  * Implements IKawaiiFluidDataProvider to share data with RenderingModule
  * (same architecture as runtime for consistent preview)
  */
-class KAWAIIFLUIDEDITOR_API FFluidPreviewScene : public FAdvancedPreviewScene,
+class KAWAIIFLUIDEDITOR_API FKawaiiFluidPreviewScene : public FAdvancedPreviewScene,
                                                   public IKawaiiFluidDataProvider
 {
 public:
-	FFluidPreviewScene(FPreviewScene::ConstructionValues CVS);
-	virtual ~FFluidPreviewScene() override;
+	FKawaiiFluidPreviewScene(FPreviewScene::ConstructionValues CVS);
+	virtual ~FKawaiiFluidPreviewScene() override;
 
 	/** Prevent GC */
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;

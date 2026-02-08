@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
-#include "FluidPreviewSettings.generated.h"
+#include "KawaiiFluidPreviewSettings.generated.h"
 
 /**
  * Emitter mode for preview (matches UKawaiiFluidEmitterComponent)

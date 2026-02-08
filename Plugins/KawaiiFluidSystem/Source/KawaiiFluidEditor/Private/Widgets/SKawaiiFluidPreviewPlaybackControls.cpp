@@ -1,8 +1,8 @@
 ﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "Widgets/SFluidPreviewPlaybackControls.h"
+#include "Widgets/SKawaiiFluidPreviewPlaybackControls.h"
 #include "Editor/KawaiiFluidPresetAssetEditor.h"
-#include "Style/FluidEditorStyle.h"
+#include "Style/KawaiiFluidEditorStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Input/SSpinBox.h"
@@ -11,9 +11,9 @@
 #include "Widgets/Layout/SSeparator.h"
 #include "Styling/AppStyle.h"
 
-#define LOCTEXT_NAMESPACE "SFluidPreviewPlaybackControls"
+#define LOCTEXT_NAMESPACE "SKawaiiFluidPreviewPlaybackControls"
 
-void SFluidPreviewPlaybackControls::Construct(const FArguments& InArgs, TSharedPtr<FKawaiiFluidPresetAssetEditor> InEditor)
+void SKawaiiFluidPreviewPlaybackControls::Construct(const FArguments& InArgs, TSharedPtr<FKawaiiFluidPresetAssetEditor> InEditor)
 {
 	EditorPtr = InEditor;
 
@@ -27,11 +27,11 @@ void SFluidPreviewPlaybackControls::Construct(const FArguments& InArgs, TSharedP
 		.Padding(2.0f)
 		[
 			SNew(SButton)
-			.OnClicked(this, &SFluidPreviewPlaybackControls::OnPlayPauseClicked)
-			.ToolTipText(this, &SFluidPreviewPlaybackControls::GetPlayPauseTooltip)
+			.OnClicked(this, &SKawaiiFluidPreviewPlaybackControls::OnPlayPauseClicked)
+			.ToolTipText(this, &SKawaiiFluidPreviewPlaybackControls::GetPlayPauseTooltip)
 			[
 				SNew(STextBlock)
-				.Text(this, &SFluidPreviewPlaybackControls::GetPlayPauseButtonText)
+				.Text(this, &SKawaiiFluidPreviewPlaybackControls::GetPlayPauseButtonText)
 			]
 		]
 
@@ -41,7 +41,7 @@ void SFluidPreviewPlaybackControls::Construct(const FArguments& InArgs, TSharedP
 		.Padding(2.0f)
 		[
 			SNew(SButton)
-			.OnClicked(this, &SFluidPreviewPlaybackControls::OnStopClicked)
+			.OnClicked(this, &SKawaiiFluidPreviewPlaybackControls::OnStopClicked)
 			.ToolTipText(LOCTEXT("StopTooltip", "Stop and Reset Simulation"))
 			[
 				SNew(STextBlock)
@@ -55,7 +55,7 @@ void SFluidPreviewPlaybackControls::Construct(const FArguments& InArgs, TSharedP
 		.Padding(2.0f)
 		[
 			SNew(SButton)
-			.OnClicked(this, &SFluidPreviewPlaybackControls::OnResetClicked)
+			.OnClicked(this, &SKawaiiFluidPreviewPlaybackControls::OnResetClicked)
 			.ToolTipText(LOCTEXT("ResetTooltip", "Reset Particles (keep playing)"))
 			[
 				SNew(STextBlock)
@@ -96,8 +96,8 @@ void SFluidPreviewPlaybackControls::Construct(const FArguments& InArgs, TSharedP
 				.MinSliderValue(0.0f)
 				.MaxSliderValue(2.0f)
 				.Delta(0.1f)
-				.Value(this, &SFluidPreviewPlaybackControls::GetCurrentSpeed)
-				.OnValueChanged(this, &SFluidPreviewPlaybackControls::OnSpeedChanged)
+				.Value(this, &SKawaiiFluidPreviewPlaybackControls::GetCurrentSpeed)
+				.OnValueChanged(this, &SKawaiiFluidPreviewPlaybackControls::OnSpeedChanged)
 				.ToolTipText(LOCTEXT("SpeedTooltip", "Simulation Speed Multiplier"))
 			]
 		]
@@ -109,12 +109,12 @@ void SFluidPreviewPlaybackControls::Construct(const FArguments& InArgs, TSharedP
 		.Padding(2.0f)
 		[
 			SNew(STextBlock)
-			.Text(this, &SFluidPreviewPlaybackControls::GetSpeedText)
+			.Text(this, &SKawaiiFluidPreviewPlaybackControls::GetSpeedText)
 		]
 	];
 }
 
-FReply SFluidPreviewPlaybackControls::OnPlayPauseClicked()
+FReply SKawaiiFluidPreviewPlaybackControls::OnPlayPauseClicked()
 {
 	TSharedPtr<FKawaiiFluidPresetAssetEditor> Editor = EditorPtr.Pin();
 	if (Editor.IsValid())
@@ -131,7 +131,7 @@ FReply SFluidPreviewPlaybackControls::OnPlayPauseClicked()
 	return FReply::Handled();
 }
 
-FReply SFluidPreviewPlaybackControls::OnStopClicked()
+FReply SKawaiiFluidPreviewPlaybackControls::OnStopClicked()
 {
 	TSharedPtr<FKawaiiFluidPresetAssetEditor> Editor = EditorPtr.Pin();
 	if (Editor.IsValid())
@@ -141,7 +141,7 @@ FReply SFluidPreviewPlaybackControls::OnStopClicked()
 	return FReply::Handled();
 }
 
-FReply SFluidPreviewPlaybackControls::OnResetClicked()
+FReply SKawaiiFluidPreviewPlaybackControls::OnResetClicked()
 {
 	TSharedPtr<FKawaiiFluidPresetAssetEditor> Editor = EditorPtr.Pin();
 	if (Editor.IsValid())
@@ -151,24 +151,24 @@ FReply SFluidPreviewPlaybackControls::OnResetClicked()
 	return FReply::Handled();
 }
 
-bool SFluidPreviewPlaybackControls::IsPlaying() const
+bool SKawaiiFluidPreviewPlaybackControls::IsPlaying() const
 {
 	TSharedPtr<FKawaiiFluidPresetAssetEditor> Editor = EditorPtr.Pin();
 	return Editor.IsValid() && Editor->IsPlaying();
 }
 
-bool SFluidPreviewPlaybackControls::IsPaused() const
+bool SKawaiiFluidPreviewPlaybackControls::IsPaused() const
 {
 	return !IsPlaying();
 }
 
-bool SFluidPreviewPlaybackControls::CanPlay() const
+bool SKawaiiFluidPreviewPlaybackControls::CanPlay() const
 {
 	TSharedPtr<FKawaiiFluidPresetAssetEditor> Editor = EditorPtr.Pin();
 	return Editor.IsValid() && Editor->GetEditingPreset() != nullptr;
 }
 
-FText SFluidPreviewPlaybackControls::GetPlayPauseButtonText() const
+FText SKawaiiFluidPreviewPlaybackControls::GetPlayPauseButtonText() const
 {
 	if (IsPlaying())
 	{
@@ -180,7 +180,7 @@ FText SFluidPreviewPlaybackControls::GetPlayPauseButtonText() const
 	}
 }
 
-FText SFluidPreviewPlaybackControls::GetPlayPauseTooltip() const
+FText SKawaiiFluidPreviewPlaybackControls::GetPlayPauseTooltip() const
 {
 	if (IsPlaying())
 	{
@@ -192,7 +192,7 @@ FText SFluidPreviewPlaybackControls::GetPlayPauseTooltip() const
 	}
 }
 
-void SFluidPreviewPlaybackControls::OnSpeedChanged(float NewValue)
+void SKawaiiFluidPreviewPlaybackControls::OnSpeedChanged(float NewValue)
 {
 	TSharedPtr<FKawaiiFluidPresetAssetEditor> Editor = EditorPtr.Pin();
 	if (Editor.IsValid())
@@ -201,7 +201,7 @@ void SFluidPreviewPlaybackControls::OnSpeedChanged(float NewValue)
 	}
 }
 
-float SFluidPreviewPlaybackControls::GetCurrentSpeed() const
+float SKawaiiFluidPreviewPlaybackControls::GetCurrentSpeed() const
 {
 	TSharedPtr<FKawaiiFluidPresetAssetEditor> Editor = EditorPtr.Pin();
 	if (Editor.IsValid())
@@ -211,12 +211,12 @@ float SFluidPreviewPlaybackControls::GetCurrentSpeed() const
 	return 1.0f;
 }
 
-TOptional<float> SFluidPreviewPlaybackControls::GetSpeedAsOptional() const
+TOptional<float> SKawaiiFluidPreviewPlaybackControls::GetSpeedAsOptional() const
 {
 	return GetCurrentSpeed();
 }
 
-FText SFluidPreviewPlaybackControls::GetSpeedText() const
+FText SKawaiiFluidPreviewPlaybackControls::GetSpeedText() const
 {
 	return FText::Format(LOCTEXT("SpeedFormat", "x"), FText::AsNumber(GetCurrentSpeed()));
 }

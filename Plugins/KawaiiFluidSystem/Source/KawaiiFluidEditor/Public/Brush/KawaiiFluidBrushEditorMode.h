@@ -13,13 +13,13 @@ class UKawaiiFluidVolumeComponent;
  * Fluid particle brush editor mode
  * Activated by detail panel button and operates on a specific FluidComponent target
  */
-class FFluidBrushEditorMode : public FEdMode
+class FKawaiiFluidBrushEditorMode : public FEdMode
 {
 public:
 	static const FEditorModeID EM_FluidBrush;
 
-	FFluidBrushEditorMode();
-	virtual ~FFluidBrushEditorMode() override;
+	FKawaiiFluidBrushEditorMode();
+	virtual ~FKawaiiFluidBrushEditorMode() override;
 
 	//~ Begin FEdMode Interface
 	virtual void Enter() override;

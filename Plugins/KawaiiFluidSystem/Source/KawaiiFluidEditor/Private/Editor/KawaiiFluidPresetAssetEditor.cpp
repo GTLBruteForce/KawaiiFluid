@@ -2,11 +2,11 @@
 
 #include "Editor/KawaiiFluidPresetAssetEditor.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
-#include "Preview/FluidPreviewScene.h"
-#include "Preview/FluidPreviewSettings.h"
-#include "Viewport/SFluidPresetEditorViewport.h"
-#include "Widgets/SFluidPreviewPlaybackControls.h"
-#include "Style/FluidEditorStyle.h"
+#include "Preview/KawaiiFluidPreviewScene.h"
+#include "Preview/KawaiiFluidPreviewSettings.h"
+#include "Viewport/SKawaiiFluidPresetEditorViewport.h"
+#include "Widgets/SKawaiiFluidPreviewPlaybackControls.h"
+#include "Style/KawaiiFluidEditorStyle.h"
 #include "Components/InstancedStaticMeshComponent.h"
 
 #include "Widgets/Docking/SDockTab.h"
@@ -60,7 +60,7 @@ void FKawaiiFluidPresetAssetEditor::InitFluidPresetEditor(
 	CVS.bCreatePhysicsScene = false;
 	CVS.LightBrightness = 3;
 	CVS.SkyBrightness = 1;
-	PreviewScene = MakeShared<FFluidPreviewScene>(CVS);
+	PreviewScene = MakeShared<FKawaiiFluidPreviewScene>(CVS);
 	PreviewScene->SetPreset(EditingPreset);
 
 	// Start simulation immediately (bIsPlaying defaults to true)
@@ -182,7 +182,7 @@ TSharedRef<SDockTab> FKawaiiFluidPresetAssetEditor::SpawnTab_Viewport(const FSpa
 {
 	check(Args.GetTabId() == ViewportTabId);
 
-	ViewportWidget = SNew(SFluidPresetEditorViewport, PreviewScene, SharedThis(this));
+	ViewportWidget = SNew(SKawaiiFluidPresetEditorViewport, PreviewScene, SharedThis(this));
 
 	return SNew(SDockTab)
 		.Label(LOCTEXT("ViewportTabLabel", "Viewport"))
@@ -245,7 +245,7 @@ TSharedRef<SDockTab> FKawaiiFluidPresetAssetEditor::SpawnTab_PreviewSettings(con
 
 void FKawaiiFluidPresetAssetEditor::ExtendToolbar()
 {
-	TSharedPtr<FExtender> ToolbarExtender = MakeShareable(new FExtender);
+	TSharedPtr<FExtender> ToolbarExtender = MakeShared<FExtender>();
 
 	ToolbarExtender->AddToolBarExtension(
 		"Asset",
@@ -253,7 +253,7 @@ void FKawaiiFluidPresetAssetEditor::ExtendToolbar()
 		GetToolkitCommands(),
 		FToolBarExtensionDelegate::CreateLambda([this](FToolBarBuilder& ToolbarBuilder)
 		{
-			ToolbarBuilder.AddWidget(SNew(SFluidPreviewPlaybackControls, SharedThis(this)));
+			ToolbarBuilder.AddWidget(SNew(SKawaiiFluidPreviewPlaybackControls, SharedThis(this)));
 		}));
 
 	AddToolbarExtender(ToolbarExtender);

@@ -1,6 +1,6 @@
 // Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "Brush/FluidBrushEditorMode.h"
+#include "Brush/KawaiiFluidBrushEditorMode.h"
 #include "Components/KawaiiFluidVolumeComponent.h"
 #include "Actors/KawaiiFluidVolume.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
@@ -17,11 +17,11 @@
 #include "ScopedTransaction.h"
 #include "Selection.h"
 
-#define LOCTEXT_NAMESPACE "FluidBrushEditorMode"
+#define LOCTEXT_NAMESPACE "KawaiiFluidBrushEditorMode"
 
-const FEditorModeID FFluidBrushEditorMode::EM_FluidBrush = TEXT("EM_FluidBrush");
+const FEditorModeID FKawaiiFluidBrushEditorMode::EM_FluidBrush = TEXT("EM_FluidBrush");
 
-FFluidBrushEditorMode::FFluidBrushEditorMode()
+FKawaiiFluidBrushEditorMode::FKawaiiFluidBrushEditorMode()
 {
 	// Explicit FEdMode member reference
 	FEdMode::Info = FEditorModeInfo(
@@ -32,11 +32,11 @@ FFluidBrushEditorMode::FFluidBrushEditorMode()
 	);
 }
 
-FFluidBrushEditorMode::~FFluidBrushEditorMode()
+FKawaiiFluidBrushEditorMode::~FKawaiiFluidBrushEditorMode()
 {
 }
 
-void FFluidBrushEditorMode::Enter()
+void FKawaiiFluidBrushEditorMode::Enter()
 {
 	FEdMode::Enter();
 
@@ -44,13 +44,13 @@ void FFluidBrushEditorMode::Enter()
 	if (GEditor)
 	{
 		SelectionChangedHandle = USelection::SelectionChangedEvent.AddRaw(
-			this, &FFluidBrushEditorMode::OnSelectionChanged);
+			this, &FKawaiiFluidBrushEditorMode::OnSelectionChanged);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("Fluid Brush Mode Entered"));
 }
 
-void FFluidBrushEditorMode::Exit()
+void FKawaiiFluidBrushEditorMode::Exit()
 {
 	// Unbind selection changed delegate
 	if (SelectionChangedHandle.IsValid())
@@ -74,7 +74,7 @@ void FFluidBrushEditorMode::Exit()
 	UE_LOG(LogTemp, Log, TEXT("Fluid Brush Mode Exited"));
 }
 
-void FFluidBrushEditorMode::SetTargetVolume(AKawaiiFluidVolume* Volume)
+void FKawaiiFluidBrushEditorMode::SetTargetVolume(AKawaiiFluidVolume* Volume)
 {
 	TargetVolume = Volume;
 	if (Volume)
@@ -93,7 +93,7 @@ void FFluidBrushEditorMode::SetTargetVolume(AKawaiiFluidVolume* Volume)
 	}
 }
 
-bool FFluidBrushEditorMode::InputKey(FEditorViewportClient* ViewportClient, FViewport* Viewport,
+bool FKawaiiFluidBrushEditorMode::InputKey(FEditorViewportClient* ViewportClient, FViewport* Viewport,
                                       FKey Key, EInputEvent Event)
 {
 	if (!TargetVolume.IsValid() || !TargetVolumeComponent.IsValid())
@@ -167,7 +167,7 @@ bool FFluidBrushEditorMode::InputKey(FEditorViewportClient* ViewportClient, FVie
 	return false;
 }
 
-bool FFluidBrushEditorMode::HandleClick(FEditorViewportClient* InViewportClient, HHitProxy* HitProxy,
+bool FKawaiiFluidBrushEditorMode::HandleClick(FEditorViewportClient* InViewportClient, HHitProxy* HitProxy,
                                          const FViewportClick& Click)
 {
 	// Left click is handled by brush, block selection behavior
@@ -178,18 +178,18 @@ bool FFluidBrushEditorMode::HandleClick(FEditorViewportClient* InViewportClient,
 	return false;
 }
 
-bool FFluidBrushEditorMode::StartTracking(FEditorViewportClient* ViewportClient, FViewport* Viewport)
+bool FKawaiiFluidBrushEditorMode::StartTracking(FEditorViewportClient* ViewportClient, FViewport* Viewport)
 {
 	// Tracking mode not used - handled directly in InputKey
 	return false;
 }
 
-bool FFluidBrushEditorMode::EndTracking(FEditorViewportClient* ViewportClient, FViewport* Viewport)
+bool FKawaiiFluidBrushEditorMode::EndTracking(FEditorViewportClient* ViewportClient, FViewport* Viewport)
 {
 	return false;
 }
 
-bool FFluidBrushEditorMode::MouseMove(FEditorViewportClient* ViewportClient, FViewport* Viewport,
+bool FKawaiiFluidBrushEditorMode::MouseMove(FEditorViewportClient* ViewportClient, FViewport* Viewport,
                                        int32 x, int32 y)
 {
 	UpdateBrushLocation(ViewportClient, x, y);
@@ -203,7 +203,7 @@ bool FFluidBrushEditorMode::MouseMove(FEditorViewportClient* ViewportClient, FVi
 	return false;
 }
 
-bool FFluidBrushEditorMode::CapturedMouseMove(FEditorViewportClient* ViewportClient, FViewport* Viewport,
+bool FKawaiiFluidBrushEditorMode::CapturedMouseMove(FEditorViewportClient* ViewportClient, FViewport* Viewport,
                                                int32 InMouseX, int32 InMouseY)
 {
 	UpdateBrushLocation(ViewportClient, InMouseX, InMouseY);
@@ -216,7 +216,7 @@ bool FFluidBrushEditorMode::CapturedMouseMove(FEditorViewportClient* ViewportCli
 	return bPainting;
 }
 
-bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportClient,
+bool FKawaiiFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportClient,
                                                  int32 MouseX, int32 MouseY)
 {
 	FSceneViewFamilyContext ViewFamily(FSceneViewFamily::ConstructionValues(
@@ -404,7 +404,7 @@ bool FFluidBrushEditorMode::UpdateBrushLocation(FEditorViewportClient* ViewportC
 	return false;
 }
 
-void FFluidBrushEditorMode::ApplyBrush()
+void FKawaiiFluidBrushEditorMode::ApplyBrush()
 {
 	if (!bValidLocation || !TargetVolume.IsValid() || !TargetVolumeComponent.IsValid())
 	{
@@ -441,7 +441,7 @@ void FFluidBrushEditorMode::ApplyBrush()
 	}
 }
 
-void FFluidBrushEditorMode::Render(const FSceneView* View, FViewport* Viewport, FPrimitiveDrawInterface* PDI)
+void FKawaiiFluidBrushEditorMode::Render(const FSceneView* View, FViewport* Viewport, FPrimitiveDrawInterface* PDI)
 {
 	FEdMode::Render(View, Viewport, PDI);
 
@@ -451,7 +451,7 @@ void FFluidBrushEditorMode::Render(const FSceneView* View, FViewport* Viewport, 
 	}
 }
 
-void FFluidBrushEditorMode::DrawBrushPreview(FPrimitiveDrawInterface* PDI)
+void FKawaiiFluidBrushEditorMode::DrawBrushPreview(FPrimitiveDrawInterface* PDI)
 {
 	if (!TargetVolume.IsValid() || !TargetVolumeComponent.IsValid())
 	{
@@ -480,7 +480,7 @@ void FFluidBrushEditorMode::DrawBrushPreview(FPrimitiveDrawInterface* PDI)
 	PDI->DrawPoint(BrushLocation, Color, 8.0f, SDPG_Foreground);
 }
 
-FLinearColor FFluidBrushEditorMode::GetBrushColor() const
+FLinearColor FKawaiiFluidBrushEditorMode::GetBrushColor() const
 {
 	if (!TargetVolume.IsValid() || !TargetVolumeComponent.IsValid())
 	{
@@ -500,7 +500,7 @@ FLinearColor FFluidBrushEditorMode::GetBrushColor() const
 	}
 }
 
-void FFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FViewport* Viewport,
+void FKawaiiFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FViewport* Viewport,
                                      const FSceneView* View, FCanvas* Canvas)
 {
 	FEdMode::DrawHUD(ViewportClient, Viewport, View, Canvas);
@@ -528,7 +528,7 @@ void FFluidBrushEditorMode::DrawHUD(FEditorViewportClient* ViewportClient, FView
 	Canvas->DrawItem(Text);
 }
 
-bool FFluidBrushEditorMode::DisallowMouseDeltaTracking() const
+bool FKawaiiFluidBrushEditorMode::DisallowMouseDeltaTracking() const
 {
 	if (!TargetVolume.IsValid() || !TargetVolumeComponent.IsValid())
 	{
@@ -552,7 +552,7 @@ bool FFluidBrushEditorMode::DisallowMouseDeltaTracking() const
 	return true;
 }
 
-void FFluidBrushEditorMode::Tick(FEditorViewportClient* ViewportClient, float DeltaTime)
+void FKawaiiFluidBrushEditorMode::Tick(FEditorViewportClient* ViewportClient, float DeltaTime)
 {
 	FEdMode::Tick(ViewportClient, DeltaTime);
 
@@ -573,7 +573,7 @@ void FFluidBrushEditorMode::Tick(FEditorViewportClient* ViewportClient, float De
 	}
 }
 
-void FFluidBrushEditorMode::OnSelectionChanged(UObject* Object)
+void FKawaiiFluidBrushEditorMode::OnSelectionChanged(UObject* Object)
 {
 	// Ignore selection changes while painting
 	if (bPainting)

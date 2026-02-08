@@ -1,10 +1,10 @@
 // Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "Details/FluidVolumeComponentDetails.h"
+#include "Details/KawaiiFluidVolumeComponentDetails.h"
 #include "Components/KawaiiFluidVolumeComponent.h"
 #include "Actors/KawaiiFluidVolume.h"
 #include "Modules/KawaiiFluidSimulationModule.h"
-#include "Brush/FluidBrushEditorMode.h"
+#include "Brush/KawaiiFluidBrushEditorMode.h"
 
 #include "DetailLayoutBuilder.h"
 #include "DetailCategoryBuilder.h"
@@ -14,14 +14,14 @@
 #include "LevelEditor.h"
 #include "EditorModeManager.h"
 
-#define LOCTEXT_NAMESPACE "FluidVolumeComponentDetails"
+#define LOCTEXT_NAMESPACE "KawaiiFluidVolumeComponentDetails"
 
-TSharedRef<IDetailCustomization> FFluidVolumeComponentDetails::MakeInstance()
+TSharedRef<IDetailCustomization> FKawaiiFluidVolumeComponentDetails::MakeInstance()
 {
-	return MakeShareable(new FFluidVolumeComponentDetails);
+	return MakeShared<FKawaiiFluidVolumeComponentDetails>();
 }
 
-void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
+void FKawaiiFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 {
 	TArray<TWeakObjectPtr<UObject>> Objects;
 	DetailBuilder.GetObjectsBeingCustomized(Objects);
@@ -60,8 +60,8 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			SNew(SButton)
 			.Text(LOCTEXT("StartBrush", "Start Brush"))
 			.ToolTipText(LOCTEXT("StartBrushTooltip", "Enter brush mode to paint particles"))
-			.OnClicked(this, &FFluidVolumeComponentDetails::OnStartBrushClicked)
-			.Visibility(this, &FFluidVolumeComponentDetails::GetStartVisibility)
+			.OnClicked(this, &FKawaiiFluidVolumeComponentDetails::OnStartBrushClicked)
+			.Visibility(this, &FKawaiiFluidVolumeComponentDetails::GetStartVisibility)
 		]
 
 		// Stop button
@@ -72,8 +72,8 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			SNew(SButton)
 			.Text(LOCTEXT("StopBrush", "Stop Brush"))
 			.ToolTipText(LOCTEXT("StopBrushTooltip", "Exit brush mode"))
-			.OnClicked(this, &FFluidVolumeComponentDetails::OnStopBrushClicked)
-			.Visibility(this, &FFluidVolumeComponentDetails::GetStopVisibility)
+			.OnClicked(this, &FKawaiiFluidVolumeComponentDetails::OnStopBrushClicked)
+			.Visibility(this, &FKawaiiFluidVolumeComponentDetails::GetStopVisibility)
 		]
 
 		// Clear button
@@ -83,7 +83,7 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			SNew(SButton)
 			.Text(LOCTEXT("ClearParticles", "Clear All"))
 			.ToolTipText(LOCTEXT("ClearParticlesTooltip", "Remove all particles"))
-			.OnClicked(this, &FFluidVolumeComponentDetails::OnClearParticlesClicked)
+			.OnClicked(this, &FKawaiiFluidVolumeComponentDetails::OnClearParticlesClicked)
 		]
 	];
 
@@ -119,7 +119,7 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 
 	// Help text
 	BrushCategory.AddCustomRow(LOCTEXT("BrushHelp", "Help"))
-	.Visibility(TAttribute<EVisibility>(this, &FFluidVolumeComponentDetails::GetStopVisibility))
+	.Visibility(TAttribute<EVisibility>(this, &FKawaiiFluidVolumeComponentDetails::GetStopVisibility))
 	.WholeRowContent()
 	[
 		SNew(STextBlock)
@@ -129,7 +129,7 @@ void FFluidVolumeComponentDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 	];
 }
 
-FReply FFluidVolumeComponentDetails::OnStartBrushClicked()
+FReply FKawaiiFluidVolumeComponentDetails::OnStartBrushClicked()
 {
 	if (!TargetComponent.IsValid() || !TargetVolume.IsValid())
 	{
@@ -141,10 +141,10 @@ FReply FFluidVolumeComponentDetails::OnStartBrushClicked()
 	if (TSharedPtr<ILevelEditor> Editor = LevelEditor.GetFirstLevelEditor())
 	{
 		FEditorModeTools& ModeTools = Editor->GetEditorModeManager();
-		ModeTools.ActivateMode(FFluidBrushEditorMode::EM_FluidBrush);
+		ModeTools.ActivateMode(FKawaiiFluidBrushEditorMode::EM_FluidBrush);
 
-		if (FFluidBrushEditorMode* BrushMode = static_cast<FFluidBrushEditorMode*>(
-			ModeTools.GetActiveMode(FFluidBrushEditorMode::EM_FluidBrush)))
+		if (FKawaiiFluidBrushEditorMode* BrushMode = static_cast<FKawaiiFluidBrushEditorMode*>(
+			ModeTools.GetActiveMode(FKawaiiFluidBrushEditorMode::EM_FluidBrush)))
 		{
 			// Set Volume target (calls SetTargetVolume implemented in Phase 2)
 			BrushMode->SetTargetVolume(TargetVolume.Get());
@@ -154,13 +154,13 @@ FReply FFluidVolumeComponentDetails::OnStartBrushClicked()
 	return FReply::Handled();
 }
 
-FReply FFluidVolumeComponentDetails::OnStopBrushClicked()
+FReply FKawaiiFluidVolumeComponentDetails::OnStopBrushClicked()
 {
 	FLevelEditorModule& LevelEditor = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
 
 	if (TSharedPtr<ILevelEditor> Editor = LevelEditor.GetFirstLevelEditor())
 	{
-		Editor->GetEditorModeManager().DeactivateMode(FFluidBrushEditorMode::EM_FluidBrush);
+		Editor->GetEditorModeManager().DeactivateMode(FKawaiiFluidBrushEditorMode::EM_FluidBrush);
 	}
 
 	if (TargetComponent.IsValid())
@@ -171,7 +171,7 @@ FReply FFluidVolumeComponentDetails::OnStopBrushClicked()
 	return FReply::Handled();
 }
 
-FReply FFluidVolumeComponentDetails::OnClearParticlesClicked()
+FReply FKawaiiFluidVolumeComponentDetails::OnClearParticlesClicked()
 {
 	if (TargetVolume.IsValid())
 	{
@@ -183,24 +183,24 @@ FReply FFluidVolumeComponentDetails::OnClearParticlesClicked()
 	return FReply::Handled(); 
 }
 
-bool FFluidVolumeComponentDetails::IsBrushActive() const
+bool FKawaiiFluidVolumeComponentDetails::IsBrushActive() const
 {
 	FLevelEditorModule& LevelEditor = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
 
 	if (TSharedPtr<ILevelEditor> Editor = LevelEditor.GetFirstLevelEditor())
 	{
-		return Editor->GetEditorModeManager().IsModeActive(FFluidBrushEditorMode::EM_FluidBrush);
+		return Editor->GetEditorModeManager().IsModeActive(FKawaiiFluidBrushEditorMode::EM_FluidBrush);
 	}
 
 	return false;
 }
 
-EVisibility FFluidVolumeComponentDetails::GetStartVisibility() const
+EVisibility FKawaiiFluidVolumeComponentDetails::GetStartVisibility() const
 {
 	return IsBrushActive() ? EVisibility::Collapsed : EVisibility::Visible;
 }
 
-EVisibility FFluidVolumeComponentDetails::GetStopVisibility() const
+EVisibility FKawaiiFluidVolumeComponentDetails::GetStopVisibility() const
 {
 	return IsBrushActive() ? EVisibility::Visible : EVisibility::Collapsed;
 }

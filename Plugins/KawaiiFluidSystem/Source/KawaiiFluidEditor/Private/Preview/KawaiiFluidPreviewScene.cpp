@@ -1,6 +1,6 @@
 // Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "Preview/FluidPreviewScene.h"
+#include "Preview/KawaiiFluidPreviewScene.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
 #include "Core/FluidParticle.h"
 #include "Core/SpatialHash.h"
@@ -17,7 +17,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "UObject/ConstructorHelpers.h"
 
-FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
+FKawaiiFluidPreviewScene::FKawaiiFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 	: FAdvancedPreviewScene(CVS)
 	, CurrentPreset(nullptr)
 	, PreviewSettingsObject(nullptr)
@@ -80,7 +80,7 @@ FFluidPreviewScene::FFluidPreviewScene(FPreviewScene::ConstructionValues CVS)
 	SetupFloor();
 }
 
-FFluidPreviewScene::~FFluidPreviewScene()
+FKawaiiFluidPreviewScene::~FKawaiiFluidPreviewScene()
 {
 	// Unregister from FluidRendererSubsystem first
 	if (RenderingModule)
@@ -108,7 +108,7 @@ FFluidPreviewScene::~FFluidPreviewScene()
 	}
 }
 
-void FFluidPreviewScene::AddReferencedObjects(FReferenceCollector& Collector)
+void FKawaiiFluidPreviewScene::AddReferencedObjects(FReferenceCollector& Collector)
 {
 	FAdvancedPreviewScene::AddReferencedObjects(Collector);
 
@@ -122,7 +122,7 @@ void FFluidPreviewScene::AddReferencedObjects(FReferenceCollector& Collector)
 	Collector.AddReferencedObjects(WallMeshComponents);
 }
 
-void FFluidPreviewScene::CreateVisualizationComponents()
+void FKawaiiFluidPreviewScene::CreateVisualizationComponents()
 {
 	// Spawn preview actor
 	FActorSpawnParameters SpawnParams;
@@ -165,7 +165,7 @@ void FFluidPreviewScene::CreateVisualizationComponents()
 	AddComponent(FloorMeshComponent, FTransform::Identity);
 }
 
-void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
+void FKawaiiFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 {
 	CurrentPreset = InPreset;
 
@@ -207,7 +207,7 @@ void FFluidPreviewScene::SetPreset(UKawaiiFluidPresetDataAsset* InPreset)
 	ResetSimulation();
 }
 
-void FFluidPreviewScene::RefreshFromPreset()
+void FKawaiiFluidPreviewScene::RefreshFromPreset()
 {
 	if (!CurrentPreset)
 	{
@@ -249,17 +249,17 @@ void FFluidPreviewScene::RefreshFromPreset()
 	ApplyPreviewSettings();
 }
 
-void FFluidPreviewScene::StartSimulation()
+void FKawaiiFluidPreviewScene::StartSimulation()
 {
 	bSimulationActive = true;
 }
 
-void FFluidPreviewScene::StopSimulation()
+void FKawaiiFluidPreviewScene::StopSimulation()
 {
 	bSimulationActive = false;
 }
 
-void FFluidPreviewScene::ResetSimulation()
+void FKawaiiFluidPreviewScene::ResetSimulation()
 {
 	// Clear GPU particles
 	if (SimulationContext)
@@ -309,7 +309,7 @@ void FFluidPreviewScene::ResetSimulation()
 	}
 }
 
-void FFluidPreviewScene::SpawnParticles(float DeltaTime)
+void FKawaiiFluidPreviewScene::SpawnParticles(float DeltaTime)
 {
 	if (!SimulationModule || !CurrentPreset || !PreviewSettingsObject)
 	{
@@ -399,7 +399,7 @@ void FFluidPreviewScene::SpawnParticles(float DeltaTime)
 
 }
 
-void FFluidPreviewScene::TickSimulation(float DeltaTime)
+void FKawaiiFluidPreviewScene::TickSimulation(float DeltaTime)
 {
 	if (!bSimulationActive || !CurrentPreset || !SimulationContext)
 	{
@@ -454,30 +454,30 @@ void FFluidPreviewScene::TickSimulation(float DeltaTime)
 	}
 }
 
-void FFluidPreviewScene::HandleFloorCollision()
+void FKawaiiFluidPreviewScene::HandleFloorCollision()
 {
 	// Floor collision is handled by GPU bounds collision
 	// See TickSimulation() -> Params.WorldBounds
 }
 
-FFluidPreviewSettings& FFluidPreviewScene::GetPreviewSettings()
+FFluidPreviewSettings& FKawaiiFluidPreviewScene::GetPreviewSettings()
 {
 	return PreviewSettingsObject->Settings;
 }
 
-void FFluidPreviewScene::ApplyPreviewSettings()
+void FKawaiiFluidPreviewScene::ApplyPreviewSettings()
 {
 	UpdateEnvironment();
 
 	// Metaball settings come from Preset->RenderingParameters (set in SetPreset/RefreshFromPreset)
 }
 
-void FFluidPreviewScene::SetupFloor()
+void FKawaiiFluidPreviewScene::SetupFloor()
 {
 	UpdateEnvironment();
 }
 
-void FFluidPreviewScene::UpdateEnvironment()
+void FKawaiiFluidPreviewScene::UpdateEnvironment()
 {
 	if (!FloorMeshComponent)
 	{
@@ -498,25 +498,25 @@ void FFluidPreviewScene::UpdateEnvironment()
 // IKawaiiFluidDataProvider Interface
 //========================================
 
-const TArray<FFluidParticle>& FFluidPreviewScene::GetParticles() const
+const TArray<FFluidParticle>& FKawaiiFluidPreviewScene::GetParticles() const
 {
 	// GPU mode - no CPU particles available
 	static TArray<FFluidParticle> EmptyArray;
 	return EmptyArray;
 }
 
-int32 FFluidPreviewScene::GetParticleCount() const
+int32 FKawaiiFluidPreviewScene::GetParticleCount() const
 {
 	// Return GPU particle count
 	return GetGPUParticleCount();
 }
 
-float FFluidPreviewScene::GetParticleRadius() const
+float FKawaiiFluidPreviewScene::GetParticleRadius() const
 {
 	return CachedParticleRadius;
 }
 
-bool FFluidPreviewScene::IsDataValid() const
+bool FKawaiiFluidPreviewScene::IsDataValid() const
 {
 	// Valid if GPU simulation is active (particles may be 0 but still valid for rendering)
 	return IsGPUSimulationActive();
@@ -526,14 +526,14 @@ bool FFluidPreviewScene::IsDataValid() const
 // Particle Access (GPU mode - limited access)
 //========================================
 
-TArray<FFluidParticle>& FFluidPreviewScene::GetParticlesMutable()
+TArray<FFluidParticle>& FKawaiiFluidPreviewScene::GetParticlesMutable()
 {
 	// GPU mode - no mutable CPU particles available
 	static TArray<FFluidParticle> EmptyArray;
 	return EmptyArray;
 }
 
-float FFluidPreviewScene::GetSimulationTime() const
+float FKawaiiFluidPreviewScene::GetSimulationTime() const
 {
 	return TotalSimulationTime;
 }
@@ -542,12 +542,12 @@ float FFluidPreviewScene::GetSimulationTime() const
 // GPU Simulation Interface
 //========================================
 
-bool FFluidPreviewScene::IsGPUSimulationActive() const
+bool FKawaiiFluidPreviewScene::IsGPUSimulationActive() const
 {
 	return SimulationContext && SimulationContext->IsGPUSimulatorReady();
 }
 
-int32 FFluidPreviewScene::GetGPUParticleCount() const
+int32 FKawaiiFluidPreviewScene::GetGPUParticleCount() const
 {
 	if (SimulationContext)
 	{
@@ -560,7 +560,7 @@ int32 FFluidPreviewScene::GetGPUParticleCount() const
 	return 0;
 }
 
-FGPUFluidSimulator* FFluidPreviewScene::GetGPUSimulator() const
+FGPUFluidSimulator* FKawaiiFluidPreviewScene::GetGPUSimulator() const
 {
 	return SimulationContext ? SimulationContext->GetGPUSimulator() : nullptr;
 }

@@ -12,7 +12,7 @@ class UThumbnailInfo;
  * Asset type actions for KawaiiFluidPresetDataAsset
  * Handles double-click behavior, context menu, etc.
  */
-class KAWAIIFLUIDEDITOR_API FAssetTypeActions_FluidPreset : public FAssetTypeActions_Base
+class KAWAIIFLUIDEDITOR_API FAssetTypeActions_KawaiiFluidPreset : public FAssetTypeActions_Base
 {
 public:
 	//~ Begin IAssetTypeActions Interface

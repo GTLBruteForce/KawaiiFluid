@@ -1,6 +1,6 @@
 ﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "Style/FluidEditorStyle.h"
+#include "Style/KawaiiFluidEditorStyle.h"
 #include "Styling/SlateStyleRegistry.h"
 #include "Styling/SlateTypes.h"
 #include "Styling/CoreStyle.h"
@@ -12,9 +12,9 @@
 #define BORDER_BRUSH(RelativePath, ...) FSlateBorderBrush(Style->RootToContentDir(RelativePath, TEXT(".png")), __VA_ARGS__)
 #define IMAGE_BRUSH_SVG(RelativePath, ...) FSlateVectorImageBrush(Style->RootToContentDir(RelativePath, TEXT(".svg")), __VA_ARGS__)
 
-TSharedPtr<FSlateStyleSet> FFluidEditorStyle::StyleInstance = nullptr;
+TSharedPtr<FSlateStyleSet> FKawaiiFluidEditorStyle::StyleInstance = nullptr;
 
-void FFluidEditorStyle::Initialize()
+void FKawaiiFluidEditorStyle::Initialize()
 {
 	if (!StyleInstance.IsValid())
 	{
@@ -23,14 +23,14 @@ void FFluidEditorStyle::Initialize()
 	}
 }
 
-void FFluidEditorStyle::Shutdown()
+void FKawaiiFluidEditorStyle::Shutdown()
 {
 	FSlateStyleRegistry::UnRegisterSlateStyle(*StyleInstance);
 	ensure(StyleInstance.IsUnique());
 	StyleInstance.Reset();
 }
 
-void FFluidEditorStyle::ReloadTextures()
+void FKawaiiFluidEditorStyle::ReloadTextures()
 {
 	if (FSlateApplication::IsInitialized())
 	{
@@ -38,23 +38,23 @@ void FFluidEditorStyle::ReloadTextures()
 	}
 }
 
-const ISlateStyle& FFluidEditorStyle::Get()
+const ISlateStyle& FKawaiiFluidEditorStyle::Get()
 {
 	return *StyleInstance;
 }
 
-FName FFluidEditorStyle::GetStyleSetName()
+FName FKawaiiFluidEditorStyle::GetStyleSetName()
 {
 	static FName StyleSetName(TEXT("FluidEditorStyle"));
 	return StyleSetName;
 }
 
-const FSlateBrush* FFluidEditorStyle::GetBrush(FName PropertyName)
+const FSlateBrush* FKawaiiFluidEditorStyle::GetBrush(FName PropertyName)
 {
 	return StyleInstance->GetBrush(PropertyName);
 }
 
-TSharedRef<FSlateStyleSet> FFluidEditorStyle::Create()
+TSharedRef<FSlateStyleSet> FKawaiiFluidEditorStyle::Create()
 {
 	TSharedRef<FSlateStyleSet> Style = MakeShareable(new FSlateStyleSet(GetStyleSetName()));
 	Style->SetContentRoot(IPluginManager::Get().FindPlugin(TEXT("KawaiiFluidSystem"))->GetContentDir());

@@ -13,7 +13,7 @@ class AKawaiiFluidVolume;
  * KawaiiFluidVolumeComponent detail panel customization
  * Adds brush mode start/stop buttons and particle count display
  */
-class FFluidVolumeComponentDetails : public IDetailCustomization
+class FKawaiiFluidVolumeComponentDetails : public IDetailCustomization
 {
 public:
 	/** IDetailCustomization factory */

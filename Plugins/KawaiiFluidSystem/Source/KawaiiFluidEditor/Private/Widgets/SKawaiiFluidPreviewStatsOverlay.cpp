@@ -1,14 +1,14 @@
 ﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "Widgets/SFluidPreviewStatsOverlay.h"
-#include "Preview/FluidPreviewScene.h"
+#include "Widgets/SKawaiiFluidPreviewStatsOverlay.h"
+#include "Preview/KawaiiFluidPreviewScene.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SBox.h"
 #include "Styling/AppStyle.h"
 
-#define LOCTEXT_NAMESPACE "SFluidPreviewStatsOverlay"
+#define LOCTEXT_NAMESPACE "SKawaiiFluidPreviewStatsOverlay"
 
-void SFluidPreviewStatsOverlay::Construct(const FArguments& InArgs, TSharedPtr<FFluidPreviewScene> InPreviewScene)
+void SKawaiiFluidPreviewStatsOverlay::Construct(const FArguments& InArgs, TSharedPtr<FKawaiiFluidPreviewScene> InPreviewScene)
 {
 	PreviewScenePtr = InPreviewScene;
 	CachedFPS = 60.0f;
@@ -29,7 +29,7 @@ void SFluidPreviewStatsOverlay::Construct(const FArguments& InArgs, TSharedPtr<F
 			.Padding(0.0f, 2.0f)
 			[
 				SNew(STextBlock)
-				.Text(this, &SFluidPreviewStatsOverlay::GetParticleCountText)
+				.Text(this, &SKawaiiFluidPreviewStatsOverlay::GetParticleCountText)
 				.ColorAndOpacity(FLinearColor::White)
 				.ShadowOffset(FVector2D(1.0f, 1.0f))
 				.ShadowColorAndOpacity(FLinearColor::Black)
@@ -41,7 +41,7 @@ void SFluidPreviewStatsOverlay::Construct(const FArguments& InArgs, TSharedPtr<F
 			.Padding(0.0f, 2.0f)
 			[
 				SNew(STextBlock)
-				.Text(this, &SFluidPreviewStatsOverlay::GetSimulationTimeText)
+				.Text(this, &SKawaiiFluidPreviewStatsOverlay::GetSimulationTimeText)
 				.ColorAndOpacity(FLinearColor::White)
 				.ShadowOffset(FVector2D(1.0f, 1.0f))
 				.ShadowColorAndOpacity(FLinearColor::Black)
@@ -53,7 +53,7 @@ void SFluidPreviewStatsOverlay::Construct(const FArguments& InArgs, TSharedPtr<F
 			.Padding(0.0f, 2.0f)
 			[
 				SNew(STextBlock)
-				.Text(this, &SFluidPreviewStatsOverlay::GetFPSText)
+				.Text(this, &SKawaiiFluidPreviewStatsOverlay::GetFPSText)
 				.ColorAndOpacity(FLinearColor::White)
 				.ShadowOffset(FVector2D(1.0f, 1.0f))
 				.ShadowColorAndOpacity(FLinearColor::Black)
@@ -63,7 +63,7 @@ void SFluidPreviewStatsOverlay::Construct(const FArguments& InArgs, TSharedPtr<F
 	];
 }
 
-void SFluidPreviewStatsOverlay::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+void SKawaiiFluidPreviewStatsOverlay::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
 {
 	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
 
@@ -82,28 +82,28 @@ void SFluidPreviewStatsOverlay::Tick(const FGeometry& AllottedGeometry, const do
 	}
 
 	// Update cached values from preview scene
-	TSharedPtr<FFluidPreviewScene> PreviewScene = PreviewScenePtr.Pin();
+	TSharedPtr<FKawaiiFluidPreviewScene> PreviewScene = PreviewScenePtr.Pin();
 	if (PreviewScene.IsValid())
 	{
 		CachedParticleCount = PreviewScene->GetParticleCount();
 	}
 }
 
-FText SFluidPreviewStatsOverlay::GetParticleCountText() const
+FText SKawaiiFluidPreviewStatsOverlay::GetParticleCountText() const
 {
 	return FText::Format(LOCTEXT("ParticleCount", "Particles: {0}"), FText::AsNumber(CachedParticleCount));
 }
 
-FText SFluidPreviewStatsOverlay::GetSimulationTimeText() const
+FText SKawaiiFluidPreviewStatsOverlay::GetSimulationTimeText() const
 {
-	TSharedPtr<FFluidPreviewScene> PreviewScene = PreviewScenePtr.Pin();
+	TSharedPtr<FKawaiiFluidPreviewScene> PreviewScene = PreviewScenePtr.Pin();
 	float SimTime = PreviewScene.IsValid() ? PreviewScene->GetSimulationTime() : 0.0f;
 	FNumberFormattingOptions Options;
 	Options.MaximumFractionalDigits = 2;
 	return FText::Format(LOCTEXT("SimulationTime", "Time: {0}s"), FText::AsNumber(SimTime, &Options));
 }
 
-FText SFluidPreviewStatsOverlay::GetFPSText() const
+FText SKawaiiFluidPreviewStatsOverlay::GetFPSText() const
 {
 	return FText::Format(LOCTEXT("FPS", "FPS: {0}"), FText::AsNumber(FMath::RoundToInt(CachedFPS)));
 }

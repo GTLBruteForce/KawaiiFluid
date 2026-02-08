@@ -1,16 +1,16 @@
 ﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "Viewport/SFluidPresetEditorViewport.h"
-#include "Viewport/FluidPresetEditorViewportClient.h"
-#include "Preview/FluidPreviewScene.h"
+#include "Viewport/SKawaiiFluidPresetEditorViewport.h"
+#include "Viewport/KawaiiFluidPresetEditorViewportClient.h"
+#include "Preview/KawaiiFluidPreviewScene.h"
 #include "Editor/KawaiiFluidPresetAssetEditor.h"
-#include "Widgets/SFluidPreviewStatsOverlay.h"
+#include "Widgets/SKawaiiFluidPreviewStatsOverlay.h"
 #include "Core/FluidParticle.h"
 #include "SEditorViewportToolBarMenu.h"
 #include "STransformViewportToolbar.h"
 
-void SFluidPresetEditorViewport::Construct(const FArguments& InArgs,
-                                            TSharedPtr<FFluidPreviewScene> InPreviewScene,
+void SKawaiiFluidPresetEditorViewport::Construct(const FArguments& InArgs,
+                                            TSharedPtr<FKawaiiFluidPreviewScene> InPreviewScene,
                                             TSharedPtr<FKawaiiFluidPresetAssetEditor> InAssetEditor)
 {
 	PreviewScene = InPreviewScene;
@@ -19,7 +19,7 @@ void SFluidPresetEditorViewport::Construct(const FArguments& InArgs,
 	SEditorViewport::Construct(SEditorViewport::FArguments());
 }
 
-SFluidPresetEditorViewport::~SFluidPresetEditorViewport()
+SKawaiiFluidPresetEditorViewport::~SKawaiiFluidPresetEditorViewport()
 {
 	if (ViewportClient.IsValid())
 	{
@@ -27,28 +27,27 @@ SFluidPresetEditorViewport::~SFluidPresetEditorViewport()
 	}
 }
 
-void SFluidPresetEditorViewport::AddReferencedObjects(FReferenceCollector& Collector)
+void SKawaiiFluidPresetEditorViewport::AddReferencedObjects(FReferenceCollector& Collector)
 {
 	// Add references to prevent garbage collection
 }
 
-TSharedRef<SEditorViewport> SFluidPresetEditorViewport::GetViewportWidget()
+TSharedRef<SEditorViewport> SKawaiiFluidPresetEditorViewport::GetViewportWidget()
 {
 	return SharedThis(this);
 }
 
-TSharedPtr<FExtender> SFluidPresetEditorViewport::GetExtenders() const
+TSharedPtr<FExtender> SKawaiiFluidPresetEditorViewport::GetExtenders() const
 {
-	TSharedPtr<FExtender> Result(MakeShareable(new FExtender));
-	return Result;
+	return MakeShared<FExtender>();
 }
 
-void SFluidPresetEditorViewport::OnFloatingButtonClicked()
+void SKawaiiFluidPresetEditorViewport::OnFloatingButtonClicked()
 {
 	// Handle floating button click if needed
 }
 
-void SFluidPresetEditorViewport::RefreshViewport()
+void SKawaiiFluidPresetEditorViewport::RefreshViewport()
 {
 	if (ViewportClient.IsValid())
 	{
@@ -56,7 +55,7 @@ void SFluidPresetEditorViewport::RefreshViewport()
 	}
 }
 
-void SFluidPresetEditorViewport::FocusOnParticles()
+void SKawaiiFluidPresetEditorViewport::FocusOnParticles()
 {
 	if (!ViewportClient.IsValid() || !PreviewScene.IsValid())
 	{
@@ -82,7 +81,7 @@ void SFluidPresetEditorViewport::FocusOnParticles()
 	ViewportClient->FocusOnBounds(FBoxSphereBounds(Bounds));
 }
 
-void SFluidPresetEditorViewport::ResetCamera()
+void SKawaiiFluidPresetEditorViewport::ResetCamera()
 {
 	if (ViewportClient.IsValid())
 	{
@@ -90,18 +89,18 @@ void SFluidPresetEditorViewport::ResetCamera()
 	}
 }
 
-TSharedRef<FEditorViewportClient> SFluidPresetEditorViewport::MakeEditorViewportClient()
+TSharedRef<FEditorViewportClient> SKawaiiFluidPresetEditorViewport::MakeEditorViewportClient()
 {
-	ViewportClient = MakeShareable(new FFluidPresetEditorViewportClient(
+	ViewportClient = MakeShared<FKawaiiFluidPresetEditorViewportClient>(
 		PreviewScene.ToSharedRef(),
-		SharedThis(this)));
+		SharedThis(this));
 
 	ViewportClient->SetInitialCameraPosition();
 
 	return ViewportClient.ToSharedRef();
 }
 
-void SFluidPresetEditorViewport::PopulateViewportOverlays(TSharedRef<SOverlay> Overlay)
+void SKawaiiFluidPresetEditorViewport::PopulateViewportOverlays(TSharedRef<SOverlay> Overlay)
 {
 	SEditorViewport::PopulateViewportOverlays(Overlay);
 
@@ -111,11 +110,11 @@ void SFluidPresetEditorViewport::PopulateViewportOverlays(TSharedRef<SOverlay> O
 		.HAlign(HAlign_Left)
 		.Padding(10.0f)
 		[
-			SNew(SFluidPreviewStatsOverlay, PreviewScene)
+			SNew(SKawaiiFluidPreviewStatsOverlay, PreviewScene)
 		];
 }
 
-void SFluidPresetEditorViewport::BindCommands()
+void SKawaiiFluidPresetEditorViewport::BindCommands()
 {
 	SEditorViewport::BindCommands();
 

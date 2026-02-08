@@ -103,7 +103,10 @@ public:
 
 	void Draw(FCanvas* Canvas, const FIntRect& Rect)
 	{
-		if (!PreviewMeshComponent || !PreviewMeshComponent->GetStaticMesh()) return;
+		if (!PreviewMeshComponent || !PreviewMeshComponent->GetStaticMesh())
+	{
+		return;
+	}
 
 		// Create FGameTime (UE 5.7 compatible)
 		FGameTime GameTime = FGameTime::CreateUndilated(FApp::GetCurrentTime(), FApp::GetDeltaTime());
@@ -179,7 +182,10 @@ UKawaiiFluidPresetThumbnailRenderer::UKawaiiFluidPresetThumbnailRenderer()
 void UKawaiiFluidPresetThumbnailRenderer::Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget* RenderTarget, FCanvas* Canvas, bool bAdditionalContext)
 {
 	UKawaiiFluidPresetDataAsset* Preset = Cast<UKawaiiFluidPresetDataAsset>(Object);
-	if (!Preset) return;
+	if (!Preset)
+	{
+		return;
+	}
 
 	if (!ThumbnailScene)
 	{

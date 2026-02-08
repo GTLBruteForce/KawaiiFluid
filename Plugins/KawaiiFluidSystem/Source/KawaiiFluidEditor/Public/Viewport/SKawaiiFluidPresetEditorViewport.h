@@ -6,27 +6,27 @@
 #include "SEditorViewport.h"
 #include "SCommonEditorViewportToolbarBase.h"
 
-class FFluidPreviewScene;
+class FKawaiiFluidPreviewScene;
 class FKawaiiFluidPresetAssetEditor;
-class FFluidPresetEditorViewportClient;
+class FKawaiiFluidPresetEditorViewportClient;
 
 /**
  * Viewport widget for fluid preset editor
  * Displays 3D preview of fluid simulation
  */
-class KAWAIIFLUIDEDITOR_API SFluidPresetEditorViewport : public SEditorViewport,
+class KAWAIIFLUIDEDITOR_API SKawaiiFluidPresetEditorViewport : public SEditorViewport,
                                                           public FGCObject,
                                                           public ICommonEditorViewportToolbarInfoProvider
 {
 public:
-	SLATE_BEGIN_ARGS(SFluidPresetEditorViewport) {}
+	SLATE_BEGIN_ARGS(SKawaiiFluidPresetEditorViewport) {}
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs,
-	               TSharedPtr<FFluidPreviewScene> InPreviewScene,
+	               TSharedPtr<FKawaiiFluidPreviewScene> InPreviewScene,
 	               TSharedPtr<FKawaiiFluidPresetAssetEditor> InAssetEditor);
 
-	virtual ~SFluidPresetEditorViewport() override;
+	virtual ~SKawaiiFluidPresetEditorViewport() override;
 
 	//~ Begin FGCObject Interface
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
@@ -49,10 +49,10 @@ public:
 	void ResetCamera();
 
 	/** Get viewport client */
-	TSharedPtr<FFluidPresetEditorViewportClient> GetViewportClient() const { return ViewportClient; }
+	TSharedPtr<FKawaiiFluidPresetEditorViewportClient> GetViewportClient() const { return ViewportClient; }
 
 	/** Get preview scene */
-	TSharedPtr<FFluidPreviewScene> GetPreviewScene() const { return PreviewScene; }
+	TSharedPtr<FKawaiiFluidPreviewScene> GetPreviewScene() const { return PreviewScene; }
 
 protected:
 	//~ Begin SEditorViewport Interface
@@ -63,10 +63,10 @@ protected:
 
 private:
 	/** Viewport client */
-	TSharedPtr<FFluidPresetEditorViewportClient> ViewportClient;
+	TSharedPtr<FKawaiiFluidPresetEditorViewportClient> ViewportClient;
 
 	/** Preview scene reference */
-	TSharedPtr<FFluidPreviewScene> PreviewScene;
+	TSharedPtr<FKawaiiFluidPreviewScene> PreviewScene;
 
 	/** Asset editor reference */
 	TWeakPtr<FKawaiiFluidPresetAssetEditor> AssetEditorPtr;

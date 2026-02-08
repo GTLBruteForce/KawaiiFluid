@@ -5,22 +5,22 @@
 #include "CoreMinimal.h"
 #include "EditorViewportClient.h"
 
-class FFluidPreviewScene;
-class SFluidPresetEditorViewport;
+class FKawaiiFluidPreviewScene;
+class SKawaiiFluidPresetEditorViewport;
 
 /**
  * Viewport client for fluid preset editor
  * Handles rendering, input, and camera control
  */
-class KAWAIIFLUIDEDITOR_API FFluidPresetEditorViewportClient : public FEditorViewportClient,
-                                                                public TSharedFromThis<FFluidPresetEditorViewportClient>
+class KAWAIIFLUIDEDITOR_API FKawaiiFluidPresetEditorViewportClient : public FEditorViewportClient,
+                                                                public TSharedFromThis<FKawaiiFluidPresetEditorViewportClient>
 {
 public:
-	FFluidPresetEditorViewportClient(
-		TSharedRef<FFluidPreviewScene> InPreviewScene,
-		TSharedRef<SFluidPresetEditorViewport> InViewportWidget);
+	FKawaiiFluidPresetEditorViewportClient(
+		TSharedRef<FKawaiiFluidPreviewScene> InPreviewScene,
+		TSharedRef<SKawaiiFluidPresetEditorViewport> InViewportWidget);
 
-	virtual ~FFluidPresetEditorViewportClient() override;
+	virtual ~FKawaiiFluidPresetEditorViewportClient() override;
 
 	//~ Begin FViewportClient Interface
 	virtual void Tick(float DeltaSeconds) override;
@@ -41,12 +41,12 @@ public:
 	void FocusOnBounds(const FBoxSphereBounds& Bounds);
 
 	/** Get preview scene */
-	TSharedPtr<FFluidPreviewScene> GetPreviewScene() const { return PreviewScene; }
+	TSharedPtr<FKawaiiFluidPreviewScene> GetPreviewScene() const { return PreviewScene; }
 
 private:
 	/** Preview scene */
-	TSharedPtr<FFluidPreviewScene> PreviewScene;
+	TSharedPtr<FKawaiiFluidPreviewScene> PreviewScene;
 
 	/** Viewport widget reference */
-	TWeakPtr<SFluidPresetEditorViewport> ViewportWidgetPtr;
+	TWeakPtr<SKawaiiFluidPresetEditorViewport> ViewportWidgetPtr;
 };

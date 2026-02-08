@@ -1,29 +1,29 @@
 ﻿// Copyright 2026 Team_Bruteforce. All Rights Reserved.
 
-#include "Factories/FluidPresetFactory.h"
+#include "Factories/KawaiiFluidPresetFactory.h"
 #include "KawaiiFluidEditor.h"
 #include "Data/KawaiiFluidPresetDataAsset.h"
 
-#define LOCTEXT_NAMESPACE "FluidPresetFactory"
+#define LOCTEXT_NAMESPACE "KawaiiFluidPresetFactory"
 
-UFluidPresetFactory::UFluidPresetFactory()
+UKawaiiFluidPresetFactory::UKawaiiFluidPresetFactory()
 {
 	SupportedClass = UKawaiiFluidPresetDataAsset::StaticClass();
 	bCreateNew = true;
 	bEditAfterNew = true;
 }
 
-UObject* UFluidPresetFactory::FactoryCreateNew(UClass* InClass, UObject* InParent, FName InName, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn)
+UObject* UKawaiiFluidPresetFactory::FactoryCreateNew(UClass* InClass, UObject* InParent, FName InName, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn)
 {
 	return NewObject<UKawaiiFluidPresetDataAsset>(InParent, InClass, InName, Flags);
 }
 
-uint32 UFluidPresetFactory::GetMenuCategories() const
+uint32 UKawaiiFluidPresetFactory::GetMenuCategories() const
 {
 	return FKawaiiFluidEditorModule::Get().GetAssetCategory();
 }
 
-FText UFluidPresetFactory::GetDisplayName() const
+FText UKawaiiFluidPresetFactory::GetDisplayName() const
 {
 	return LOCTEXT("FactoryDisplayName", "Fluid Preset");
 }
