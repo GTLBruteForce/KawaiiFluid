@@ -1340,15 +1340,16 @@ void FGPUFluidSimulator::EnqueueParticleCountReadback(FRHICommandListImmediate& 
 	}
 
 	CountReadbacks[WriteIdx]->EnqueueCopy(RHICmdList, PersistentParticleCountBuffer->GetRHI(), GPUIndirectDispatch::BufferSizeBytes);
+	bCountReadbackValid[WriteIdx] = true;
 }
 
 void FGPUFluidSimulator::ProcessParticleCountReadback()
 {
-	// Find newest ready readback (most up-to-date GPU count)
+	// Find newest valid ready readback (most up-to-date GPU count)
 	int32 ReadIdx = -1;
 	for (int32 i = 0; i < NUM_COUNT_READBACK_BUFFERS; ++i)
 	{
-		if (CountReadbacks[i] && CountReadbacks[i]->IsReady())
+		if (CountReadbacks[i] && bCountReadbackValid[i] && CountReadbacks[i]->IsReady())
 		{
 			ReadIdx = i;
 		}
@@ -1364,6 +1365,19 @@ void FGPUFluidSimulator::ProcessParticleCountReadback()
 	{
 		const int32 GPUCount = static_cast<int32>(Data[GPUIndirectDispatch::ParticleCountElementIndex]);
 		CurrentParticleCount = GPUCount;
+
+		// Consumed: mark this slot invalid so it won't be re-read
+		bCountReadbackValid[ReadIdx] = false;
+
+		// When GPU confirms 0 particles, invalidate all remaining slots.
+		// Prevents stale zero-readbacks from overwriting spawn estimates on next spawn cycle.
+		if (GPUCount == 0)
+		{
+			for (int32 i = 0; i < NUM_COUNT_READBACK_BUFFERS; ++i)
+			{
+				bCountReadbackValid[i] = false;
+			}
+		}
 	}
 	CountReadbacks[ReadIdx]->Unlock();
 }

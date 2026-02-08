@@ -1301,6 +1301,7 @@ private:
 	/** Triple-buffered async readback for GPU particle count → CPU CurrentParticleCount */
 	static constexpr int32 NUM_COUNT_READBACK_BUFFERS = 3;
 	FRHIGPUBufferReadback* CountReadbacks[NUM_COUNT_READBACK_BUFFERS] = { nullptr };
+	bool bCountReadbackValid[NUM_COUNT_READBACK_BUFFERS] = { false, false, false };
 	int32 CountReadbackWriteIndex = 0;
 
 	/** True once particles have ever existed (replaces CurrentParticleCount==0 early-out) */
