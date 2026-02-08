@@ -24,9 +24,6 @@ class FSpatialHash;
 struct FFluidParticle;
 class FGPUFluidSimulator;
 
-// Legacy typedef for backward compatibility
-using UKawaiiFluidSimulationVolumeComponent = UKawaiiFluidVolumeComponent;
-
 /**
  * Cache key for Context lookup
  * Different VolumeComponents use different Z-Order spaces

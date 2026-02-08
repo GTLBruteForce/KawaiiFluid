@@ -493,7 +493,3 @@ private:
 
 	void DrawBoundsVisualization();
 };
-
-// Legacy typedef for backward compatibility
-// TODO: Remove after full migration
-using UKawaiiFluidSimulationVolumeComponent = UKawaiiFluidVolumeComponent;

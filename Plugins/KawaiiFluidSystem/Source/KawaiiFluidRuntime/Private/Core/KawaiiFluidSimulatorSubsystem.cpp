@@ -193,7 +193,7 @@ void UKawaiiFluidSimulatorSubsystem::RegisterModule(UKawaiiFluidSimulationModule
 		// Same VolumeComponent = same Z-Order space = particles can interact
 		if (Preset)
 		{
-			UKawaiiFluidSimulationVolumeComponent* TargetVolume = Module->GetTargetVolumeComponent();
+			UKawaiiFluidVolumeComponent* TargetVolume = Module->GetTargetVolumeComponent();
 			UKawaiiFluidSimulationContext* Context = GetOrCreateContext(TargetVolume, Preset);
 			if (Context)
 			{
@@ -561,7 +561,7 @@ void UKawaiiFluidSimulatorSubsystem::SimulateIndependentFluidComponents(float De
 		}
 
 		// Get target volume component for Z-Order space bounds
-		UKawaiiFluidSimulationVolumeComponent* TargetVolume = Module->GetTargetVolumeComponent();
+		UKawaiiFluidVolumeComponent* TargetVolume = Module->GetTargetVolumeComponent();
 
 		// Get or create context (keyed by VolumeComponent + Preset)
 		UKawaiiFluidSimulationContext* Context = GetOrCreateContext(TargetVolume, EffectivePreset);
@@ -723,7 +723,7 @@ UKawaiiFluidSimulatorSubsystem::GroupModulesByContext() const
 		    Module->GetPreset())
 		{
 			// Get target volume component for Z-Order space bounds
-			UKawaiiFluidSimulationVolumeComponent* TargetVolume = Module->GetTargetVolumeComponent();
+			UKawaiiFluidVolumeComponent* TargetVolume = Module->GetTargetVolumeComponent();
 
 			// Group by (VolumeComponent + Preset)
 			// Same VolumeComponent = same Z-Order space = particles can interact
