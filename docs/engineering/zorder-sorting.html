@@ -1,0 +1,1363 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Z-Order Sorting 최적화 — KawaiiFluid</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+
+:root {
+  --bg:        #EDF1F0;
+  --surface:   #FFFFFF;
+  --surface-2: #F5F8F7;
+  --ink:       #0F1A1C;
+  --ink-2:     #3B4A4D;
+  --muted:     #6B7B7E;
+  --line:      #D2DBD9;
+  --line-soft: #E2E9E7;
+  --accent:    #0B6D5F;
+  --accent-2:  #0E8A78;
+  --accent-bg: #DEEDE9;
+  --amber:     #9E560F;
+  --amber-bg:  #F7E8D6;
+  --grey-data: #94A2A4;
+  --shadow:    0 1px 2px rgba(15,26,28,.05), 0 8px 28px -18px rgba(15,26,28,.35);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0D1416;
+    --surface:   #141D1F;
+    --surface-2: #1A2427;
+    --ink:       #E9F0ED;
+    --ink-2:     #B4C2C1;
+    --muted:     #839596;
+    --line:      #27373A;
+    --line-soft: #1F2C2F;
+    --accent:    #4FC3AC;
+    --accent-2:  #6FD4BF;
+    --accent-bg: #12312C;
+    --amber:     #E0A362;
+    --amber-bg:  #35271A;
+    --grey-data: #6D7D80;
+    --shadow:    0 1px 2px rgba(0,0,0,.3), 0 8px 30px -18px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"] {
+  --bg:        #0D1416;
+  --surface:   #141D1F;
+  --surface-2: #1A2427;
+  --ink:       #E9F0ED;
+  --ink-2:     #B4C2C1;
+  --muted:     #839596;
+  --line:      #27373A;
+  --line-soft: #1F2C2F;
+  --accent:    #4FC3AC;
+  --accent-2:  #6FD4BF;
+  --accent-bg: #12312C;
+  --amber:     #E0A362;
+  --amber-bg:  #35271A;
+  --grey-data: #6D7D80;
+  --shadow:    0 1px 2px rgba(0,0,0,.3), 0 8px 30px -18px rgba(0,0,0,.8);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-family: "IBM Plex Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  font-size: 15.5px;
+  line-height: 1.78;
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+
+.mono, code, pre, .num {
+  font-family: "IBM Plex Mono", ui-monospace, "Cascadia Mono", monospace;
+  font-variant-ligatures: none;
+}
+
+/* ---------- shell ---------- */
+.shell {
+  max-width: 1160px;
+  margin-inline: auto;
+  padding: 0 28px 120px;
+}
+@media (min-width: 1060px) {
+  .shell {
+    display: grid;
+    grid-template-columns: 176px minmax(0, 1fr);
+    gap: 64px;
+    align-items: start;
+  }
+  .shell > header, .shell > nav { grid-column: 1 / -1; }
+  nav.toc { grid-column: 1; grid-row: 2; position: sticky; top: 28px; }
+  main { grid-column: 2; grid-row: 2; }
+}
+
+/* ---------- hero ---------- */
+header.hero {
+  padding: 72px 0 44px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 52px;
+}
+.eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: .705rem;
+  letter-spacing: .17em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 18px;
+}
+h1 {
+  font-size: clamp(2.05rem, 5vw, 3.1rem);
+  line-height: 1.14;
+  letter-spacing: -.025em;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 20px;
+  text-wrap: balance;
+  max-width: 20ch;
+}
+.lede {
+  font-size: 1.075rem;
+  line-height: 1.72;
+  max-width: 60ch;
+  margin: 0 0 40px;
+  color: var(--ink-2);
+}
+.lede strong { color: var(--ink); font-weight: 600; }
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.hero-cell { background: var(--surface); padding: 18px 20px 20px; }
+.hero-cell .k {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: .66rem;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: block;
+  margin-bottom: 7px;
+}
+.hero-cell .v { color: var(--ink); font-size: .945rem; line-height: 1.5; }
+.hero-cell .v small { display: block; color: var(--muted); font-size: .82rem; font-weight: 400; }
+.spec-grid { margin-bottom: 24px; }
+.spec-grid .hero-cell .v { font-size: .9rem; }
+.spec-grid .hero-cell .v.mono { font-size: .8rem; }
+
+.result {
+  margin-top: 28px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 26px 28px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 30px;
+  box-shadow: var(--shadow);
+}
+.result .figure-num {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 2.1rem;
+  font-weight: 500;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.result .from { color: var(--grey-data); }
+.result .arrow { color: var(--muted); font-size: 1.4rem; }
+.result .to { color: var(--accent); }
+.result .rdesc { font-size: .9rem; line-height: 1.6; color: var(--muted); max-width: 46ch; }
+.result .rdesc b { color: var(--ink-2); font-weight: 600; }
+
+/* ---------- toc ---------- */
+nav.toc { font-size: .845rem; line-height: 1.5; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+nav.toc a {
+  color: var(--muted);
+  text-decoration: none;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 6px;
+  border-left: 2px solid transparent;
+  padding-left: 10px;
+  margin-left: -12px;
+  transition: color .15s, border-color .15s;
+}
+nav.toc a .n { font-family: "IBM Plex Mono", monospace; font-size: .74rem; color: var(--line); }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--ink); }
+nav.toc a:hover .n, nav.toc a.active .n { color: var(--accent); }
+nav.toc a.active { color: var(--ink); border-left-color: var(--accent); }
+nav.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+@media (max-width: 1059px) { nav.toc { display: none; } }
+
+/* ---------- sections ---------- */
+section { margin-bottom: 88px; scroll-margin-top: 24px; }
+.sec-head { margin-bottom: 26px; }
+.sec-meta {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: .69rem;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.sec-meta .step { color: var(--accent); }
+.sec-meta .dot { color: var(--line); }
+h2 {
+  font-size: 1.62rem;
+  line-height: 1.32;
+  font-weight: 600;
+  letter-spacing: -.018em;
+  color: var(--ink);
+  margin: 0;
+  max-width: 26ch;
+  text-wrap: balance;
+}
+h3 {
+  font-size: 1.03rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 44px 0 12px;
+  letter-spacing: -.008em;
+}
+p { max-width: 68ch; margin: 0 0 20px; }
+p strong, li strong { color: var(--ink); font-weight: 600; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+ul { max-width: 68ch; padding-left: 0; list-style: none; margin: 0 0 22px; display: grid; gap: 11px; }
+ul li { padding-left: 20px; position: relative; }
+ul li::before {
+  content: "";
+  position: absolute;
+  left: 3px; top: .72em;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: .7;
+}
+code:not(pre code) {
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: .08em .34em;
+  font-size: .86em;
+  color: var(--ink);
+}
+
+/* ---------- callout ---------- */
+.callout {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 18px 22px;
+  margin: 0 0 26px;
+  max-width: 68ch;
+}
+.callout.warn { border-left-color: var(--amber); }
+.callout p:last-child { margin-bottom: 0; }
+.callout .tag {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: .66rem;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  color: var(--accent);
+  display: block;
+  margin-bottom: 8px;
+}
+.callout.warn .tag { color: var(--amber); }
+
+/* ---------- code ---------- */
+.codewrap {
+  margin: 0 0 26px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.codewrap .cap {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: .69rem;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-2);
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.codewrap .cap .side { color: var(--accent); }
+.codewrap .cap .side.before { color: var(--grey-data); }
+pre {
+  margin: 0;
+  padding: 18px 16px;
+  overflow-x: auto;
+  font-size: .805rem;
+  line-height: 1.68;
+  color: var(--ink);
+  tab-size: 4;
+}
+pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+.hljs-comment { color: var(--muted); font-style: italic; }
+.hljs-keyword, .hljs-built_in { color: var(--accent); }
+.hljs-type { color: var(--accent); }
+.hljs-number, .hljs-literal { color: var(--amber); }
+.hljs-string { color: var(--amber); }
+.hljs-meta { color: var(--muted); }
+.hljs-title, .hljs-title.function_ { color: var(--ink); font-weight: 600; }
+.hljs-params { color: var(--ink-2); }
+
+/* ---------- figures ---------- */
+figure {
+  margin: 0 0 30px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 24px 22px 18px;
+  box-shadow: var(--shadow);
+}
+figure .scroller { overflow-x: auto; }
+figure svg { display: block; max-width: 100%; height: auto; min-width: 520px; color: var(--ink); }
+figcaption {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+  font-size: .855rem;
+  line-height: 1.65;
+  color: var(--muted);
+  max-width: 76ch;
+}
+figcaption b { color: var(--ink-2); font-weight: 600; }
+figure img { display: block; width: 100%; height: auto; border-radius: 6px; }
+
+.svg-label { font-family: "IBM Plex Mono", monospace; font-size: 11px; fill: currentColor; }
+.svg-label-sm { font-family: "IBM Plex Mono", monospace; font-size: 9.5px; fill: currentColor; }
+.svg-title { font-family: "IBM Plex Sans KR", sans-serif; font-size: 12px; font-weight: 600; fill: currentColor; }
+.svg-muted { fill: var(--muted); }
+.svg-accent { fill: var(--accent); }
+.svg-amber { fill: var(--amber); }
+.box { fill: var(--surface-2); stroke: var(--line); stroke-width: 1; }
+.box-a { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 1; }
+.box-b { fill: var(--amber-bg); stroke: var(--amber); stroke-width: 1; }
+.box-dim { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 3; }
+.ln { stroke: var(--line); stroke-width: 1; fill: none; }
+.ln-a { stroke: var(--accent); stroke-width: 1.4; fill: none; }
+.ln-b { stroke: var(--amber); stroke-width: 1.4; fill: none; }
+.ln-dim { stroke: var(--grey-data); stroke-width: 1; fill: none; stroke-dasharray: 3 3; }
+
+/* ---------- table ---------- */
+.tablewrap { overflow-x: auto; margin: 0 0 26px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: .875rem; min-width: 480px; }
+th, td { padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--line-soft); }
+thead th {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: .68rem;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+tbody td:first-child { color: var(--ink); font-weight: 500; }
+tr.hl td { background: var(--accent-bg); }
+tr.hl td:first-child { color: var(--ink); }
+td .sha { font-family: "IBM Plex Mono", monospace; font-size: .82em; color: var(--accent); }
+
+/* ---------- footer ---------- */
+footer {
+  border-top: 1px solid var(--line);
+  padding-top: 28px;
+  font-size: .85rem;
+  color: var(--muted);
+  max-width: 68ch;
+}
+footer p { max-width: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+
+/* ---------- standalone page ---------- */
+html { color-scheme: light dark; }
+img { max-width: 100%; }
+a.commit { text-decoration: none; }
+a.commit code, a.commit .sha { transition: background .15s, border-color .15s; }
+a.commit:hover code { background: var(--accent-bg); border-color: var(--accent); }
+a.commit:hover .sha { text-decoration: underline; }
+a.commit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.docnav {
+  display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: baseline;
+  margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--line);
+  font-size: .875rem;
+}
+.docnav .lbl {
+  font-family: "IBM Plex Mono", monospace; font-size: .68rem; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted);
+}
+/* 성과 카드 — 값과 화살표가 붙지 않도록, 그리고 값이 숫자가 아닐 때의 서체 */
+.result > div:first-child { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.figure-num.word {
+  font-family: "IBM Plex Sans KR", "Malgun Gothic", sans-serif;
+  font-weight: 600; font-size: 1.75rem; letter-spacing: -.01em;
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="hero">
+  <p class="eyebrow">KawaiiFluid · GPU Fluid Simulation · 1 / 2</p>
+  <h1>Z-Order Sorting으로 이웃 탐색 다시 짓기</h1>
+  <p class="lede">
+    UE5 GPU 유체 플러그인의 SPH neighbor search를 <strong>고정 슬롯 해시 그리드</strong>에서
+    <strong>Morton code 정렬 기반 셀 구간 탐색</strong>으로 바꾼 기록.
+    좌표 범위 제약을 없앤 후속 작업은 <a href="hybrid-tiled-zorder.html">Hybrid Tiled Z-Order</a>에서 다룬다.
+  </p>
+
+  <div class="hero-grid">
+    <div class="hero-cell">
+      <span class="k">기간</span>
+      <span class="v mono">2026-01-10 → 01-15</span>
+    </div>
+    <div class="hero-cell">
+      <span class="k">담당</span>
+      <span class="v">GPU Z-Order Sorting 설계·도입<small>검증 시각화, 격자 파라미터 정합</small></span>
+    </div>
+    <div class="hero-cell">
+      <span class="k">스택</span>
+      <span class="v">Unreal Engine 5 · RDG<small>HLSL Compute Shader · SM6 / DX12</small></span>
+    </div>
+    <div class="hero-cell">
+      <span class="k">핵심 커밋</span>
+      <span class="v mono"><a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/7470af51129c436a49258e63a6cc66e80d2aa40d" target="_blank" rel="noopener"><span class="sha">7470af5</span></a> · <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/3eb412d7e8b3a657fabb799dc2529e1939ba2aa8" target="_blank" rel="noopener"><span class="sha">3eb412d</span></a><small class="mono"><a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/55015f958a7ad1a993bd93999f2ca7770bbbd05b" target="_blank" rel="noopener"><span class="sha">55015f9</span></a> · <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/9a1f358fc3b235dc26ca97f9ff678f311ce04194" target="_blank" rel="noopener"><span class="sha">9a1f358</span></a></small></span>
+    </div>
+  </div>
+
+  <div class="result">
+    <div>
+      <span class="figure-num from">5.60</span>
+      <span class="arrow">→</span>
+      <span class="figure-num to">2.20 ms</span>
+    </div>
+    <p class="rdesc">
+      입자 <b>100,000</b>개 기준 GPU 시뮬레이션 시간, RTX 4060 Laptop. Z-Order Sorting 도입 커밋
+      <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/7470af51129c436a49258e63a6cc66e80d2aa40d" target="_blank" rel="noopener"><code>7470af5</code></a>와 그 직전 parent <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/bda2c03006b7bf2e3d6098571f4a4081e9812c41" target="_blank" rel="noopener"><code>bda2c03</code></a>에서 각각 측정한 A/B — <b>약 2.5×</b>.
+    </p>
+  </div>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1"><span class="n">01</span><span>출발점의 자료구조</span></a></li>
+    <li><a href="#s2"><span class="n">02</span><span>Morton code</span></a></li>
+    <li><a href="#s3"><span class="n">03</span><span>5단계 정렬 파이프라인</span></a></li>
+    <li><a href="#s4"><span class="n">04</span><span>눈으로 검증하기</span></a></li>
+    <li><a href="#s5"><span class="n">05</span><span>키 폭을 셀 수에 맞추다</span></a></li>
+    <li><a href="#s6"><span class="n">06</span><span>타임라인과 정리</span></a></li>
+  </ol>
+</nav>
+
+<main>
+<section id="s1">
+  <div class="sec-head">
+    <p class="sec-meta"><span class="step">01 출발점</span><span class="dot">/</span><span>2026-01-12 이전 · <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/bda2c03006b7bf2e3d6098571f4a4081e9812c41" target="_blank" rel="noopener"><span class="sha">bda2c03</span></a></span></p>
+    <h2>고정 슬롯 해시 그리드가 걸어둔 두 개의 제약</h2>
+  </div>
+
+  <p>
+    SPH 유체는 매 프레임 입자마다 반경 <code>h</code> 안의 이웃 수십 개를 찾아 밀도·압력을 푼다.
+    입자 10만 개면 한 프레임에 수백만 번의 이웃 후보 읽기가 발생하고, 시뮬레이션 시간의 대부분이 여기서 나온다.
+  </p>
+  <p>
+    도입 전에도 uniform grid는 있었다. 셀 좌표를 큰 소수 세 개로 해싱해 65,536개 버킷 중 하나로 보내고,
+    버킷마다 <strong>16칸 고정 배열</strong>에 입자 인덱스를 적어두는 구조였다.
+    문제는 이 구조가 정확성과 성능 양쪽에 각각 제약을 걸고 있었다는 점이다.
+  </p>
+
+  <div class="codewrap">
+    <div class="cap"><span>FluidSpatialHash.ush · FluidSolveDensityPressure.usf</span><span class="side before">Before</span></div>
+<pre><code class="language-cpp">uint HashCell(int3 CellCoord)
+{
+    uint h = (uint(CellCoord.x) * 73856093u)
+           ^ (uint(CellCoord.y) * 19349663u)
+           ^ (uint(CellCoord.z) * 83492791u);
+    return h &amp; (SPATIAL_HASH_SIZE - 1);          // 65,536 buckets
+}
+
+// 이웃 후보 27셀 각각에 대해
+uint hash     = HashCell(neighborCell);
+uint count    = min(CellCounts[hash], (uint)MAX_PARTICLES_PER_CELL);  // 상한 16
+uint startIdx = hash * MAX_PARTICLES_PER_CELL;
+
+for (uint i = 0; i &lt; count; ++i)
+{
+    uint neighborIdx = ParticleIndices[startIdx + i];
+    FGPUFluidParticle neighbor = Particles[neighborIdx];   // ← 무작위 위치 읽기
+    ...
+}</code></pre>
+  </div>
+
+  <figure>
+    <div class="scroller">
+      <svg viewBox="0 0 900 306" role="img" aria-label="해시 버킷의 16칸 고정 배열은 초과 입자를 버리고, 그 안의 인덱스는 정렬되지 않은 입자 버퍼의 무작위 위치를 가리킨다">
+        <defs>
+          <marker id="f1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- top chain -->
+        <rect class="box" x="24" y="26" width="146" height="44" rx="6"/>
+        <text class="svg-label" x="97" y="53" text-anchor="middle">셀 좌표 (2, 7, 3)</text>
+
+        <line class="ln" x1="176" y1="48" x2="212" y2="48" marker-end="url(#f1a)"/>
+
+        <rect class="box" x="218" y="26" width="188" height="44" rx="6"/>
+        <text class="svg-label" x="312" y="53" text-anchor="middle">HashCell() &amp; 0xFFFF</text>
+
+        <line class="ln" x1="412" y1="48" x2="448" y2="48" marker-end="url(#f1a)"/>
+
+        <rect class="box-a" x="454" y="26" width="150" height="44" rx="6"/>
+        <text class="svg-label svg-accent" x="529" y="53" text-anchor="middle">bucket #41022</text>
+
+        <path class="ln" d="M529,74 L529,96 L300,96 L300,116" marker-end="url(#f1a)"/>
+
+        <!-- 16 slots -->
+        <text class="svg-label-sm svg-muted" x="24" y="134">슬롯</text>
+        <g>
+          <rect class="box" x="60" y="120" width="30" height="30" rx="3"/><rect class="box" x="94" y="120" width="30" height="30" rx="3"/>
+          <rect class="box" x="128" y="120" width="30" height="30" rx="3"/><rect class="box" x="162" y="120" width="30" height="30" rx="3"/>
+          <rect class="box" x="196" y="120" width="30" height="30" rx="3"/><rect class="box" x="230" y="120" width="30" height="30" rx="3"/>
+          <rect class="box" x="264" y="120" width="30" height="30" rx="3"/><rect class="box" x="298" y="120" width="30" height="30" rx="3"/>
+          <rect class="box" x="332" y="120" width="30" height="30" rx="3"/><rect class="box" x="366" y="120" width="30" height="30" rx="3"/>
+          <rect class="box" x="400" y="120" width="30" height="30" rx="3"/><rect class="box" x="434" y="120" width="30" height="30" rx="3"/>
+          <rect class="box" x="468" y="120" width="30" height="30" rx="3"/><rect class="box" x="502" y="120" width="30" height="30" rx="3"/>
+          <rect class="box" x="536" y="120" width="30" height="30" rx="3"/><rect class="box" x="570" y="120" width="30" height="30" rx="3"/>
+        </g>
+        <text class="svg-label-sm svg-muted" x="60" y="166">0</text>
+        <text class="svg-label-sm svg-muted" x="585" y="166" text-anchor="middle">15</text>
+
+        <!-- overflow -->
+        <g>
+          <rect class="box-dim" x="616" y="120" width="30" height="30" rx="3"/>
+          <rect class="box-dim" x="650" y="120" width="30" height="30" rx="3"/>
+          <rect class="box-dim" x="684" y="120" width="30" height="30" rx="3"/>
+          <line class="ln-b" x1="620" y1="124" x2="710" y2="146"/>
+          <line class="ln-b" x1="620" y1="146" x2="710" y2="124"/>
+        </g>
+        <text class="svg-label svg-amber" x="726" y="132">17번째 입자부터</text>
+        <text class="svg-label svg-amber" x="726" y="148">이웃 목록에서 유실</text>
+
+        <!-- arrows into buffer -->
+        <path class="ln-dim" d="M75,152 C75,190 300,196 318,228" marker-end="url(#f1a)"/>
+        <path class="ln-dim" d="M177,152 C177,196 96,200 84,228" marker-end="url(#f1a)"/>
+        <path class="ln-dim" d="M279,152 C279,198 690,198 706,228" marker-end="url(#f1a)"/>
+        <path class="ln-dim" d="M415,152 C415,200 466,200 466,228" marker-end="url(#f1a)"/>
+
+        <!-- particle buffer strip -->
+        <text class="svg-label-sm svg-muted" x="24" y="252">입자 버퍼</text>
+        <g>
+          <rect class="box" x="60" y="234" width="812" height="26" rx="3"/>
+          <g stroke="var(--line)" stroke-width="1">
+            <line x1="94" y1="234" x2="94" y2="260"/><line x1="128" y1="234" x2="128" y2="260"/>
+            <line x1="162" y1="234" x2="162" y2="260"/><line x1="196" y1="234" x2="196" y2="260"/>
+            <line x1="230" y1="234" x2="230" y2="260"/><line x1="264" y1="234" x2="264" y2="260"/>
+            <line x1="298" y1="234" x2="298" y2="260"/><line x1="332" y1="234" x2="332" y2="260"/>
+            <line x1="366" y1="234" x2="366" y2="260"/><line x1="400" y1="234" x2="400" y2="260"/>
+            <line x1="434" y1="234" x2="434" y2="260"/><line x1="468" y1="234" x2="468" y2="260"/>
+            <line x1="502" y1="234" x2="502" y2="260"/><line x1="536" y1="234" x2="536" y2="260"/>
+            <line x1="570" y1="234" x2="570" y2="260"/><line x1="604" y1="234" x2="604" y2="260"/>
+            <line x1="638" y1="234" x2="638" y2="260"/><line x1="672" y1="234" x2="672" y2="260"/>
+            <line x1="706" y1="234" x2="706" y2="260"/><line x1="740" y1="234" x2="740" y2="260"/>
+            <line x1="774" y1="234" x2="774" y2="260"/><line x1="808" y1="234" x2="808" y2="260"/>
+            <line x1="842" y1="234" x2="842" y2="260"/>
+          </g>
+          <rect x="60" y="234" width="24" height="26" fill="var(--grey-data)" opacity=".55"/>
+          <rect x="298" y="234" width="34" height="26" fill="var(--grey-data)" opacity=".55"/>
+          <rect x="434" y="234" width="34" height="26" fill="var(--grey-data)" opacity=".55"/>
+          <rect x="672" y="234" width="34" height="26" fill="var(--grey-data)" opacity=".55"/>
+        </g>
+        <text class="svg-label-sm svg-muted" x="60" y="284">공간상 이웃한 네 입자가 버퍼 전역에 흩어져 있다 — 한 셀을 읽는 데 캐시 라인 4개</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>도입 전 구조.</b> 버킷당 16칸이라는 상한은 밀집 구간에서 이웃을 조용히 잘라내고,
+      그 칸에 담긴 인덱스는 <em>정렬되지 않은</em> 입자 버퍼의 임의 위치를 가리킨다.
+      후보를 좁히는 데는 성공하지만, 좁힌 후보를 읽는 순간 메모리를 무작위로 건너뛴다.
+    </figcaption>
+  </figure>
+
+  <p>정리하면 두 가지다.</p>
+  <ul>
+    <li><strong>정확성</strong> — 셀당 16칸 상한. 초과분은 오류 없이 이웃 목록에서 빠진다. 해시 충돌로 서로 다른 셀이 같은 버킷을 쓰면 이 16칸 경쟁이 더 심해진다.</li>
+    <li><strong>성능</strong> — 입자 데이터 자체는 공간 순서와 무관하게 배치되어 있다. 후보 인덱스를 얻어도 실제 읽기는 버퍼 전역을 뛰어다닌다.</li>
+  </ul>
+  <p>
+    두 문제의 뿌리는 같다. <strong>입자 배열의 순서가 공간과 아무 관계가 없다</strong>는 것.
+    그래서 배열 순서 자체를 공간 순서로 바꾸기로 했다.
+  </p>
+</section>
+<section id="s2">
+  <div class="sec-head">
+    <p class="sec-meta"><span class="step">02 자료구조</span><span class="dot">/</span><span>Morton code · Z-Order curve</span></p>
+    <h2>3D 좌표를 순서가 있는 정수 하나로</h2>
+  </div>
+
+  <p>
+    배열을 공간 순으로 정렬하려면 3D 좌표에 <strong>1차원 순서</strong>를 줘야 한다.
+    그냥 <code>z*W*H + y*W + x</code>로 펼치면 x축 이웃은 붙지만 y·z축 이웃은 한 행/한 면만큼 멀어진다.
+  </p>
+  <p>
+    Morton code는 각 축의 비트를 한 칸씩 어긋나게 끼워 넣는다.
+    상위 비트가 세 축 모두에서 먼저 비교되기 때문에, 코드 값이 가까운 두 셀은 <strong>세 축 모두에서</strong> 가깝다.
+    구현은 시프트와 마스크뿐이라 GPU에서 몇 사이클이면 끝난다.
+  </p>
+
+  <figure>
+    <div class="scroller">
+      <svg viewBox="0 0 900 300" role="img" aria-label="왼쪽은 4x4 격자를 훑는 Z 모양 순회 경로, 오른쪽은 세 축의 6비트를 한 칸씩 어긋나게 끼워 18비트 코드를 만드는 구조">
+        <text class="svg-title" x="24" y="24">2D 직관 — 4×4 순회 순서</text>
+        <text class="svg-title" x="400" y="24">실제 인코딩 — 축당 6비트 → 18비트</text>
+
+        <!-- left: 4x4 grid -->
+        <g>
+          <rect class="box" x="30" y="40" width="220" height="220" rx="4"/>
+          <g stroke="var(--line)" stroke-width="1">
+            <line x1="85" y1="40" x2="85" y2="260"/><line x1="140" y1="40" x2="140" y2="260"/><line x1="195" y1="40" x2="195" y2="260"/>
+            <line x1="30" y1="95" x2="250" y2="95"/><line x1="30" y1="150" x2="250" y2="150"/><line x1="30" y1="205" x2="250" y2="205"/>
+          </g>
+          <polyline class="ln-a" points="57.5,67.5 112.5,67.5 57.5,122.5 112.5,122.5 167.5,67.5 222.5,67.5 167.5,122.5 222.5,122.5 57.5,177.5 112.5,177.5 57.5,232.5 112.5,232.5 167.5,177.5 222.5,177.5 167.5,232.5 222.5,232.5"/>
+          <g fill="var(--accent)">
+            <circle cx="57.5" cy="67.5" r="3.4"/><circle cx="112.5" cy="67.5" r="3.4"/><circle cx="57.5" cy="122.5" r="3.4"/><circle cx="112.5" cy="122.5" r="3.4"/>
+            <circle cx="167.5" cy="67.5" r="3.4"/><circle cx="222.5" cy="67.5" r="3.4"/><circle cx="167.5" cy="122.5" r="3.4"/><circle cx="222.5" cy="122.5" r="3.4"/>
+            <circle cx="57.5" cy="177.5" r="3.4"/><circle cx="112.5" cy="177.5" r="3.4"/><circle cx="57.5" cy="232.5" r="3.4"/><circle cx="112.5" cy="232.5" r="3.4"/>
+            <circle cx="167.5" cy="177.5" r="3.4"/><circle cx="222.5" cy="177.5" r="3.4"/><circle cx="167.5" cy="232.5" r="3.4"/><circle cx="222.5" cy="232.5" r="3.4"/>
+          </g>
+          <text class="svg-label-sm svg-muted" x="46" y="60">0</text>
+          <text class="svg-label-sm svg-muted" x="228" y="252">15</text>
+        </g>
+        <text class="svg-label-sm svg-muted" x="30" y="282">인접한 번호는 공간에서도 인접하다</text>
+
+        <!-- right: bit lanes -->
+        <g>
+          <text class="svg-label svg-muted" x="388" y="76" text-anchor="end">Z</text>
+          <rect class="box-a" x="400" y="62" width="24" height="20" rx="2"/><rect class="box-a" x="478" y="62" width="24" height="20" rx="2"/>
+          <rect class="box-a" x="556" y="62" width="24" height="20" rx="2"/><rect class="box-a" x="634" y="62" width="24" height="20" rx="2"/>
+          <rect class="box-a" x="712" y="62" width="24" height="20" rx="2"/><rect class="box-a" x="790" y="62" width="24" height="20" rx="2"/>
+
+          <text class="svg-label svg-muted" x="388" y="112" text-anchor="end">Y</text>
+          <rect class="box-b" x="426" y="98" width="24" height="20" rx="2"/><rect class="box-b" x="504" y="98" width="24" height="20" rx="2"/>
+          <rect class="box-b" x="582" y="98" width="24" height="20" rx="2"/><rect class="box-b" x="660" y="98" width="24" height="20" rx="2"/>
+          <rect class="box-b" x="738" y="98" width="24" height="20" rx="2"/><rect class="box-b" x="816" y="98" width="24" height="20" rx="2"/>
+
+          <text class="svg-label svg-muted" x="388" y="148" text-anchor="end">X</text>
+          <rect class="box" x="452" y="134" width="24" height="20" rx="2"/><rect class="box" x="530" y="134" width="24" height="20" rx="2"/>
+          <rect class="box" x="608" y="134" width="24" height="20" rx="2"/><rect class="box" x="686" y="134" width="24" height="20" rx="2"/>
+          <rect class="box" x="764" y="134" width="24" height="20" rx="2"/><rect class="box" x="842" y="134" width="24" height="20" rx="2"/>
+        </g>
+
+        <!-- connectors -->
+        <g class="ln">
+          <line x1="412" y1="82" x2="412" y2="200"/><line x1="490" y1="82" x2="490" y2="200"/><line x1="568" y1="82" x2="568" y2="200"/>
+          <line x1="646" y1="82" x2="646" y2="200"/><line x1="724" y1="82" x2="724" y2="200"/><line x1="802" y1="82" x2="802" y2="200"/>
+          <line x1="438" y1="118" x2="438" y2="200"/><line x1="516" y1="118" x2="516" y2="200"/><line x1="594" y1="118" x2="594" y2="200"/>
+          <line x1="672" y1="118" x2="672" y2="200"/><line x1="750" y1="118" x2="750" y2="200"/><line x1="828" y1="118" x2="828" y2="200"/>
+          <line x1="464" y1="154" x2="464" y2="200"/><line x1="542" y1="154" x2="542" y2="200"/><line x1="620" y1="154" x2="620" y2="200"/>
+          <line x1="698" y1="154" x2="698" y2="200"/><line x1="776" y1="154" x2="776" y2="200"/><line x1="854" y1="154" x2="854" y2="200"/>
+        </g>
+
+        <!-- output lane -->
+        <g>
+          <rect class="box-a" x="400" y="200" width="24" height="22" rx="2"/><rect class="box-b" x="426" y="200" width="24" height="22" rx="2"/><rect class="box" x="452" y="200" width="24" height="22" rx="2"/>
+          <rect class="box-a" x="478" y="200" width="24" height="22" rx="2"/><rect class="box-b" x="504" y="200" width="24" height="22" rx="2"/><rect class="box" x="530" y="200" width="24" height="22" rx="2"/>
+          <rect class="box-a" x="556" y="200" width="24" height="22" rx="2"/><rect class="box-b" x="582" y="200" width="24" height="22" rx="2"/><rect class="box" x="608" y="200" width="24" height="22" rx="2"/>
+          <rect class="box-a" x="634" y="200" width="24" height="22" rx="2"/><rect class="box-b" x="660" y="200" width="24" height="22" rx="2"/><rect class="box" x="686" y="200" width="24" height="22" rx="2"/>
+          <rect class="box-a" x="712" y="200" width="24" height="22" rx="2"/><rect class="box-b" x="738" y="200" width="24" height="22" rx="2"/><rect class="box" x="764" y="200" width="24" height="22" rx="2"/>
+          <rect class="box-a" x="790" y="200" width="24" height="22" rx="2"/><rect class="box-b" x="816" y="200" width="24" height="22" rx="2"/><rect class="box" x="842" y="200" width="24" height="22" rx="2"/>
+        </g>
+        <text class="svg-label-sm svg-muted" x="400" y="240">bit 17</text>
+        <text class="svg-label-sm svg-muted" x="866" y="240" text-anchor="end">bit 0</text>
+        <text class="svg-label" x="400" y="272">Morton3D_6bit(X, Y, Z) = (Z&#8202;≪&#8202;2) | (Y&#8202;≪&#8202;1) | X&#8199;&#8199;— 세 축이 번갈아 한 줄로</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>Morton code.</b> 왼쪽은 순회 순서를 보여주는 2D 축약, 오른쪽이 실제로 코드에 있는 3D 인코딩이다.
+      각 축의 비트 사이에 두 칸씩 빈틈을 만들어 두고(<code>MortonExpandBits6</code>) 시프트로 겹쳐 끼운다.
+      정렬 키를 이 코드로 쓰면 <b>정렬된 배열 = 공간 순서로 늘어놓은 배열</b>이 된다.
+    </figcaption>
+  </figure>
+</section>
+<section id="s3">
+  <div class="sec-head">
+    <p class="sec-meta"><span class="step">03 도입</span><span class="dot">/</span><span>2026-01-12 · <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/7470af51129c436a49258e63a6cc66e80d2aa40d" target="_blank" rel="noopener"><span class="sha">7470af5</span></a> · +3,067줄</span></p>
+    <h2>매 프레임 도는 5단계 GPU 정렬 파이프라인</h2>
+  </div>
+
+  <p>
+    정렬은 CPU로 내릴 수 없다. 입자 버퍼는 GPU에만 있고, 매 프레임 모든 입자가 움직이므로 정렬도 매 프레임 처음부터 다시 해야 한다.
+    그래서 Morton 코드 계산부터 셀 구간 구축까지 전부 compute shader로 묶었다.
+    <code>FKawaiiFluidZOrderSortManager</code>가 1~4단계의 패스 등록과 중간 버퍼 수명을 맡고, 5단계는 그 결과를 쓰는 solver다.
+  </p>
+  <p>
+    각 단계가 무엇을 무엇으로 바꾸는지만 먼저 보면 이렇다 —
+    <strong>위치 → 정수 키</strong>(1) → <strong>키 → 순서</strong>(2) → <strong>순서 → 실제 메모리 배치</strong>(3)
+    → <strong>배치 → 셀별 구간표</strong>(4) → <strong>구간표 → 이웃 목록</strong>(5).
+  </p>
+
+  <figure>
+    <div class="scroller">
+      <svg viewBox="0 0 640 590" role="img" aria-label="Morton 코드 계산, 라딕스 정렬, 입자 재배치, 셀 구간 구축, 이웃 탐색으로 이어지는 5단계 파이프라인과 각 단계 사이를 흐르는 버퍼">
+        <defs>
+          <marker id="f3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <text class="svg-label-sm svg-muted" x="196" y="20">Particles[N] — 정렬되지 않음</text>
+        <line class="ln" x1="150" y1="26" x2="150" y2="56" marker-end="url(#f3a)"/>
+
+        <!-- 1 -->
+        <rect class="box-a" x="30" y="58" width="240" height="52" rx="7"/>
+        <circle cx="52" cy="84" r="11" fill="var(--accent)"/><text class="svg-label" x="52" y="88" text-anchor="middle" fill="var(--surface)">1</text>
+        <text class="svg-label svg-accent" x="72" y="80">ComputeMortonCodes</text>
+        <text class="svg-label-sm svg-muted" x="72" y="96">위치 → 셀 좌표 → 정렬 키</text>
+        <line class="ln" x1="150" y1="110" x2="150" y2="152" marker-end="url(#f3a)"/>
+        <text class="svg-label-sm svg-muted" x="288" y="126">MortonCodes[N]</text>
+        <text class="svg-label-sm svg-muted" x="288" y="142">ParticleIndices[N] = 0…N-1</text>
+
+        <!-- 2 -->
+        <rect class="box-a" x="30" y="154" width="240" height="52" rx="7"/>
+        <circle cx="52" cy="180" r="11" fill="var(--accent)"/><text class="svg-label" x="52" y="184" text-anchor="middle" fill="var(--surface)">2</text>
+        <text class="svg-label svg-accent" x="72" y="176">RadixSort</text>
+        <text class="svg-label-sm svg-muted" x="72" y="192">키·인덱스 쌍을 함께 정렬</text>
+        <line class="ln" x1="150" y1="206" x2="150" y2="248" marker-end="url(#f3a)"/>
+        <text class="svg-label-sm svg-muted" x="288" y="222">SortedIndices[N]</text>
+        <text class="svg-label-sm svg-muted" x="288" y="238">— 새 슬롯 → 옛 슬롯 매핑</text>
+
+        <!-- 3 -->
+        <rect class="box-a" x="30" y="250" width="240" height="52" rx="7"/>
+        <circle cx="52" cy="276" r="11" fill="var(--accent)"/><text class="svg-label" x="52" y="280" text-anchor="middle" fill="var(--surface)">3</text>
+        <text class="svg-label svg-accent" x="72" y="272">ReorderParticles</text>
+        <text class="svg-label-sm svg-muted" x="72" y="288">입자 구조체 자체를 새 버퍼로</text>
+        <line class="ln" x1="150" y1="302" x2="150" y2="344" marker-end="url(#f3a)"/>
+        <text class="svg-label-sm svg-amber" x="288" y="318">SortedParticles[N]</text>
+        <text class="svg-label-sm svg-muted" x="288" y="334">← cache locality의 실체</text>
+
+        <!-- 4 -->
+        <rect class="box-a" x="30" y="346" width="240" height="52" rx="7"/>
+        <circle cx="52" cy="372" r="11" fill="var(--accent)"/><text class="svg-label" x="52" y="376" text-anchor="middle" fill="var(--surface)">4</text>
+        <text class="svg-label svg-accent" x="72" y="368">ComputeCellStartEnd</text>
+        <text class="svg-label-sm svg-muted" x="72" y="384">정렬된 키의 인접 비교</text>
+        <line class="ln" x1="150" y1="398" x2="150" y2="440" marker-end="url(#f3a)"/>
+        <text class="svg-label-sm svg-muted" x="288" y="414">CellStart[MAX_CELLS]</text>
+        <text class="svg-label-sm svg-muted" x="288" y="430">CellEnd[MAX_CELLS]</text>
+
+        <!-- 5 -->
+        <rect class="box" x="30" y="442" width="240" height="52" rx="7"/>
+        <circle cx="52" cy="468" r="11" fill="var(--muted)"/><text class="svg-label" x="52" y="472" text-anchor="middle" fill="var(--surface)">5</text>
+        <text class="svg-label" x="72" y="464">SolveDensityPressure</text>
+        <text class="svg-label-sm svg-muted" x="72" y="480">후보 27셀의 구간만 순회</text>
+
+        <line class="ln-dim" x1="150" y1="494" x2="150" y2="524" marker-end="url(#f3a)"/>
+        <text class="svg-label-sm svg-muted" x="196" y="542">다음 프레임 — 위치가 바뀌었으므로 1번부터 다시</text>
+        <path class="ln-dim" d="M150,530 L150,556 L610,556 L610,14 L286,14" marker-end="url(#f3a)"/>
+      </svg>
+    </div>
+    <figcaption>
+      <b>파이프라인.</b> 1~4가 정렬 매니저의 책임이고, 5는 그 결과를 쓰는 solver다.
+      성능의 핵심은 3번 — 인덱스만 정렬하고 끝내면 여전히 무작위 읽기가 남으므로, 입자 구조체 자체를 새 버퍼로 옮겨 적는다.
+    </figcaption>
+  </figure>
+
+  <h3>1단계 · Morton 코드 계산</h3>
+  <p>
+    입자 하나에 스레드 하나. 하는 일은 <strong>연속 좌표를 정수 격자로 양자화</strong>하고,
+    그 격자 좌표를 2장의 방식으로 정수 키 하나로 접는 것이다.
+    <code>floor(pos / CellSize)</code> 한 번으로 "두 입자가 같은 셀인가"를 정수 비교로 판정할 수 있게 된다.
+  </p>
+  <p>
+    출력은 배열 두 개다. <strong>키 배열</strong>과, <code>0, 1, 2, …, N-1</code>로 채운 <strong>인덱스 배열</strong>.
+    다음 단계의 정렬은 이 두 배열을 한 몸으로 움직인다 — 키는 정렬 기준으로, 인덱스는 딸려가는 짐으로.
+    정렬이 끝나면 인덱스 배열은 "새 자리 → 옛 자리"를 알려주는 순열이 되어 있다.
+  </p>
+  <p>
+    여기에 이 파이프라인 전체를 지탱하는 불변식이 하나 있다.
+    XPBD/PBF 계열 solver는 한 프레임 안에서 <em>예측 위치</em>를 먼저 만들고 그 위에서 제약을 푼다.
+    그래서 격자를 만들 때 쓰는 좌표와 solver가 이웃을 찾을 때 쓰는 좌표가 <strong>같아야</strong> 한다.
+    현재 위치로 격자를 만들고 예측 위치로 탐색하면, 셀 경계를 막 넘은 입자들이 매 프레임 조용히 이웃을 잃는다.
+  </p>
+
+  <div class="codewrap">
+    <div class="cap"><span>KawaiiFluidSortingPipeline.usf · ComputeMortonCodesCellBasedCS</span><span class="side">1단계</span></div>
+<pre><code class="language-cpp">uint Idx = DispatchThreadId.x;               // 스레드 하나 = 입자 하나
+
+// solver가 이웃 탐색에 쓰는 것과 '같은' 좌표여야 한다
+float3 Pos = Particles[Idx].PredictedPosition;
+
+// 연속 좌표 → 정수 셀 좌표
+int3 CellCoord = int3(floor(Pos / CellSize));
+
+uint SortKey;
+if (bUseHybridTiledZOrder)
+{
+    SortKey = ComputeHybridTiledKey(CellCoord);           // Hybrid 모드
+}
+else
+{
+    int3 GridMin = int3(floor(BoundsMin / CellSize));     // 격자 원점
+    SortKey = Morton3DFromCell(CellCoord, GridMin);
+}
+
+MortonCodes[Idx]     = SortKey;
+ParticleIndices[Idx] = Idx;      // 아직 아무것도 섞이지 않은 순열</code></pre>
+  </div>
+
+  <h3>2단계 · 라딕스 정렬</h3>
+  <p>
+    키가 고정 폭 정수라서 비교 정렬을 쓸 이유가 없다.
+    GPU에서 흔한 비교 정렬(bitonic)은 <code>O(N log²N)</code>번의 패스가 필요한 반면,
+    <strong>LSB radix sort</strong>는 <em>키의 비트 폭 ÷ pass당 비트 수</em>번이면 끝난다. 21비트 키에 pass당 8비트면 3회다.
+  </p>
+  <p>
+    한 pass는 키의 하위 R비트<em>만</em> 보고 세 가지를 한다 — 값별로 개수를 세고(histogram),
+    그 개수를 누적해 각 값이 출력 배열의 어디서 시작할지 계산하고(prefix sum),
+    그 오프셋대로 원소를 흩뿌린다(scatter). 이 정렬은 <strong>안정 정렬</strong>이라
+    다음 pass가 상위 비트를 처리해도 이전 pass가 만든 순서가 동률 구간 안에서 보존된다.
+    그래서 하위 비트부터 차례로 올라가는 것만으로 전체 키가 정렬된다.
+  </p>
+  <p>
+    scatter는 제자리에서 못 하므로 버퍼 두 개를 번갈아 쓴다(ping-pong).
+    pass 수가 홀수면 결과가 임시 버퍼에 남으므로, pass 수를 <strong>짝수로 올림</strong>해서
+    결과가 항상 원래 버퍼에서 끝나도록 맞췄다 — 한 번 더 도는 비용으로 호출부의 분기를 없애는 거래다.
+  </p>
+
+  <div class="codewrap">
+    <div class="cap"><span>KawaiiFluidZOrderSortManager.cpp · AddRadixSortPasses</span><span class="side">After</span></div>
+<pre><code class="language-cpp">// 키의 유효 비트 수에서 pass 수가 결정된다
+int32 SortKeyBits = bUseHybridTiledZOrder
+    ? 21                                                     // Hybrid: 3 + 18
+    : GridResolutionPresetHelper::GetAxisBits(Preset) * 3;    // Classic: 18 / 21 / 24
+
+int32 RadixSortPasses = (SortKeyBits + GPU_RADIX_BITS - 1) / GPU_RADIX_BITS;
+if (RadixSortPasses % 2 != 0)
+{
+    RadixSortPasses++;   // ping-pong이 원래 버퍼에서 끝나도록 짝수로
+}
+
+for (int32 Pass = 0; Pass &lt; RadixSortPasses; ++Pass)
+{
+    const int32 BitOffset = Pass * GPU_RADIX_BITS;
+    // Histogram → GlobalPrefixSum → BucketPrefixSum → Scatter
+    ...
+    BufferIndex ^= 1;
+}</code></pre>
+  </div>
+
+  <h3>3단계 · 입자 재배치</h3>
+  <p>
+    2단계까지 알아낸 것은 <strong>"누가 몇 번째로 와야 하는가"뿐</strong>이다. 입자 데이터는 아직 원래 자리에 그대로 있다.
+    여기서 멈추고 순열만 들고 이웃 탐색을 하면, 후보를 좁히는 데는 성공하지만 읽기는 여전히 버퍼 전역을 뛴다 — 1장의 문제 그대로다.
+    그래서 이 단계에서 <strong>입자 구조체(64바이트) 자체를 새 버퍼로 옮겨 적는다.</strong>
+  </p>
+  <p>
+    방향이 중요하다. 스레드는 <em>출력 슬롯</em>을 맡고, 자기 슬롯에 올 입자를 옛 버퍼에서 끌어온다(gather).
+    그래서 <strong>쓰기는 완전히 연속</strong>이고 흩어지는 것은 읽기뿐이다.
+  </p>
+  <p>
+    이 한 번의 복사가 이 파이프라인이 하는 거래의 전부다.
+    <strong>무작위 접근을 입자당 프레임에 한 번으로 몰아넣고,</strong> 그 대가로 뒤따르는 solver가
+    입자당 수십 번 반복하는 이웃 읽기를 전부 연속 접근으로 바꾼다.
+    SPH는 한 프레임에 solver iteration을 여러 번 도는 데다 밀도·압력·점성이 같은 이웃을 반복해서 읽으므로,
+    한 번 치르고 수십 번 회수하는 쪽이 이긴다.
+  </p>
+
+  <figure>
+    <div class="scroller">
+      <svg viewBox="0 0 900 268" role="img" aria-label="정렬된 인덱스 배열을 따라 옛 입자 버퍼에서 데이터를 끌어와 새 버퍼에 순서대로 적으면, 같은 셀의 입자가 새 버퍼에서 연속 구간을 이룬다">
+        <defs>
+          <marker id="f6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <g class="svg-label-sm svg-muted" text-anchor="middle">
+          <text x="151" y="40">0</text><text x="219" y="40">1</text><text x="287" y="40">2</text><text x="355" y="40">3</text><text x="423" y="40">4</text>
+          <text x="491" y="40">5</text><text x="559" y="40">6</text><text x="627" y="40">7</text><text x="695" y="40">8</text><text x="763" y="40">9</text>
+        </g>
+
+        <!-- old buffer -->
+        <text class="svg-label-sm svg-muted" x="24" y="72">OldParticles</text>
+        <g>
+          <rect class="box" x="120" y="50" width="62" height="32" rx="3"/><rect class="box-a" x="188" y="50" width="62" height="32" rx="3"/>
+          <rect class="box-b" x="256" y="50" width="62" height="32" rx="3"/><rect class="box-a" x="324" y="50" width="62" height="32" rx="3"/>
+          <rect class="box" x="392" y="50" width="62" height="32" rx="3"/><rect class="box-b" x="460" y="50" width="62" height="32" rx="3"/>
+          <rect class="box-a" x="528" y="50" width="62" height="32" rx="3"/><rect class="box" x="596" y="50" width="62" height="32" rx="3"/>
+          <rect class="box-b" x="664" y="50" width="62" height="32" rx="3"/><rect class="box-a" x="732" y="50" width="62" height="32" rx="3"/>
+        </g>
+        <g class="svg-label" text-anchor="middle">
+          <text x="151" y="71" class="svg-muted">C</text><text x="219" y="71" class="svg-accent">A</text><text x="287" y="71" class="svg-amber">B</text>
+          <text x="355" y="71" class="svg-accent">A</text><text x="423" y="71" class="svg-muted">C</text><text x="491" y="71" class="svg-amber">B</text>
+          <text x="559" y="71" class="svg-accent">A</text><text x="627" y="71" class="svg-muted">C</text><text x="695" y="71" class="svg-amber">B</text>
+          <text x="763" y="71" class="svg-accent">A</text>
+        </g>
+        <text class="svg-label-sm svg-muted" x="812" y="71">셀 A·B·C가 뒤섞여 있다</text>
+
+        <!-- gather arrows -->
+        <path class="ln-b" d="M151,128 C151,104 200,106 216,88" marker-end="url(#f6a)"/>
+        <path class="ln-b" d="M423,128 C423,102 306,106 290,88" marker-end="url(#f6a)"/>
+        <path class="ln-b" d="M627,128 C627,100 178,102 154,88" marker-end="url(#f6a)"/>
+
+        <!-- permutation -->
+        <text class="svg-label-sm svg-muted" x="24" y="152">SortedIndices</text>
+        <g>
+          <rect class="box" x="120" y="130" width="62" height="30" rx="3"/><rect class="box" x="188" y="130" width="62" height="30" rx="3"/>
+          <rect class="box" x="256" y="130" width="62" height="30" rx="3"/><rect class="box" x="324" y="130" width="62" height="30" rx="3"/>
+          <rect class="box" x="392" y="130" width="62" height="30" rx="3"/><rect class="box" x="460" y="130" width="62" height="30" rx="3"/>
+          <rect class="box" x="528" y="130" width="62" height="30" rx="3"/><rect class="box" x="596" y="130" width="62" height="30" rx="3"/>
+          <rect class="box" x="664" y="130" width="62" height="30" rx="3"/><rect class="box" x="732" y="130" width="62" height="30" rx="3"/>
+        </g>
+        <g class="svg-label" text-anchor="middle">
+          <text x="151" y="150">1</text><text x="219" y="150">3</text><text x="287" y="150">6</text><text x="355" y="150">9</text><text x="423" y="150">2</text>
+          <text x="491" y="150">5</text><text x="559" y="150">8</text><text x="627" y="150">0</text><text x="695" y="150">4</text><text x="763" y="150">7</text>
+        </g>
+        <text class="svg-label-sm svg-amber" x="812" y="150">읽을 옛 자리</text>
+
+        <!-- copy down -->
+        <g class="ln-a">
+          <line x1="151" y1="162" x2="151" y2="192" marker-end="url(#f6a)"/>
+          <line x1="423" y1="162" x2="423" y2="192" marker-end="url(#f6a)"/>
+          <line x1="627" y1="162" x2="627" y2="192" marker-end="url(#f6a)"/>
+        </g>
+
+        <!-- new buffer -->
+        <text class="svg-label-sm svg-muted" x="24" y="216">SortedParticles</text>
+        <g>
+          <rect class="box-a" x="120" y="194" width="62" height="32" rx="3"/><rect class="box-a" x="188" y="194" width="62" height="32" rx="3"/>
+          <rect class="box-a" x="256" y="194" width="62" height="32" rx="3"/><rect class="box-a" x="324" y="194" width="62" height="32" rx="3"/>
+          <rect class="box-b" x="392" y="194" width="62" height="32" rx="3"/><rect class="box-b" x="460" y="194" width="62" height="32" rx="3"/>
+          <rect class="box-b" x="528" y="194" width="62" height="32" rx="3"/><rect class="box" x="596" y="194" width="62" height="32" rx="3"/>
+          <rect class="box" x="664" y="194" width="62" height="32" rx="3"/><rect class="box" x="732" y="194" width="62" height="32" rx="3"/>
+        </g>
+        <g class="svg-label" text-anchor="middle">
+          <text x="151" y="215" class="svg-accent">A</text><text x="219" y="215" class="svg-accent">A</text><text x="287" y="215" class="svg-accent">A</text><text x="355" y="215" class="svg-accent">A</text>
+          <text x="423" y="215" class="svg-amber">B</text><text x="491" y="215" class="svg-amber">B</text><text x="559" y="215" class="svg-amber">B</text>
+          <text x="627" y="215" class="svg-muted">C</text><text x="695" y="215" class="svg-muted">C</text><text x="763" y="215" class="svg-muted">C</text>
+        </g>
+        <path class="ln" d="M122,236 L122,244 L380,244 L380,236"/>
+        <path class="ln" d="M394,236 L394,244 L588,244 L588,236"/>
+        <path class="ln" d="M598,236 L598,244 L792,236 L792,236"/>
+        <text class="svg-label-sm svg-muted" x="24" y="262">이제 셀 하나가 배열의 한 구간 — 4단계가 이걸 두 정수로 적는다</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>gather 방향의 재배치.</b> 스레드가 출력 슬롯을 맡고 <code>SortedIndices</code>가 가리키는 옛 자리에서 끌어온다.
+      주황 화살표(흩어진 읽기)는 프레임당 입자 하나에 <b>한 번</b>이고, 그 대가로 아래 버퍼는 셀별 연속 구간이 된다.
+    </figcaption>
+  </figure>
+
+  <div class="codewrap">
+    <div class="cap"><span>KawaiiFluidSortingPipeline.usf · ReorderParticlesCS</span><span class="side">3단계</span></div>
+<pre><code class="language-cpp">uint NewIdx = DispatchThreadId.x;            // 스레드 하나 = '출력' 슬롯 하나
+uint OldIdx = SortedIndices[NewIdx];
+
+SortedParticles[NewIdx] = OldParticles[OldIdx];   // 쓰기는 연속, 읽기만 흩어진다
+
+// 입자와 나란히 유지되는 다른 per-particle 배열도 같은 순열로 함께 옮긴다.
+// 하나라도 빠뜨리면 인덱스가 어긋나 엉뚱한 입자의 데이터를 읽게 된다.
+if (bReorderAttachments != 0)
+{
+    SortedBoneDeltaAttachments[NewIdx] = OldBoneDeltaAttachments[OldIdx];
+}</code></pre>
+  </div>
+
+  <h3>4단계 · 셀 구간 구축</h3>
+  <p>
+    정렬이 끝나면 같은 셀의 입자는 배열에서 <strong>반드시 연속</strong>이다.
+    그러면 셀마다 "어디서 시작해 어디서 끝나는지" 두 정수만 있으면 되고, 1장의 고정 슬롯 배열은 통째로 사라진다.
+  </p>
+  <p>
+    경계를 찾는 방법은 <strong>자기 키와 바로 앞 키를 비교</strong>하는 것뿐이다.
+    다르면 자기 자리가 새 셀의 시작이고 동시에 앞 셀의 끝이다. 스레드끼리 조율할 필요가 없어 한 번의 dispatch로 끝난다.
+    앞 단계와 달리 이 dispatch는 입자 수가 아니라 <em>셀 수</em>만큼의 배열에 쓴다는 점만 다르다 —
+    그래서 매 프레임 먼저 <code>CellStart</code>/<code>CellEnd</code> 전체를 "빈 셀" 표식(<code>0xFFFFFFFF</code>)으로 지우고 시작한다.
+    지우지 않으면 이번 프레임에 비어버린 셀이 지난 프레임의 구간을 그대로 가리킨다.
+  </p>
+
+  <figure>
+    <div class="scroller">
+      <svg viewBox="0 0 900 250" role="img" aria-label="정렬된 키 배열에서 값이 바뀌는 지점이 셀 경계가 되고, 각 셀의 시작과 끝 인덱스만 기록하면 셀당 입자 수에 상한이 사라진다">
+        <text class="svg-label-sm svg-muted" x="24" y="30">index</text>
+        <g class="svg-label-sm svg-muted" text-anchor="middle">
+          <text x="90" y="30">0</text><text x="140" y="30">1</text><text x="190" y="30">2</text><text x="240" y="30">3</text>
+          <text x="290" y="30">4</text><text x="340" y="30">5</text><text x="390" y="30">6</text><text x="440" y="30">7</text>
+          <text x="490" y="30">8</text><text x="540" y="30">9</text><text x="590" y="30">10</text><text x="640" y="30">11</text>
+          <text x="690" y="30">12</text><text x="740" y="30">13</text><text x="790" y="30">14</text><text x="840" y="30">15</text>
+        </g>
+
+        <text class="svg-label-sm svg-muted" x="24" y="61">sorted key</text>
+        <g>
+          <rect class="box-a" x="66" y="42" width="48" height="26" rx="3"/><rect class="box-a" x="116" y="42" width="48" height="26" rx="3"/><rect class="box-a" x="166" y="42" width="48" height="26" rx="3"/>
+          <rect class="box" x="216" y="42" width="48" height="26" rx="3"/><rect class="box" x="266" y="42" width="48" height="26" rx="3"/>
+          <rect class="box-a" x="316" y="42" width="48" height="26" rx="3"/><rect class="box-a" x="366" y="42" width="48" height="26" rx="3"/><rect class="box-a" x="416" y="42" width="48" height="26" rx="3"/><rect class="box-a" x="466" y="42" width="48" height="26" rx="3"/>
+          <rect class="box" x="516" y="42" width="48" height="26" rx="3"/><rect class="box" x="566" y="42" width="48" height="26" rx="3"/><rect class="box" x="616" y="42" width="48" height="26" rx="3"/>
+          <rect class="box-a" x="666" y="42" width="48" height="26" rx="3"/><rect class="box-a" x="716" y="42" width="48" height="26" rx="3"/><rect class="box-a" x="766" y="42" width="48" height="26" rx="3"/><rect class="box-a" x="816" y="42" width="48" height="26" rx="3"/>
+        </g>
+        <g class="svg-label" text-anchor="middle">
+          <text x="90" y="60">104</text><text x="140" y="60">104</text><text x="190" y="60">104</text>
+          <text x="240" y="60">107</text><text x="290" y="60">107</text>
+          <text x="340" y="60">131</text><text x="390" y="60">131</text><text x="440" y="60">131</text><text x="490" y="60">131</text>
+          <text x="540" y="60">158</text><text x="590" y="60">158</text><text x="640" y="60">158</text>
+          <text x="690" y="60">162</text><text x="740" y="60">162</text><text x="790" y="60">162</text><text x="840" y="60">162</text>
+        </g>
+
+        <!-- boundary carets -->
+        <g class="ln-b">
+          <line x1="215" y1="36" x2="215" y2="74"/><line x1="315" y1="36" x2="315" y2="74"/>
+          <line x1="515" y1="36" x2="515" y2="74"/><line x1="665" y1="36" x2="665" y2="74"/>
+        </g>
+        <text class="svg-label-sm svg-amber" x="24" y="94">key[i] ≠ key[i-1] 인 지점이 셀 경계</text>
+
+        <!-- brackets -->
+        <g class="ln">
+          <path d="M68,110 L68,120 L212,120 L212,110"/>
+          <path d="M218,110 L218,120 L312,120 L312,110"/>
+          <path d="M318,110 L318,120 L512,120 L512,110"/>
+          <path d="M518,110 L518,120 L662,120 L662,110"/>
+          <path d="M668,110 L668,120 L862,120 L862,110"/>
+        </g>
+        <g class="svg-label-sm svg-muted" text-anchor="middle">
+          <text x="140" y="138">104 → 0‥2</text><text x="265" y="138">107 → 3‥4</text><text x="415" y="138">131 → 5‥8</text>
+          <text x="590" y="138">158 → 9‥11</text><text x="765" y="138">162 → 12‥15</text>
+        </g>
+
+        <!-- lookup box -->
+        <rect class="box" x="66" y="164" width="798" height="62" rx="7"/>
+        <text class="svg-label svg-accent" x="88" y="188">이웃 탐색</text>
+        <text class="svg-label" x="88" y="210">for (uint i = CellStart[cellID]; i &lt;= CellEnd[cellID]; ++i) { ... }</text>
+        <text class="svg-label-sm svg-muted" x="640" y="210">셀당 입자 수에 상한 없음</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>CellStart / CellEnd.</b> 정렬 덕분에 한 셀의 입자는 연속 구간이 되고, 셀 하나를 정수 두 개로 표현할 수 있다.
+      16칸 고정 배열이 사라지면서 <b>밀집 구간에서 이웃이 유실되던 문제도 함께 없어졌다.</b>
+    </figcaption>
+  </figure>
+
+  <div class="codewrap">
+    <div class="cap"><span>KawaiiFluidSortingPipeline.usf · ComputeCellStartEndCS</span><span class="side">After</span></div>
+<pre><code class="language-cpp">uint CurrentCode = SortedMortonCodes[Idx];
+uint CellID      = CurrentCode &amp; (MAX_CELLS - 1);
+
+if (Idx == 0)
+{
+    CellStart[CellID] = Idx;
+}
+else
+{
+    uint PrevCellID = SortedMortonCodes[Idx - 1] &amp; (MAX_CELLS - 1);
+    if (CellID != PrevCellID)
+    {
+        CellStart[CellID]   = Idx;        // 여기서 새 셀이 시작하고
+        CellEnd[PrevCellID] = Idx - 1;    // 앞 셀은 직전에서 끝난다
+    }
+}
+
+if (Idx == ParticleCountBuffer[6] - 1)   // 마지막 입자 — GPU가 기록한 실제 개수
+{
+    CellEnd[CellID] = Idx;
+}</code></pre>
+  </div>
+
+  <h3>5단계 · 이웃 탐색</h3>
+  <p>
+    앞의 네 단계가 만든 것을 실제로 쓰는 쪽이다. 입자마다 자기 셀을 구하고, 그 주변 셀들의 구간을 훑는다.
+    훑을 셀의 범위는 <code>CellRadius = ceil(SmoothingRadius / CellSize)</code>로 정해진다 —
+    SPH의 영향 반경 <code>h</code>가 몇 개의 셀에 걸치는지다.
+  </p>
+  <p>
+    여기서 5장의 Auto Cell Size가 왜 성능 결정이었는지가 드러난다. <code>CellSize == h</code>로 묶어두면 <code>CellRadius</code>가 1이 되고,
+    후보는 <strong>3×3×3 = 27셀</strong>로 고정된다. 이 값이 최적인 이유는 양쪽으로 밀어보면 보인다.
+  </p>
+  <ul>
+    <li><strong>셀을 h보다 작게</strong> 잡으면 반경이 2로 올라가 후보 셀이 125개가 된다 — 셀 조회와 구간 진입 비용이 그만큼 늘어난다.</li>
+    <li><strong>셀을 h보다 크게</strong> 잡으면 후보 셀은 27개 그대로지만 셀 하나의 부피가 커진다. 반경 밖 입자가 후보에 잔뜩 섞여 들어와 거리 검사에서 버려진다.</li>
+  </ul>
+  <p>
+    <code>CellSize == h</code>가 두 낭비가 만나는 지점이다. 사용자가 <code>CellSize</code>를 직접 만지던 시절엔 이 지점이 우연에 맡겨져 있었다.
+  </p>
+  <p>
+    후보 셀의 cellID를 구할 때는 <strong>1단계와 완전히 같은 키 함수</strong>를 써야 한다.
+    격자를 만든 규칙과 조회하는 규칙이 한 글자라도 어긋나면 존재하는 이웃을 못 찾는다 — 그리고 그 실패는 크래시가 아니라 "물이 좀 묽어진" 모습으로만 나타난다.
+    뒤에 <a href="hybrid-tiled-zorder.html">Hybrid Tiled 키</a>를 도입할 때 solver·anisotropy·boundary 등 <em>격자를 조회하는 모든 셰이더</em>를 같은 커밋에서 함께 고쳐야 했던 이유다.
+  </p>
+
+  <div class="codewrap">
+    <div class="cap"><span>이웃 탐색의 구조 — 실제 코드는 27셀이 매크로로 펼쳐져 있다</span><span class="side">5단계</span></div>
+<pre><code class="language-cpp">int3 CenterCell = int3(floor(Pos / CellSize));
+int  CellRadius = (int)ceil(SmoothingRadius / CellSize);   // CellSize == h 이므로 1
+
+for (int dz = -CellRadius; dz &lt;= CellRadius; ++dz)
+for (int dy = -CellRadius; dy &lt;= CellRadius; ++dy)
+for (int dx = -CellRadius; dx &lt;= CellRadius; ++dx)
+{
+    int3 NeighborCell = CenterCell + int3(dx, dy, dz);
+
+    // 1단계와 똑같은 키 함수 — 여기가 어긋나면 이웃을 조용히 놓친다
+    uint CellID = GetMortonCellIDFromCellCoord(NeighborCell);
+
+    uint Begin = CellStart[CellID];
+    uint End   = CellEnd[CellID];
+    if (Begin == INVALID_INDEX) { continue; }              // 빈 셀
+
+    for (uint j = Begin; j &lt;= End; ++j)                    // 연속 구간 순회
+    {
+        float3 R  = Pos - Particles[j].PredictedPosition;
+        float  R2 = dot(R, R);
+        if (R2 &lt; h2)                                       // 셀은 정육면체, 커널은 구
+        {
+            AccumulateDensityAndLambda(j, R, R2);
+        }
+    }
+}</code></pre>
+  </div>
+
+  <p>
+    안쪽 루프가 이 파이프라인의 결과물이다. <code>j</code>가 연속으로 증가하므로 GPU의 캐시가 다음에 읽을 입자를 미리 끌어다 놓는다.
+    <strong>1장에서 매번 흩어져 있던 그 읽기가, 여기서는 순차 읽기가 됐다.</strong>
+    그리고 구간의 길이에 상한이 없으므로 밀집 구간에서 이웃이 잘려나가지도 않는다.
+  </p>
+
+  <div class="callout">
+    <span class="tag">범위 메모</span>
+    <p>
+      위 다섯 단계는 도입 시점의 설계다. 당시 radix는 pass당 4비트(16버킷)였고,
+      현재 코드의 8비트(256버킷) radix와 wave intrinsics, 그리고 5단계 안쪽 루프의 LDS 타일링·SoA 레이아웃은
+      이후 팀원들이 올린 별도 최적화다. 이 문서는 자료구조 설계 쪽만 다룬다.
+    </p>
+  </div>
+</section>
+<section id="s4">
+  <div class="sec-head">
+    <p class="sec-meta"><span class="step">04 검증</span><span class="dot">/</span><span>같은 커밋에 함께 넣은 디버그 도구</span></p>
+    <h2>정렬이 실제로 됐는지 눈으로 본다</h2>
+  </div>
+
+  <p>
+    이런 종류의 변경은 <strong>틀려도 조용히 틀린다.</strong> 유체는 여전히 흐르고, 크래시도 없고,
+    이웃 몇 개가 빠진 결과는 "물이 좀 묽어졌나" 정도로 보인다.
+    그래서 정렬 파이프라인과 <em>같은 커밋</em>에 검증 도구를 함께 넣었다.
+  </p>
+  <p>
+    방법은 단순하다. 입자를 <strong>배열 인덱스에 비례한 HSV 무지개</strong>로 칠한다.
+    정렬이 제대로 됐다면 배열 인덱스는 곧 공간 순서이므로, 같은 색이 공간에서 덩어리로 뭉쳐 보여야 한다.
+  </p>
+
+  <figure>
+    <img src="../media/z-order-sorting.png" alt="정렬 전에는 입자 색이 무작위로 흩어져 있고, 정렬 후에는 같은 색이 공간적으로 큰 덩어리를 이룬다">
+    <figcaption>
+      <b>배열 인덱스를 색으로.</b> 왼쪽(정렬 전)은 이웃한 입자끼리 색이 완전히 무관하다 — 배열 순서와 공간이 따로 논다.
+      오른쪽(정렬 후)은 색이 공간의 층을 이룬다. Z-Order curve가 공간을 훑고 지나간 자국이 그대로 보인다.
+    </figcaption>
+  </figure>
+
+  <div class="callout warn">
+    <span class="tag">이 도구가 한 번 조용히 깨졌다</span>
+    <p>
+      초기 시각화는 "readback 배열의 i번째 = 정렬된 배열의 i번째"라는 암묵적 전제 위에 있었다.
+      이후 readback 경로가 <strong>ParticleID 순서</strong>로 재정렬해 넘기도록 바뀌면서 그 전제가 끊겼고,
+      컴파일 에러도 크래시도 없이 <em>시각화만 무의미한 그림</em>이 됐다.
+      GPU에서 <code>ParticleID → ArrayIndex</code> 매핑 버퍼를 따로 기록해 복구했다(<a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/9a1f358fc3b235dc26ca97f9ff678f311ce04194" target="_blank" rel="noopener"><code>9a1f358</code></a>).
+      도구가 기대는 invariant는 코드에 적어두지 않으면 남이 모르고 깬다.
+    </p>
+  </div>
+</section>
+<section id="s5">
+  <div class="sec-head">
+    <p class="sec-meta"><span class="step">05 정제</span><span class="dot">/</span><span>2026-01-14 · <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/55015f958a7ad1a993bd93999f2ca7770bbbd05b" target="_blank" rel="noopener"><span class="sha">55015f9</span></a> → <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/3eb412d7e8b3a657fabb799dc2529e1939ba2aa8" target="_blank" rel="noopener"><span class="sha">3eb412d</span></a></span></p>
+    <h2>정렬 키의 폭과 셀 배열의 크기를 일치시키다</h2>
+  </div>
+
+  <p>
+    도입 직후 코드에는 타협이 하나 남아 있었다. <code>CellStart</code>/<code>CellEnd</code> 배열은
+    <code>MAX_CELLS = 65,536</code>칸으로 고정돼 있는데, Morton 코드는 축당 10비트라 30비트였다.
+    셀 배열을 인덱싱하려면 코드를 잘라야 하고, <strong>자른 값으로 정렬해야</strong> 같은 셀이 연속으로 모인다.
+    그래서 정렬 전에 하위 16비트만 남겼다.
+  </p>
+
+  <div class="codewrap">
+    <div class="cap"><span>FluidMortonCode.usf · <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/7470af51129c436a49258e63a6cc66e80d2aa40d" target="_blank" rel="noopener"><span class="sha">7470af5</span></a> 시점</span><span class="side before">타협</span></div>
+<pre><code class="language-cpp">uint mortonCode = Morton3DFromCell(cellCoord, gridMin);   // 30 bit
+
+// 정렬 전에 cellID로 잘라야 같은 셀 입자가 정렬 후 연속이 된다
+uint cellID = mortonCode &amp; (MAX_CELLS - 1);               // 하위 16 bit
+
+MortonCodes[idx] = cellID;</code></pre>
+  </div>
+
+  <p>
+    동작은 맞지만 대가가 있다. 상위 비트를 버리면 <strong>공간적으로 멀리 떨어진 셀들이 같은 cellID로 접힌다.</strong>
+    후보 목록에 엉뚱한 입자가 섞이고, SPH 거리 검사가 그걸 걸러내는 낭비가 매 프레임 반복된다.
+    게다가 <code>CellSize</code>는 사용자가 직접 입력하는 값이라(기본 20 cm), SPH의 <code>SmoothingRadius</code>와 어긋나면
+    셀당 입자 수가 폭증하거나 27셀이 텅 비었다.
+  </p>
+  <p>같은 날 한 시간 간격으로 두 축을 각각 풀었다.</p>
+
+  <ul>
+    <li><strong>Auto Cell Size</strong> <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/55015f958a7ad1a993bd93999f2ca7770bbbd05b" target="_blank" rel="noopener"><code>55015f9</code></a> — <code>CellSize</code>를 <code>EditAnywhere</code>에서 <code>VisibleAnywhere</code>로 내리고 <code>Preset-&gt;SmoothingRadius</code>에서 도출한다. 사용자가 틀릴 수 있는 손잡이를 없앴다.</li>
+    <li><strong>Grid Resolution Preset</strong> <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/3eb412d7e8b3a657fabb799dc2529e1939ba2aa8" target="_blank" rel="noopener"><code>3eb412d</code></a> — 축당 비트 수를 셰이더 <em>permutation</em>(<code>FGridResolutionDim</code>)으로 가변화했다. 컴파일 타임 분기이므로 런타임 비용은 0이다.</li>
+  </ul>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Preset</th><th class="num">축당 비트</th><th class="num">그리드</th><th class="num">MAX_CELLS</th><th class="num">키 폭</th><th class="num">최대 볼륨 (CellSize 20 cm)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Small</td><td class="num">6</td><td class="num">64³</td><td class="num">262,144</td><td class="num">18 bit</td><td class="num">1,280 cm</td></tr>
+        <tr class="hl"><td>Medium <span class="sha">기본값</span></td><td class="num">7</td><td class="num">128³</td><td class="num">2,097,152</td><td class="num">21 bit</td><td class="num">2,560 cm</td></tr>
+        <tr><td>Large</td><td class="num">8</td><td class="num">256³</td><td class="num">16,777,216</td><td class="num">24 bit</td><td class="num">5,120 cm</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    핵심은 표의 마지막 두 열이 <strong>서로 맞물린다</strong>는 것이다.
+    축당 <em>b</em>비트면 키 폭은 3<em>b</em>이고 <code>MAX_CELLS</code>도 정확히 2<sup>3b</sup>다.
+    자를 필요가 없어지므로 <code>cellID == 키</code>가 되고, 앞의 aliasing이 통째로 사라진다.
+    현재 셰이더 주석이 그 결과를 그대로 적고 있다 — <em>"No truncation needed since MAX_CELLS = 128³ &lt; 2²¹"</em>.
+  </p>
+</section>
+
+<section id="s6">
+  <div class="sec-head">
+    <p class="sec-meta"><span class="step">06 정리</span><span class="dot">/</span><span>2026-01-10 → 01-15</span></p>
+    <h2>타임라인과 남은 것</h2>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>날짜</th><th>커밋</th><th>내용</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="num">01-10</td><td><a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/5e92863b848ad3bf503cbc788a9cdb66588df17e" target="_blank" rel="noopener"><span class="sha">5e92863</span></a></td><td>Neighbor caching — 첫 iteration에서 이웃 목록을 만들어 이후 iteration이 재사용</td></tr>
+        <tr class="hl"><td class="num">01-12</td><td><a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/7470af51129c436a49258e63a6cc66e80d2aa40d" target="_blank" rel="noopener"><span class="sha">7470af5</span></a></td><td>Z-Order Sorting 도입 — Morton·RadixSort·Reorder·CellStart/End 5단계 + 검증 시각화</td></tr>
+        <tr><td class="num">01-14</td><td><a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/55015f958a7ad1a993bd93999f2ca7770bbbd05b" target="_blank" rel="noopener"><span class="sha">55015f9</span></a></td><td>Auto Cell Size — <code>SmoothingRadius</code>에서 도출, UI에서 read-only로</td></tr>
+        <tr class="hl"><td class="num">01-14</td><td><a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/3eb412d7e8b3a657fabb799dc2529e1939ba2aa8" target="_blank" rel="noopener"><span class="sha">3eb412d</span></a></td><td>Grid Resolution Preset — 축당 비트를 셰이더 permutation으로, truncation 제거</td></tr>
+        <tr><td class="num">01-15</td><td><a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/620e8e112c7343bb8d881b8086bc3bf74184c648" target="_blank" rel="noopener"><span class="sha">620e8e1</span></a></td><td>정렬 활성화 조건 정리</td></tr>
+        <tr><td class="num">02-03</td><td><a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/9a1f358fc3b235dc26ca97f9ff678f311ce04194" target="_blank" rel="noopener"><span class="sha">9a1f358</span></a></td><td>ParticleID → ArrayIndex 매핑 기록으로 정렬 시각화 복구</td></tr>
+        <tr><td class="num">02-27</td><td><a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/08aa9a1f472944dafb5b3eef84485167d0011959" target="_blank" rel="noopener"><span class="sha">08aa9a1</span></a></td><td>시각화에 Pre/Post 토글 추가</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>측정 조건</h3>
+  <div class="hero-grid spec-grid">
+    <div class="hero-cell">
+      <span class="k">GPU</span>
+      <span class="v">NVIDIA RTX 4060 Laptop<small>DirectX 12 · SM6</small></span>
+    </div>
+    <div class="hero-cell">
+      <span class="k">CPU</span>
+      <span class="v">Intel Core i7-14700HX<small>32 GB DDR5 · Windows 11</small></span>
+    </div>
+    <div class="hero-cell">
+      <span class="k">샘플</span>
+      <span class="v">입자 100,000개<small>워밍업 60프레임 후 200~300프레임 평균</small></span>
+    </div>
+    <div class="hero-cell">
+      <span class="k">계측</span>
+      <span class="v mono">stat KawaiiFluidSimulation<small>Unreal Insights GPU track</small></span>
+    </div>
+  </div>
+  <p>
+    도입 커밋 <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/7470af51129c436a49258e63a6cc66e80d2aa40d" target="_blank" rel="noopener"><code>7470af5</code></a>와 그 직전 parent <a class="commit" href="https://github.com/GTLBruteForce/KawaiiFluid/commit/bda2c03006b7bf2e3d6098571f4a4081e9812c41" target="_blank" rel="noopener"><code>bda2c03</code></a>를 각각 빌드해
+    같은 씬·같은 카메라로 A/B 했다.
+  </p>
+
+  <h3>돌아보면</h3>
+  <ul>
+    <li>
+      <strong>조용히 실패하는 도구는 조용히 실패한다.</strong> 시각화가 기대던 invariant
+      ("readback 배열의 i번째 = 정렬된 i번째")를 코드에 명시하지 않았고, 남이 그 전제를 바꾸자
+      아무 신호 없이 무의미해졌다. 도구가 기대는 전제는 주석이든 assert든 코드에 남겨야 한다.
+    </li>
+    <li>
+      <strong>키 폭 = <code>MAX_CELLS</code> 비트 폭.</strong> 도입 첫날에는 16비트 truncation으로
+      우회했고, preset permutation으로 폭을 정합시켜 근본 해결했다. 이 등식은
+      <a href="hybrid-tiled-zorder.html">Hybrid Tiled 키</a> 설계에서 세 번째로 다시 등장한다.
+    </li>
+  </ul>
+</section>
+
+<footer>
+  <p>
+    이 문서는 <b>Z-Order Sorting 자료구조 설계</b> 범위만 다룬다.
+    8비트 radix, wave intrinsics, solver의 LDS 타일링, SoA 레이아웃 전환 등 이후 micro optimization은
+    팀원들의 별도 작업이라 제외했다.
+  </p>
+  <div class="docnav">
+    <span class="lbl">다음</span>
+    <a href="hybrid-tiled-zorder.html">Hybrid Tiled Z-Order — 좌표 범위 제약을 없애다</a>
+  </div>
+</footer>
+
+</main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+(function () {
+  if (window.hljs) {
+    try { window.hljs.highlightAll(); } catch (e) { /* 강조 실패 시 평문으로 남는다 */ }
+  }
+
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+  var sections = links
+    .map(function (a) { return document.querySelector(a.getAttribute('href')); })
+    .filter(Boolean);
+  if (!sections.length || !('IntersectionObserver' in window)) { return; }
+
+  var visible = new Set();
+  var observer = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (entry.isIntersecting) { visible.add(entry.target.id); }
+      else { visible.delete(entry.target.id); }
+    });
+    var current = null;
+    for (var i = 0; i < sections.length; i++) {
+      if (visible.has(sections[i].id)) { current = sections[i].id; break; }
+    }
+    links.forEach(function (a) {
+      a.classList.toggle('active', a.getAttribute('href') === '#' + current);
+    });
+  }, { rootMargin: '-10% 0px -70% 0px' });
+
+  sections.forEach(function (s) { observer.observe(s); });
+})();
+</script>
+</body>
+</html>
